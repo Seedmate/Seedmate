@@ -1,0 +1,37 @@
+# 1. Ignorar absolutamente todo por defecto
+*
+
+# 2. PERMITIR el escaneo de directorios 
+# (Obligatorio para que Git pueda buscar dentro de las carpetas permitidas)
+!*/
+
+# 3. Archivos esenciales de la raíz
+!.gitignore
+!README.md
+!LICENSE
+!ThirdPartyNotices.txt
+
+# 4. Código fuente y cabeceras (Firmware)
+!*.c
+!*.h
+!*.s 
+!*.ld
+
+# 5. Configuración del proyecto de MPLAB X
+!*.X/nbproject/project.xml
+!*.X/nbproject/configurations.xml
+!*.X/nbproject/Makefile
+!*.X/nbproject/Makefile-*
+!*.X/nbproject/Package-*
+!*.mc3
+!*.mhc
+
+# 6. Archivos de diseño de hardware (Altium)
+!*.SchDoc
+!*.PcbDoc
+!*.PrjPcb
+
+# 7. Entregables de fabricación y documentación
+!*.pdf
+!*.csv
+!*.step
