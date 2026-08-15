@@ -2569,8 +2569,7 @@ int main ( void ){
                             estado = SEL_SD_BLOCK;
                         } else if (main_pointer==cMAIN_QR){// tutorial
                             white_screen();
-                            //draw_qr_code("youtube.com/watch?v=dQw4w9WgXcQ");// acortado 1
-                            draw_qr_code("youtube.com/@SeedMate");// acortado 2                            
+                            draw_qr_code("www.seedmate.net");                            
                             print_camera(2,65,cSAFE);
                             estado = QR_TUTORIAL;
                             print_left_arrow_black(5,123);

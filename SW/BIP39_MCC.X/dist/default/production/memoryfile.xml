@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?> 
+<project>                                  
+  <executable name="dist/default/production/BIP39_MCC.X.production.elf">                 
+    <memory name="program">                 
+      <units>bytes</units>                 
+      <length>68592</length>                 
+      <used>64018</used>                     
+      <free>4574</free>                     
+    </memory>                              
+    <memory name="data">              
+      <units>bytes</units>                 
+      <length>8192</length>                 
+      <used>1364</used>                     
+      <free>6828</free>                     
+    </memory>                              
+  </executable>                            
+</project>                                 
