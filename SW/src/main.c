@@ -24,8 +24,8 @@
  *   - Security-sensitive data should be handled carefully at all times
  *
  * Author:      Seedmate
- * Date:        14/8/2026
- * Version:     v1.2                               
+ * Date:        16/8/2026
+ * Version:     v1.3                               
  * License
  * 
  * This project is licensed under the MIT License.
@@ -75,7 +75,7 @@
 #define SCREEN_HEIGHT 128
 
 
-#define cVersion "v1.2"
+#define cVersion "v1.3"
 
 #define SD_SCK    PORTBbits.RB7
 #define SD_CS     PORTCbits.RC9
@@ -230,6 +230,8 @@ static void shift_right(BYTE *data, int N);
 static void not_operator(BYTE *data, int N);
 void black_screen(void);
 void set_bit(BYTE data_array[32], int bit_index, int value);
+const char* get_confirmed_word_from_entropy(const BYTE data_array[32], int index);
+int read_11bit_value(const BYTE data_array[32], int index);
 
 void draw_hex16(unsigned int x, unsigned int y, uint16_t numero, int N, unsigned int color, unsigned int bg, unsigned int size) {
     char hex_text[5]; // 4 hex digits plus null terminator
@@ -500,10 +502,12 @@ void grid_dices(){              // 1 2 3   y  4 5 6 abajo
 
 void grid_coins(){              // heads tails
     print_cursor_grid();
-
     drawtext(64,117, "HEAD", ST7735_WHITE, ST7735_WHITE, 1);
     drawtext(94,117, "TAIL", ST7735_WHITE, ST7735_WHITE, 1);
+    // Added DEL button logic to grid representation for coins
+    drawtext(67,107, "DEL", ST7735_WHITE, ST7735_WHITE, 1);
 }
+
 void grid_TMR(){
     print_cursor_grid();
     print_ok();
@@ -609,22 +613,13 @@ static size_t u16_to_str_pad(unsigned int n, char *buf, unsigned int width) {
     return (size_t)j;
 }
 
-static void u8_to_hex2(uint8_t value, char *buf) {
-    static const char hex[] = "0123456789ABCDEF";
-    buf[0] = hex[(value >> 4) & 0x0F];
-    buf[1] = hex[value & 0x0F];
-    buf[2] = '\0';
-}
+
 
 static uint8_t get_selected_card_index(void) {
     return (uint8_t)(card_suit_pointer * 13 + card_rank_pointer);
 }
 
-static void build_card_text(uint8_t card_index, char *buf) {
-    buf[0] = card_rank_chars[card_index % 13];
-    buf[1] = card_suit_chars[card_index / 13];
-    buf[2] = '\0';
-}
+
 
 static void reset_card_entropy_mode(void) {
     for (int i = 0; i < 32; i++) {
@@ -678,77 +673,7 @@ static void draw_card_selection(void) {
     drawtext(96, 25, padded_bits, ST7735_BLUE, ST7735_BLACK, 1);
 }
 
-static void draw_card_history(void) {
-    char line1[32] = {0};
-    char line2[32] = {0};
-    int start = (card_history_count > 26) ? (card_history_count - 26) : 0;
-    int split = start + ((card_history_count - start > 13) ? 13 : (card_history_count - start));
-
-    int pos1 = 0;
-    int pos2 = 0;
-
-    for (int i = start; i < split; i++) {
-        char card_text[4];
-        build_card_text(card_history_index[i], card_text);
-        line1[pos1++] = card_text[0];
-        line1[pos1++] = card_text[1];
-    }
-    line1[pos1] = '\0';
-
-    for (int i = split; i < card_history_count; i++) {
-        char card_text[4];
-        build_card_text(card_history_index[i], card_text);
-        line2[pos2++] = card_text[0];
-        line2[pos2++] = card_text[1];
-    }
-    line2[pos2] = '\0';
-
-    drawtext(1, 37, line1, ST7735_GREEN, ST7735_BLACK, 1);
-    drawtext(1, 47, line2, ST7735_GREEN, ST7735_BLACK, 1);
-}
-
-static void draw_card_entropy_preview(void) {
-    char line[32];
-    int preview_bytes = (bit_count_dice + 7) / 8;
-
-    // Four rows of eight columns let us display up to 32 bytes
-    int shown_bytes = (preview_bytes > 32) ? 32 : preview_bytes;
-
-    for (int row = 0; row < 4; row++) { // Extended to 4 rows
-        int pos = 0;
-        for (int col = 0; col < 8; col++) {
-            int byte_index = row * 8 + col;
-            if (byte_index >= shown_bytes) {
-                break;
-            }
-            u8_to_hex2(data_array_256b[byte_index], line + pos);
-            pos += 2;
-            if (col < 7 && byte_index + 1 < shown_bytes) {
-                line[pos++] = ' ';
-            }
-        }
-        line[pos] = '\0';
-
-        // Start 20 pixels higher (79 - 20 = 59)
-        drawtext(1, 59 + row * 10, line, ST7735_ORANGE, ST7735_BLACK, 1);
-    }
-}
-
-static void print_card_input_screen(void) {
-    drawtext(1, 5, (size_pointer == cSIZE_24) ? "DRAW CARDS UP TO 256 BITS" : "DRAW CARDS UP TO 128 BITS", ST7735_WHITE, ST7735_BLACK, 1);
-	draw_card_bit_counter();
-    draw_card_selection();
-    if (card_status_error) {
-        drawtext(1, 57, "NO CABE, BORRA OTRA", ST7735_RED, ST7735_BLACK, 1);
-    } else {
-        draw_card_history();
-    }
-    if (!card_status_error) {
-        draw_card_entropy_preview();
-    }
-    grid_keyboard();
-}
-
+// Unified visual helper for building entropy for cards, dice, and coins
 static int read_entropy_bit(const BYTE data_array[32], int bit_index) {
     if (bit_index < 0 || bit_index >= 256) {
         return 0;
@@ -759,42 +684,120 @@ static int read_entropy_bit(const BYTE data_array[32], int bit_index) {
     return (data_array[byte_index] >> bit_position) & 1;
 }
 
-static void discard_leading_entropy_bits(int discard_bits) {
-    if (discard_bits <= 0) {
-        return;
-    }
+void draw_shared_entropy_building(void) {
+    int completed_words = bit_count_dice / 11;
+    int remaining_bits = bit_count_dice % 11;
+    char buf[64];
 
-    if (discard_bits >= bit_count_dice) {
-        for (int i = 0; i < 32; i++) {
-            data_array_256b[i] = 0;
+    // Track the last known state to prevent unnecessary history redraws
+    static int last_completed_words = -1;
+    
+    // We redraw history if the number of completed words changes (addition or deletion),
+    // or if the seed is totally empty (to force a clean slate when entering the screen)
+    bool redraw_history = (completed_words != last_completed_words) || (bit_count_dice == 0);
+    last_completed_words = completed_words;
+
+    // ---------------------------------------------------------
+    // Row 1: Active bits currently being accumulated
+    // (ALWAYS redraw this row since it changes on every input)
+    // ---------------------------------------------------------
+    if (remaining_bits > 0) {
+        char current_bits_str[32] = {0}; 
+        int i;
+        for (i = 0; i < remaining_bits; i++) {
+            current_bits_str[i] = read_entropy_bit(data_array_256b, completed_words * 11 + i) ? '1' : '0';
         }
-        bit_count_dice = 0;
-        return;
+        // Add spaces to overwrite any trailing characters
+        while (i < 20) {
+            current_bits_str[i++] = ' ';
+        }
+        current_bits_str[i] = '\0';
+        drawtext(1, 35, current_bits_str, ST7735_ORANGE, ST7735_BLACK, 1);
+    } else if (bit_count_dice == 0) {
+        // Draw a solid black row to clear TFT pixels before writing
+        rectan(0, 35, 159, 44, BLACK); 
+        drawtext(1, 35, "WAITING FOR INPUT...", ST7735_GREY, ST7735_BLACK, 1); 
+    } else {
+        // Clears the active row cleanly when bits exactly match a word boundary
+        rectan(0, 35, 159, 44, BLACK); 
     }
 
-    int kept_bits = bit_count_dice - discard_bits;
-    for (int i = 0; i < kept_bits; i++) {
-        set_bit(data_array_256b, i, read_entropy_bit(data_array_256b, i + discard_bits));
-    }
+    // ---------------------------------------------------------
+    // Rows 2 to 6: Displaying up to the 5 previous completed words
+    // (ONLY redraw if word boundaries crossed or screen reset)
+    // ---------------------------------------------------------
+    if (redraw_history) {
+        int y_offset = 45;
+        
+        // Always iterate exactly 5 times. 
+        for (int r = 0; r < 5; r++) {
+            int word_index = completed_words - 1 - r; 
+            
+            if (word_index >= 0) {
+                // There is a completed word to display for this row
+                int word_val = read_11bit_value(data_array_256b, word_index + 1); 
+                const char* word_str = get_confirmed_word_from_entropy(data_array_256b, word_index + 1);
 
-    for (int i = kept_bits; i < bit_count_dice; i++) {
-        set_bit(data_array_256b, i, 0);
-    }
+                char bits_str[12] = {0};
+                for (int b = 0; b < 11; b++) {
+                    bits_str[b] = read_entropy_bit(data_array_256b, word_index * 11 + b) ? '1' : '0';
+                }
 
-    bit_count_dice = kept_bits;
+                char dec_str[6];
+                u16_to_str_pad((unsigned int)word_val, dec_str, 4);
+
+                int pos = 0;
+                for (int b = 0; b < 11; b++) buf[pos++] = bits_str[b];
+                buf[pos++] = ' ';
+                
+                int d = 0;
+                while (dec_str[d] != '\0') buf[pos++] = dec_str[d++];
+                
+                buf[pos++] = ' ';
+                
+                int w = 0;
+                while (word_str && word_str[w] != '\0') buf[pos++] = word_str[w++];
+                
+                // Pad with spaces to overwrite ghost characters in shorter words
+                while (pos < 26) {
+                    buf[pos++] = ' ';
+                }
+                buf[pos] = '\0';
+
+                drawtext(1, y_offset, buf, ST7735_GREEN, ST7735_BLACK, 1);
+            } else {
+                // No word exists for this slot, print a solid black row to erase the TFT pixels completely
+                rectan(0, y_offset, 159, y_offset + 9, BLACK);
+            }
+            
+            y_offset += 10;
+        }
+    }
 }
 
-static void make_room_for_entropy_bits(int incoming_bits) {
+static void print_card_input_screen(void) {
+    drawtext(1, 5, (size_pointer == cSIZE_24) ? "DRAW CARDS UP TO 256 BITS" : "DRAW CARDS UP TO 128 BITS", ST7735_WHITE, ST7735_BLACK, 1);
+	draw_card_bit_counter();
+    draw_card_selection();
+    if (card_status_error) {
+        drawtext(1, 85, "NO CABE, BORRA OTRA", ST7735_RED, ST7735_BLACK, 1);
+    } 
+    rectan(0, 35, 159, 43, BLACK); // Clear space for unified view
+    draw_shared_entropy_building();
+    grid_keyboard();
+}
+
+
+
+
+
+// Discards trailing bits when excess occurs instead of pushing leading bits out
+static void append_entropy_bits_truncate(const char *bits, size_t len) {
     int target_bits = entropy_bits + 1;
-    int overflow = bit_count_dice + incoming_bits - target_bits;
-
-    if (overflow > 0) {
-        discard_leading_entropy_bits(overflow);
-    }
-}
-
-static void append_entropy_bits(const char *bits, size_t len) {
     for (size_t i = 0; i < len; i++) {
+        if (bit_count_dice >= target_bits) {
+            break; // Stop appending when it overflows the maximum target
+        }
         set_bit(data_array_256b, bit_count_dice, (bits[i] == '1') ? 1 : 0);
         bit_count_dice++;
     }
@@ -816,14 +819,17 @@ static bool append_selected_card_entropy(void) {
         return false;
     }
 
-    make_room_for_entropy_bits((int)len);
+    size_t bits_to_add = len;
+    if (bit_count_dice + bits_to_add > target_bits) {
+        bits_to_add = target_bits - bit_count_dice;
+    }
 
     card_history_start_bits[card_history_count] = (uint16_t)bit_count_dice;
-    card_history_bit_len[card_history_count] = (uint8_t)len;
+    card_history_bit_len[card_history_count] = (uint8_t)bits_to_add;
     card_history_index[card_history_count] = card_index;
     card_history_count++;
 
-    append_entropy_bits(bits, len);
+    append_entropy_bits_truncate(bits, len);
 
     card_status_error = 0;
     return true;
@@ -881,7 +887,7 @@ void print_diceroll_screen(int sel, int sel2){
             grid_dices();
         }
         drawtext(45,15, text_bits, ST7735_WHITE, ST7735_BLACK, 1);
-
+        draw_shared_entropy_building();
 }
 
 void print_TMR_screen(int size_TMR){
@@ -1006,7 +1012,7 @@ void sel_SSS_screen(int sel){
 
 const char* get_word(int index) {
     if (index < 0 || index >= 2047) {
-        //return "√É∆í√Ü‚Äô√É‚Äö√Ç¬çndice fuera de rango";
+        //return "√?∆?√?‚??√?‚??√? ndice fuera de rango";
     }
     return words[index];
 }
@@ -1142,7 +1148,7 @@ static const char *search_unique_prefix(const char *prefix, char *result, size_t
 
 
 void draw_qr_code(const char *text) {
-    // Genera un QR Code est√É∆í√Ü‚Äô√É‚Äö√Ç¬°ndar (no Micro QR)
+    // Genera un QR Code est√?∆?√?‚??√?‚??√?¬°ndar (no Micro QR)
     size_t length = strlen(text);
     // QR buffer for version 3 (29x29)
     uint8_t qrcodeData[qrcode_getBufferSize(3)];
@@ -1240,7 +1246,7 @@ void white_screen(){
 }
 
 void clean_card_history(){
-   rectan(0,37,159,127,BLACK);
+   rectan(0, 35, 159, 70, BLACK); // Clears the new shared building area
 }
 
 void reset_current_word_list_buffer(void) {
@@ -1311,7 +1317,7 @@ void update_dice_bit_count_display(int bit_count_dice_local){
 
 void set_bit(BYTE data_array[32], int bit_index, int value) {
     if (bit_index < 0 || bit_index >= 256 || (value != 0 && value != 1)) {
-        // √É∆í√Ü‚Äô√É‚Äö√Ç¬çndice fuera de rango o valor inv√É∆í√Ü‚Äô√É‚Äö√Ç¬°lido
+        // √?∆?√?‚??√?‚??√? ndice fuera de rango o valor inv√?∆?√?‚??√?‚??√?¬°lido
         return;
     }
 
@@ -1509,7 +1515,7 @@ void draw_QRSEED(const unsigned char *data, size_t size) {
                     }
                     text_buf[text_len] = '\0';
                 } else {
-                    // Buffer insuficiente: puedes manejar el error aqu√É∆í√Ü‚Äô√É‚Äö√Ç¬≠.
+                    // Buffer insuficiente: puedes manejar el error aqu√?∆?√?‚??√?‚??√?¬≠.
                     // Por ahora, corta y termina.
                     text_buf[text_len] = '\0';
                     break;
@@ -2083,7 +2089,7 @@ void sel_sd_block_screen_generic(int sel) {
 void sel_sd_block_screen_wr(int sel) {
 
     drawtext(1, 10 , "SELECT SLOT TO WRITE", ST7735_WHITE, ST7735_BLACK, 1);
-    // Pintar 8 l√É∆í√Ü‚Äô√É‚Äö√Ç¬≠neas: "SLOT <num>"
+    // Pintar 8 l√?∆?√?‚??√?‚??√?¬≠neas: "SLOT <num>"
     print_slots(sel);
     print_SD_preview();
     grid_menuwr();
@@ -2160,11 +2166,11 @@ static void eval_poly_block(uint8_t *y_out,
 }
 
 
-/* Split gen√É∆í√Ü‚Äô√É‚Äö√Ç¬©rico:
+/* Split gen√?∆?√?‚??√?‚??√?¬©rico:
    - f(x) = c0 + c1*x + ... + cN*x^N  (N <= 6)
    - c0: secret buffer (len bytes)
    - coeffs: array of N pointers to buffers (c1..cN), each len bytes
-   - x_vals: array de x's (no cero, distintos entre s√É∆í√Ü‚Äô√É‚Äö√Ç¬≠)
+   - x_vals: array de x's (no cero, distintos entre s√?∆?√?‚??√?‚??√?¬≠)
    - shares: array of x_count pointers to output buffers (each len bytes)
 */
 bool sss_split_polyN(const uint8_t *c0,
@@ -2279,7 +2285,7 @@ static void tmr1_init(void)
 
 
 
-/* ===== Extracci√É∆í√Ü‚Äô√É‚Äö√Ç¬≥n de entrop√É∆í√Ü‚Äô√É‚Äö√Ç¬≠a: LSB ADC + jitter timer ===== */
+/* ===== Extracci√?∆?√?‚??√?‚??√?¬≥n de entrop√?∆?√?‚??√?‚??√?¬≠a: LSB ADC + jitter timer ===== */
 void dice_xy_pointer_line_adjust(){
     if ((seed_pointer==cSEED_timer) ||  (main_pointer ==cMAIN_SSS)){
          if (dice_x_pointer > cEND_OF_LINE-54){
@@ -2569,7 +2575,7 @@ int main ( void ){
                             estado = SEL_SD_BLOCK;
                         } else if (main_pointer==cMAIN_QR){// tutorial
                             white_screen();
-                            draw_qr_code("www.seedmate.net");                            
+                            draw_qr_code("youtu.be/8vy5LIxT1ls");                            
                             print_camera(2,65,cSAFE);
                             estado = QR_TUTORIAL;
                             print_left_arrow_black(5,123);
@@ -2743,8 +2749,6 @@ int main ( void ){
                             black_screen();
                             print_diceroll_screen(size_pointer, seed_pointer);
                             estado = ROLL_DICE1;
-                            dice_x_pointer = 0;
-                            dice_y_pointer = 25;
                             bit_count_dice = 0;
                         } else if (seed_pointer==cSEED_word){//word pick
                             black_screen();
@@ -3014,7 +3018,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                    case UP_BT:
-                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de p√É∆í√Ü‚Äô√É‚Äö√Ç¬°gina y apunta a slot 8
+                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de p√?∆?√?‚??√?‚??√?¬°gina y apunta a slot 8
                             black_screen();
                             SDblock_pointer=cSDBLOCK_n_opt-1;
                             SD_page--;
@@ -3095,7 +3099,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case UP_BT:
-                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de p√É∆í√Ü‚Äô√É‚Äö√Ç¬°gina y apunta a slot 8
+                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de p√?∆?√?‚??√?‚??√?¬°gina y apunta a slot 8
                             black_screen();
                             SDblock_pointer=cSDBLOCK_n_opt-1;
                             SD_page--;
@@ -3210,7 +3214,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case UP_BT:
-                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de p√É∆í√Ü‚Äô√É‚Äö√Ç¬°gina y apunta a slot 8
+                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de p√?∆?√?‚??√?‚??√?¬°gina y apunta a slot 8
                             black_screen();
                             SDblock_pointer=cSDBLOCK_n_opt-1;
                             SD_page--;
@@ -3322,7 +3326,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case UP_BT:
-                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de p√É∆í√Ü‚Äô√É‚Äö√Ç¬°gina y apunta a slot 8
+                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de p√?∆?√?‚??√?‚??√?¬°gina y apunta a slot 8
                             black_screen();
                             SDblock_pointer=cSDBLOCK_n_opt-1;
                             SD_page--;
@@ -3678,93 +3682,74 @@ int main ( void ){
                 switch (pulsed_bt) {
                     case OK_BT:
                         pulsed_bt = NONE;
-                        if (seed_pointer==cSEED_dice ) {
-                            drawtext(dice_x_pointer,dice_y_pointer, "3", ST7735_WHITE, ST7735_BLACK, 1);
-                            dice_xy_pointer_line_adjust();
-                            make_room_for_entropy_bits(2);
-                            append_entropy_bits("11", 2);
+                        if (seed_pointer == cSEED_dice) {
+                            append_entropy_bits_truncate("11", 2);
                             if (check_dice_count_end()) break;
+                            rectan(0, 35, 159, 43, BLACK); 
+                            draw_shared_entropy_building();
                             update_dice_bit_count_display(bit_count_dice);
-                            //display_entropy(data_array_256b);// auxiliar, ver como avanza
                         }
                         break;
                     case BACK_BT:
                         pulsed_bt = NONE;
-                        if (seed_pointer==cSEED_dice) {
-                            drawtext(dice_x_pointer,dice_y_pointer, "1", ST7735_WHITE, ST7735_BLACK, 1);
-                            dice_xy_pointer_line_adjust();
-                            make_room_for_entropy_bits(2);
-                            append_entropy_bits("01", 2);
+                        if (seed_pointer == cSEED_dice) {
+                            append_entropy_bits_truncate("01", 2);
                             if (check_dice_count_end()) break;
+                            rectan(0, 35, 159, 43, BLACK); 
+                            draw_shared_entropy_building();
                             update_dice_bit_count_display(bit_count_dice);
-                            //display_entropy(data_array_256b);// auxiliar, ver como avanza
+                        } else if (seed_pointer == cSEED_coin) {
+                            if (bit_count_dice > 0) {
+                                bit_count_dice--;
+                                set_bit(data_array_256b, bit_count_dice, 0);
+                                rectan(0, 35, 159, 43, BLACK); 
+                                draw_shared_entropy_building();
+                                update_dice_bit_count_display(bit_count_dice);
+                            }
                         }
                         break;
                     case UP_BT:
                         pulsed_bt = NONE;
-                        if (seed_pointer==cSEED_dice) {
-                            drawtext(dice_x_pointer,dice_y_pointer, "2", ST7735_WHITE, ST7735_BLACK, 1);
-                            dice_xy_pointer_line_adjust();
-                            make_room_for_entropy_bits(2);
-                            append_entropy_bits("10", 2);
+                        if (seed_pointer == cSEED_dice) {
+                            append_entropy_bits_truncate("10", 2);
                             if (check_dice_count_end()) break;
+                            rectan(0, 35, 159, 43, BLACK); 
+                            draw_shared_entropy_building();
                             update_dice_bit_count_display(bit_count_dice);
-                            //display_entropy(data_array_256b);// auxiliar, ver como avanza
                         }
                         break;
                     case DOWN_BT:
                         pulsed_bt = NONE;
-                        if (seed_pointer==cSEED_dice) { //rolling dices
-                            drawtext(dice_x_pointer,dice_y_pointer, "5", ST7735_WHITE, ST7735_BLACK, 1);
-                        } else if (seed_pointer==cSEED_coin){//rolling coins
-                            drawtext(dice_x_pointer,dice_y_pointer, "1", ST7735_WHITE, ST7735_BLACK, 1);
-                        }
-                        dice_xy_pointer_line_adjust();
-                        // button 5 = '1'
-                        if (seed_pointer==cSEED_dice) {
-                            make_room_for_entropy_bits(1);
-                            append_entropy_bits("1", 1);
+                        if (seed_pointer == cSEED_dice) {
+                            append_entropy_bits_truncate("1", 1);
                         } else {
-                            set_bit(data_array_256b, bit_count_dice, 1);
-                            bit_count_dice = bit_count_dice +1;
+                            append_entropy_bits_truncate("1", 1);
                         }
                         if (check_dice_count_end()) break;
+                        rectan(0, 35, 159, 43, BLACK); 
+                        draw_shared_entropy_building();
                         update_dice_bit_count_display(bit_count_dice);
-                        //display_entropy(data_array_256b);// auxiliar, ver como avanza
-
                         break;
                     case LEFT_BT:
                         pulsed_bt = NONE;
-                        if (seed_pointer==cSEED_dice) { //rolling dices
-                            drawtext(dice_x_pointer,dice_y_pointer, "4", ST7735_WHITE, ST7735_BLACK, 1);
-                        } else if (seed_pointer==cSEED_coin){//rolling coins
-                            drawtext(dice_x_pointer,dice_y_pointer, "0", ST7735_WHITE, ST7735_BLACK, 1);
-                        }
-
-                        dice_xy_pointer_line_adjust();
-                        // button 4 = '0'
-                        if (seed_pointer==cSEED_dice) {
-                            make_room_for_entropy_bits(1);
-                            append_entropy_bits("0", 1);
+                        if (seed_pointer == cSEED_dice) {
+                            append_entropy_bits_truncate("0", 1);
                         } else {
-                            set_bit(data_array_256b, bit_count_dice, 0);
-                            bit_count_dice = bit_count_dice +1;
+                            append_entropy_bits_truncate("0", 1);
                         }
                         if (check_dice_count_end()) break;
+                        rectan(0, 35, 159, 43, BLACK); 
+                        draw_shared_entropy_building();
                         update_dice_bit_count_display(bit_count_dice);
-                        //display_entropy(data_array_256b);// auxiliar, ver como avanza
-
                         break;
                     case RIGTH_BT:
                         pulsed_bt = NONE;
-                        if (seed_pointer==cSEED_dice) {
-                            drawtext(dice_x_pointer,dice_y_pointer, "6", ST7735_WHITE, ST7735_BLACK, 1);
-                            dice_xy_pointer_line_adjust();
-                            make_room_for_entropy_bits(2);
-                            append_entropy_bits("00", 2);
+                        if (seed_pointer == cSEED_dice) {
+                            append_entropy_bits_truncate("00", 2);
                             if (check_dice_count_end()) break;
+                            rectan(0, 35, 159, 43, BLACK); 
+                            draw_shared_entropy_building();
                             update_dice_bit_count_display(bit_count_dice);
-                            //display_entropy(data_array_256b);// auxiliar, ver como avanza
                         }
                         break;
                     default:
