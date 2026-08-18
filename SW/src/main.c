@@ -24,8 +24,8 @@
  *   - Security-sensitive data should be handled carefully at all times
  *
  * Author:      Seedmate
- * Date:        16/8/2026
- * Version:     v1.3                               
+ * Date:        18/8/2026
+ * Version:     v1.4                               
  * License
  * 
  * This project is licensed under the MIT License.
@@ -75,7 +75,7 @@
 #define SCREEN_HEIGHT 128
 
 
-#define cVersion "v1.3"
+#define cVersion "v1.4"
 
 #define SD_SCK    PORTBbits.RB7
 #define SD_CS     PORTCbits.RC9
@@ -175,20 +175,20 @@ int shares_loaded = 0;
 int dice_x_pointer = 0;
 int dice_y_pointer = 25;
 
-BYTE data_array_256b[32] = {0};
+BYTE data_array_256b[36] = {0}; // Increased buffer size to handle excess bits tracking
 int size_pointer = 0;
 int bit_count_dice = 0;
 int entropy_bits = 0;
+int last_input_len = 0; // Tracks the length of the most recent entropy input
 
 int seed_pointer = 0;
 int card_rank_pointer = 0;
 int card_suit_pointer = 0;
 int card_field_pointer = 0;
-int card_status_error = 0;
 int card_history_count = 0;
 uint16_t card_history_start_bits[cCARD_MAX_HISTORY] = {0};
 uint8_t card_history_bit_len[cCARD_MAX_HISTORY] = {0};
-uint8_t card_history_index[cCARD_MAX_HISTORY] = {0};
+
 
 const char card_rank_chars[13] = { 'a', '2', '3', '4', '5', '6', '7', '8', '9', 't', 'j', 'q', 'k' };
 const char card_suit_chars[4] = { 'c', 'd', 'h', 's' };
@@ -229,9 +229,11 @@ static void shift_left(BYTE *data, int N);
 static void shift_right(BYTE *data, int N);
 static void not_operator(BYTE *data, int N);
 void black_screen(void);
-void set_bit(BYTE data_array[32], int bit_index, int value);
-const char* get_confirmed_word_from_entropy(const BYTE data_array[32], int index);
-int read_11bit_value(const BYTE data_array[32], int index);
+void set_bit(BYTE data_array[36], int bit_index, int value);
+const char* get_confirmed_word_from_entropy(const BYTE data_array[36], int index);
+int read_11bit_value(const BYTE data_array[36], int index);
+void print_checksum_screen(void);
+const char* get_word(int index);
 
 void draw_hex16(unsigned int x, unsigned int y, uint16_t numero, int N, unsigned int color, unsigned int bg, unsigned int size) {
     char hex_text[5]; // 4 hex digits plus null terminator
@@ -279,6 +281,7 @@ typedef enum
     SEL_XOR,
     SEL_OBFUS,
     ROLL_DICE1,
+    SHOW_CHECKSUM_DETAILS,
     SHOW_SEED,
     SHOW_QRSEED,
     WRITE_WORD,
@@ -492,12 +495,12 @@ void grid_keyboard(){
 
 void grid_dices(){              // 1 2 3   y  4 5 6 abajo
     print_cursor_grid();
-    drawtext(133,107, "3", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(73,107, "1", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(103,107, "2", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(73,117, "4", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(133,117, "6", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(103,117, "5", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(123,107, "3=11", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(63,107, "1=01", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(93,107, "2=10", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(67,117, "4=0", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(123,117, "6=00", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(97,117, "5=1", ST7735_WHITE, ST7735_WHITE, 1);
 }
 
 void grid_coins(){              // heads tails
@@ -626,15 +629,14 @@ static void reset_card_entropy_mode(void) {
         data_array_256b[i] = 0;
     }
     bit_count_dice = 0;
+    last_input_len = 0;
     card_rank_pointer = 0;
     card_suit_pointer = 0;
     card_field_pointer = 0;
-    card_status_error = 0;
     card_history_count = 0;
     for (int i = 0; i < cCARD_MAX_HISTORY; i++) {
         card_history_start_bits[i] = 0;
-        card_history_bit_len[i] = 0;
-        card_history_index[i] = 0;
+        card_history_bit_len[i] = 0;        
     }
 }
 
@@ -670,12 +672,12 @@ static void draw_card_selection(void) {
         padded_bits[i] = bits[i];
     }
 
-    drawtext(96, 25, padded_bits, ST7735_BLUE, ST7735_BLACK, 1);
+    drawtext(96, 25, padded_bits, ST7735_CYAN, ST7735_BLACK, 1);
 }
 
 // Unified visual helper for building entropy for cards, dice, and coins
-static int read_entropy_bit(const BYTE data_array[32], int bit_index) {
-    if (bit_index < 0 || bit_index >= 256) {
+static int read_entropy_bit(const BYTE data_array[36], int bit_index) {
+    if (bit_index < 0 || bit_index >= 288) { // Updated bounds
         return 0;
     }
 
@@ -685,16 +687,20 @@ static int read_entropy_bit(const BYTE data_array[32], int bit_index) {
 }
 
 void draw_shared_entropy_building(void) {
+    rectan(0, 35, 159, 43, BLACK); 
     int completed_words = bit_count_dice / 11;
     int remaining_bits = bit_count_dice % 11;
     char buf[64];
 
     // Track the last known state to prevent unnecessary history redraws
     static int last_completed_words = -1;
+    static bool history_has_purple = false;
     
-    // We redraw history if the number of completed words changes (addition or deletion),
-    // or if the seed is totally empty (to force a clean slate when entering the screen)
-    bool redraw_history = (completed_words != last_completed_words) || (bit_count_dice == 0);
+    // Check if the number of completed words changed or if the screen was reset
+    bool words_changed = (completed_words != last_completed_words) || (bit_count_dice == 0);
+    
+    // We redraw history if words changed, OR if we left purple bits in the history last time.
+    bool redraw_history = words_changed || history_has_purple;
     last_completed_words = completed_words;
 
     // ---------------------------------------------------------
@@ -702,17 +708,18 @@ void draw_shared_entropy_building(void) {
     // (ALWAYS redraw this row since it changes on every input)
     // ---------------------------------------------------------
     if (remaining_bits > 0) {
-        char current_bits_str[32] = {0}; 
-        int i;
-        for (i = 0; i < remaining_bits; i++) {
-            current_bits_str[i] = read_entropy_bit(data_array_256b, completed_words * 11 + i) ? '1' : '0';
+        int cursor_x = 1;
+        for (int i = 0; i < remaining_bits; i++) {
+            int abs_idx = completed_words * 11 + i;
+            uint16_t color = (abs_idx >= bit_count_dice - last_input_len) ? ST7735_MAGENTA : ST7735_ORANGE;
+            char single_char[2] = { read_entropy_bit(data_array_256b, abs_idx) ? '1' : '0', '\0' };
+            drawtext(cursor_x, 35, single_char, color, ST7735_BLACK, 1);
+            cursor_x += 6;
         }
-        // Add spaces to overwrite any trailing characters
-        while (i < 20) {
-            current_bits_str[i++] = ' ';
-        }
-        current_bits_str[i] = '\0';
-        drawtext(1, 35, current_bits_str, ST7735_ORANGE, ST7735_BLACK, 1);
+        // Pad spaces to overwrite any trailing characters
+        char pad_str[24] = {0};
+        for (int p = 0; p < 20 - remaining_bits; p++) pad_str[p] = ' ';
+        drawtext(cursor_x, 35, pad_str, ST7735_BLACK, ST7735_BLACK, 1);
     } else if (bit_count_dice == 0) {
         // Draw a solid black row to clear TFT pixels before writing
         rectan(0, 35, 159, 44, BLACK); 
@@ -724,13 +731,16 @@ void draw_shared_entropy_building(void) {
 
     // ---------------------------------------------------------
     // Rows 2 to 6: Displaying up to the 5 previous completed words
-    // (ONLY redraw if word boundaries crossed or screen reset)
     // ---------------------------------------------------------
     if (redraw_history) {
         int y_offset = 45;
+        history_has_purple = false; // Reset the flag before drawing
         
-        // Always iterate exactly 5 times. 
-        for (int r = 0; r < 5; r++) {
+        // If the only reason to redraw is to clear purple bits, we only need 
+        // to update the first history row (which is the second row overall on the screen, r = 0).
+        int rows_to_draw = words_changed ? 5 : 1;
+        
+        for (int r = 0; r < rows_to_draw; r++) {
             int word_index = completed_words - 1 - r; 
             
             if (word_index >= 0) {
@@ -738,33 +748,43 @@ void draw_shared_entropy_building(void) {
                 int word_val = read_11bit_value(data_array_256b, word_index + 1); 
                 const char* word_str = get_confirmed_word_from_entropy(data_array_256b, word_index + 1);
 
-                char bits_str[12] = {0};
+                int cursor_x = 1;
                 for (int b = 0; b < 11; b++) {
-                    bits_str[b] = read_entropy_bit(data_array_256b, word_index * 11 + b) ? '1' : '0';
+                    int abs_idx = word_index * 11 + b;
+                    
+                    bool is_purple = (abs_idx >= bit_count_dice - last_input_len);
+                    if (is_purple) {
+                        history_has_purple = true; // Mark that this row contains purple bits
+                    }
+                    uint16_t color = is_purple ? ST7735_MAGENTA : ST7735_GREEN;
+                    
+                    char single_char[2] = { read_entropy_bit(data_array_256b, abs_idx) ? '1' : '0', '\0' };
+                    drawtext(cursor_x, y_offset, single_char, color, ST7735_BLACK, 1);
+                    cursor_x += 6;
                 }
 
                 char dec_str[6];
                 u16_to_str_pad((unsigned int)word_val, dec_str, 4);
 
                 int pos = 0;
-                for (int b = 0; b < 11; b++) buf[pos++] = bits_str[b];
                 buf[pos++] = ' ';
                 
                 int d = 0;
                 while (dec_str[d] != '\0') buf[pos++] = dec_str[d++];
                 
-                buf[pos++] = ' ';
-                
+                buf[pos++] = ' ';                
+               
                 int w = 0;
                 while (word_str && word_str[w] != '\0') buf[pos++] = word_str[w++];
                 
-                // Pad with spaces to overwrite ghost characters in shorter words
-                while (pos < 26) {
+                // Pad with spaces to overwrite ghost characters in shorter words.
+                // Changed from 26 to 15 to prevent TFT line-wrap overlay.
+                while (pos < 15) {
                     buf[pos++] = ' ';
                 }
                 buf[pos] = '\0';
 
-                drawtext(1, y_offset, buf, ST7735_GREEN, ST7735_BLACK, 1);
+                drawtext(cursor_x, y_offset, buf, ST7735_GREEN, ST7735_BLACK, 1);
             } else {
                 // No word exists for this slot, print a solid black row to erase the TFT pixels completely
                 rectan(0, y_offset, 159, y_offset + 9, BLACK);
@@ -777,27 +797,18 @@ void draw_shared_entropy_building(void) {
 
 static void print_card_input_screen(void) {
     drawtext(1, 5, (size_pointer == cSIZE_24) ? "DRAW CARDS UP TO 256 BITS" : "DRAW CARDS UP TO 128 BITS", ST7735_WHITE, ST7735_BLACK, 1);
-	draw_card_bit_counter();
+    draw_card_bit_counter();
     draw_card_selection();
-    if (card_status_error) {
-        drawtext(1, 85, "NO CABE, BORRA OTRA", ST7735_RED, ST7735_BLACK, 1);
-    } 
-    rectan(0, 35, 159, 43, BLACK); // Clear space for unified view
+    
+    //rectan(0, 35, 159, 43, BLACK); 
     draw_shared_entropy_building();
     grid_keyboard();
 }
 
-
-
-
-
-// Discards trailing bits when excess occurs instead of pushing leading bits out
-static void append_entropy_bits_truncate(const char *bits, size_t len) {
-    int target_bits = entropy_bits + 1;
+// Accepts excess bits without truncation to allow proper red-bit display in checksum screen
+static void append_entropy_bits(const char *bits, size_t len) {
+    last_input_len = len; // Track length for purple highlight
     for (size_t i = 0; i < len; i++) {
-        if (bit_count_dice >= target_bits) {
-            break; // Stop appending when it overflows the maximum target
-        }
         set_bit(data_array_256b, bit_count_dice, (bits[i] == '1') ? 1 : 0);
         bit_count_dice++;
     }
@@ -807,31 +818,22 @@ static bool append_selected_card_entropy(void) {
     uint8_t card_index = get_selected_card_index();
     const char *bits = card_entropy_map[card_index];
     size_t len = strlen(bits);
-    int target_bits = entropy_bits + 1;
+    int target_bits = (size_pointer == cSIZE_12) ? 128 : 256;
 
     if (card_history_count >= cCARD_MAX_HISTORY) {
-        card_status_error = 1;
         return false;
     }
 
     if (bit_count_dice >= target_bits) {
-        card_status_error = 0;
         return false;
     }
 
-    size_t bits_to_add = len;
-    if (bit_count_dice + bits_to_add > target_bits) {
-        bits_to_add = target_bits - bit_count_dice;
-    }
-
     card_history_start_bits[card_history_count] = (uint16_t)bit_count_dice;
-    card_history_bit_len[card_history_count] = (uint8_t)bits_to_add;
-    card_history_index[card_history_count] = card_index;
+    card_history_bit_len[card_history_count] = (uint8_t)len;
     card_history_count++;
 
-    append_entropy_bits_truncate(bits, len);
+    append_entropy_bits(bits, len);
 
-    card_status_error = 0;
     return true;
 }
 
@@ -849,11 +851,110 @@ static void remove_last_card_entropy(void) {
     }
 
     bit_count_dice = start_bit;
-    card_status_error = 0;
+    last_input_len = 0; // Clear highlight on delete
 }
 
 
+void print_checksum_screen(void) {
+    int target_bits = (size_pointer == cSIZE_12) ? 128 : 256;
+    int b_len = (size_pointer == cSIZE_12) ? 7 : 3;
+    int c_len = (size_pointer == cSIZE_12) ? 4 : 8;
+    int b_start = target_bits - b_len;
+    
+    // Calculate final checksum Hash 
+    BYTE hash[SHA256_BLOCK_SIZE];
+    SHA256_CTX ctx;
+    sha256_init(&ctx);
+    sha256_update(&ctx, data_array_256b, (size_t)(target_bits / 8));
+    sha256_final(&ctx, hash);
+    
+    // Extract 'b' bits (from true entropy input)
+    char b_str[8] = {0};
+    unsigned int b_val = 0;
+    for (int i = 0; i < b_len; i++) {
+        int bit = read_entropy_bit(data_array_256b, b_start + i);
+        b_str[i] = bit ? '1' : '0';
+        b_val = (b_val << 1) | bit;
+    }
+    
+    // Extract 'c' bits (from mathematical hash)
+    char c_str[9] = {0};
+    unsigned int c_val = 0;
+    for (int i = 0; i < c_len; i++) {
+        int bit = (hash[0] >> (7 - i)) & 1;
+        c_str[i] = bit ? '1' : '0';
+        c_val = (c_val << 1) | bit;
+    }
+    
+    // Derived values mapping
+    unsigned int correct_group = (b_val << c_len) | c_val;
+    const char* correct_word = get_word(correct_group);
+    char correct_dec_str[6];
+    u16_to_str_pad(correct_group, correct_dec_str, 4);
 
+    int y_cursor = 5;
+
+    // Handle User input sections (Word Mode vs Raw Bits Mode)
+    if (seed_pointer == cSEED_word) {
+        int r_len = c_len;
+        char r_str[9] = {0};
+        unsigned int r_val = 0;
+        for (int i = 0; i < r_len; i++) {
+            int bit = read_entropy_bit(data_array_256b, target_bits + i);
+            r_str[i] = bit ? '1' : '0';
+            r_val = (r_val << 1) | bit;
+        }
+        unsigned int user_group = (b_val << c_len) | r_val;
+        char user_dec_str[6];
+        u16_to_str_pad(user_group, user_dec_str, 4);
+        
+        uint16_t r_color = (r_val == c_val) ? ST7735_GREEN : ST7735_RED;
+
+        drawtext(1, y_cursor, "User word:", ST7735_WHITE, ST7735_BLACK, 1);
+        y_cursor += 10;
+        
+        drawtext(1, y_cursor, b_str, ST7735_ORANGE, ST7735_BLACK, 1);
+        drawtext(1 + (b_len * 6), y_cursor, r_str, r_color, ST7735_BLACK, 1);
+        y_cursor += 10;
+        
+        drawtext(1, y_cursor, "decimal: ", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(55, y_cursor, user_dec_str, ST7735_YELLOW, ST7735_BLACK, 1);
+        y_cursor += 10;
+        
+        drawtext(1, y_cursor, "word: ", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(37, y_cursor, (char*)get_word(user_group), r_color, ST7735_BLACK, 1);
+        y_cursor += 15;
+    } else if (bit_count_dice > target_bits) {
+        // Display excess overrun bits in red
+        int r_len = bit_count_dice - target_bits;
+        char r_str[16] = {0};
+        for (int i = 0; i < r_len && i < 15; i++) {
+            r_str[i] = read_entropy_bit(data_array_256b, target_bits + i) ? '1' : '0';
+        }
+        
+        drawtext(1, y_cursor, "Excess bits (discarded):", ST7735_WHITE, ST7735_BLACK, 1);
+        y_cursor += 10;
+        drawtext(1, y_cursor, b_str, ST7735_ORANGE, ST7735_BLACK, 1);
+        drawtext(1 + (b_len * 6), y_cursor, r_str, ST7735_RED, ST7735_BLACK, 1);
+        y_cursor += 15;
+    }
+
+    // Unified Correct Checksum Section
+    drawtext(1, y_cursor, "Checksum word:", ST7735_WHITE, ST7735_BLACK, 1);
+    y_cursor += 10;
+    drawtext(1, y_cursor, b_str, ST7735_ORANGE, ST7735_BLACK, 1);
+    drawtext(1 + (b_len * 6), y_cursor, c_str, ST7735_CYAN, ST7735_BLACK, 1);
+    y_cursor += 10;
+    
+    drawtext(1, y_cursor, "decimal: ", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(55, y_cursor, correct_dec_str, ST7735_YELLOW, ST7735_BLACK, 1);
+    y_cursor += 10;
+    
+    drawtext(1, y_cursor, "word: ", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(37, y_cursor, (char*)correct_word, ST7735_GREEN, ST7735_BLACK, 1);
+
+    grid_TMR(); 
+}
 
 void sel_input_screen(int sel) {
     char* options[] = {
@@ -1011,8 +1112,7 @@ void sel_SSS_screen(int sel){
 
 
 const char* get_word(int index) {
-    if (index < 0 || index >= 2047) {
-        //return "Ã?Æ?Ã?â??Ã?â??Ã? ndice fuera de rango";
+    if (index < 0 || index >= 2047) {        
     }
     return words[index];
 }
@@ -1030,7 +1130,7 @@ int find_word_index(const char *word) {
 
 
 
-int read_11bit_value(const BYTE data_array[32], int index) {
+int read_11bit_value(const BYTE data_array[36], int index) {
     int bit_pos = (index - 1) * 11;
     int max_bits = (16 + size_pointer * 16) * 8;
     int value = 0;
@@ -1046,7 +1146,7 @@ int read_11bit_value(const BYTE data_array[32], int index) {
     return value;
 }
 
-const char* get_confirmed_word_from_entropy(const BYTE data_array[32], int index) {
+const char* get_confirmed_word_from_entropy(const BYTE data_array[36], int index) {
     int word_index = read_11bit_value(data_array, index);
 
     if (word_index < 0) {
@@ -1148,7 +1248,7 @@ static const char *search_unique_prefix(const char *prefix, char *result, size_t
 
 
 void draw_qr_code(const char *text) {
-    // Genera un QR Code estÃ?Æ?Ã?â??Ã?â??Ã?Â¡ndar (no Micro QR)
+    // Generate standard QR (no Micro QR)
     size_t length = strlen(text);
     // QR buffer for version 3 (29x29)
     uint8_t qrcodeData[qrcode_getBufferSize(3)];
@@ -1245,12 +1345,9 @@ void white_screen(){
     rectan(0,0,159,127,WHITE);
 }
 
-void clean_card_history(){
-   rectan(0, 35, 159, 70, BLACK); // Clears the new shared building area
-}
 
 void reset_current_word_list_buffer(void) {
-    for (int i = 0; i < 32; i++) {
+    for (int i = 0; i < 36; i++) {
         data_array_256b[i] = 0;
     }
 }
@@ -1315,9 +1412,9 @@ void update_dice_bit_count_display(int bit_count_dice_local){
 }
 
 
-void set_bit(BYTE data_array[32], int bit_index, int value) {
-    if (bit_index < 0 || bit_index >= 256 || (value != 0 && value != 1)) {
-        // Ã?Æ?Ã?â??Ã?â??Ã? ndice fuera de rango o valor invÃ?Æ?Ã?â??Ã?â??Ã?Â¡lido
+void set_bit(BYTE data_array[36], int bit_index, int value) {
+    if (bit_index < 0 || bit_index >= 288 || (value != 0 && value != 1)) {
+        //index out of range
         return;
     }
 
@@ -1459,8 +1556,8 @@ void extract_11bit_groups(BYTE *data, size_t size) {
     if ((main_pointer==cMAIN_SSS) & (sss_pointer==cSPLIT)){
         char shareid_text[4];
         u16_to_str((unsigned int)selected_share_id, shareid_text);
-        drawtext(145,30, "ID", ST7735_BLUE, ST7735_BLACK, 1);
-        drawtext(146,40, shareid_text, ST7735_BLUE, ST7735_BLACK, 2);
+        drawtext(145,30, "ID", ST7735_CYAN, ST7735_BLACK, 1);
+        drawtext(146,40, shareid_text, ST7735_CYAN, ST7735_BLACK, 2);
         if (selected_share_id>1)print_up_arrow(72,123);
         if (selected_share_id<cN_MAX)print_down_arrow(80,123);
     }
@@ -1515,8 +1612,6 @@ void draw_QRSEED(const unsigned char *data, size_t size) {
                     }
                     text_buf[text_len] = '\0';
                 } else {
-                    // Buffer insuficiente: puedes manejar el error aquÃ?Æ?Ã?â??Ã?â??Ã?Â­.
-                    // Por ahora, corta y termina.
                     text_buf[text_len] = '\0';
                     break;
                 }
@@ -2043,12 +2138,12 @@ void print_SD_preview(){
                 //drawtext(60, 20 + 10*SDblock_pointer, "LOAD OK", ST7735_GREEN, ST7735_BLACK, 1);
                 size_pointer_aux=buffer[cSD_SIZE_ADDR];
                         if (size_pointer_aux==cSIZE_12){// 12 words
-                            drawtext(48, 20 + 10*i, "12W", ST7735_BLUE, ST7735_BLACK, 1);
+                            drawtext(48, 20 + 10*i, "12W", ST7735_CYAN, ST7735_BLACK, 1);
                         }   else {
-                            drawtext(48, 20 + 10*i, "24W", ST7735_BLUE, ST7735_BLACK, 1);
+                            drawtext(48, 20 + 10*i, "24W", ST7735_CYAN, ST7735_BLACK, 1);
                         }
             }   else {
-                drawtext(48, 20 + 10*i, "   ", ST7735_BLUE, ST7735_BLACK, 1);
+                drawtext(48, 20 + 10*i, "   ", ST7735_CYAN, ST7735_BLACK, 1);
             }
 
 
@@ -2089,7 +2184,7 @@ void sel_sd_block_screen_generic(int sel) {
 void sel_sd_block_screen_wr(int sel) {
 
     drawtext(1, 10 , "SELECT SLOT TO WRITE", ST7735_WHITE, ST7735_BLACK, 1);
-    // Pintar 8 lÃ?Æ?Ã?â??Ã?â??Ã?Â­neas: "SLOT <num>"
+    // Pintar 8 lÃƒ?Ã†?Ãƒ?Ã¢??Ãƒ?Ã¢??Ãƒ?Ã‚Â­neas: "SLOT <num>"
     print_slots(sel);
     print_SD_preview();
     grid_menuwr();
@@ -2166,11 +2261,11 @@ static void eval_poly_block(uint8_t *y_out,
 }
 
 
-/* Split genÃ?Æ?Ã?â??Ã?â??Ã?Â©rico:
+/* Split genÃƒ?Ã†?Ãƒ?Ã¢??Ãƒ?Ã¢??Ãƒ?Ã‚Â©rico:
    - f(x) = c0 + c1*x + ... + cN*x^N  (N <= 6)
    - c0: secret buffer (len bytes)
    - coeffs: array of N pointers to buffers (c1..cN), each len bytes
-   - x_vals: array de x's (no cero, distintos entre sÃ?Æ?Ã?â??Ã?â??Ã?Â­)
+   - x_vals: array de x's (no cero, distintos entre sÃƒ?Ã†?Ãƒ?Ã¢??Ãƒ?Ã¢??Ãƒ?Ã‚Â­)
    - shares: array of x_count pointers to output buffers (each len bytes)
 */
 bool sss_split_polyN(const uint8_t *c0,
@@ -2285,7 +2380,7 @@ static void tmr1_init(void)
 
 
 
-/* ===== ExtracciÃ?Æ?Ã?â??Ã?â??Ã?Â³n de entropÃ?Æ?Ã?â??Ã?â??Ã?Â­a: LSB ADC + jitter timer ===== */
+/* ===== ExtracciÃƒ?Ã†?Ãƒ?Ã¢??Ãƒ?Ã¢??Ãƒ?Ã‚Â³n de entropÃƒ?Ã†?Ãƒ?Ã¢??Ãƒ?Ã¢??Ãƒ?Ã‚Â­a: LSB ADC + jitter timer ===== */
 void dice_xy_pointer_line_adjust(){
     if ((seed_pointer==cSEED_timer) ||  (main_pointer ==cMAIN_SSS)){
          if (dice_x_pointer > cEND_OF_LINE-54){
@@ -2305,15 +2400,20 @@ void dice_xy_pointer_line_adjust(){
 }
 
 bool check_dice_count_end(){
-    if (bit_count_dice >entropy_bits){
-        if (main_pointer!=cMAIN_SSS){//solo estabamos perdiendo tiempo
+    int target_bits = (size_pointer == cSIZE_12) ? 128 : 256;
+    if (bit_count_dice >= target_bits){
+        if (main_pointer != cMAIN_SSS){
             black_screen();
-            extract_11bit_groups(append_checksum(data_array_256b, 16 + size_pointer*16), 16  + size_pointer*16 +1);
-            estado = SHOW_SEED;
-
+            if (main_pointer == cMAIN_create) {
+                print_checksum_screen();
+                estado = SHOW_CHECKSUM_DETAILS;
+            } else {
+                extract_11bit_groups(append_checksum(data_array_256b, 16 + size_pointer*16), 16  + size_pointer*16 +1);
+                estado = SHOW_SEED;
+            }
         }
         return true;
-    }else{
+    } else {
         return false;
     }
 }
@@ -3018,7 +3118,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                    case UP_BT:
-                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de pÃ?Æ?Ã?â??Ã?â??Ã?Â¡gina y apunta a slot 8
+                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de pÃƒ?Ã†?Ãƒ?Ã¢??Ãƒ?Ã¢??Ãƒ?Ã‚Â¡gina y apunta a slot 8
                             black_screen();
                             SDblock_pointer=cSDBLOCK_n_opt-1;
                             SD_page--;
@@ -3099,7 +3199,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case UP_BT:
-                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de pÃ?Æ?Ã?â??Ã?â??Ã?Â¡gina y apunta a slot 8
+                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de pÃƒ?Ã†?Ãƒ?Ã¢??Ãƒ?Ã¢??Ãƒ?Ã‚Â¡gina y apunta a slot 8
                             black_screen();
                             SDblock_pointer=cSDBLOCK_n_opt-1;
                             SD_page--;
@@ -3214,7 +3314,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case UP_BT:
-                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de pÃ?Æ?Ã?â??Ã?â??Ã?Â¡gina y apunta a slot 8
+                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de pÃƒ?Ã†?Ãƒ?Ã¢??Ãƒ?Ã¢??Ãƒ?Ã‚Â¡gina y apunta a slot 8
                             black_screen();
                             SDblock_pointer=cSDBLOCK_n_opt-1;
                             SD_page--;
@@ -3326,7 +3426,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case UP_BT:
-                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de pÃ?Æ?Ã?â??Ã?â??Ã?Â¡gina y apunta a slot 8
+                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de pÃƒ?Ã†?Ãƒ?Ã¢??Ãƒ?Ã¢??Ãƒ?Ã‚Â¡gina y apunta a slot 8
                             black_screen();
                             SDblock_pointer=cSDBLOCK_n_opt-1;
                             SD_page--;
@@ -3648,6 +3748,7 @@ int main ( void ){
                     case OK_BT:
                         pulsed_bt = NONE;
                         time_now = TMR1;
+                        last_input_len = 16;
                         for (int i = 15; i >= 0; i--) {
                             int bit_i = (int)((time_now >> i) & 1u);
                             set_bit(data_array_256b, bit_count_dice, bit_i);
@@ -3683,9 +3784,9 @@ int main ( void ){
                     case OK_BT:
                         pulsed_bt = NONE;
                         if (seed_pointer == cSEED_dice) {
-                            append_entropy_bits_truncate("11", 2);
+                            append_entropy_bits("11", 2);
                             if (check_dice_count_end()) break;
-                            rectan(0, 35, 159, 43, BLACK); 
+                            //rectan(0, 35, 159, 43, BLACK); 
                             draw_shared_entropy_building();
                             update_dice_bit_count_display(bit_count_dice);
                         }
@@ -3693,16 +3794,17 @@ int main ( void ){
                     case BACK_BT:
                         pulsed_bt = NONE;
                         if (seed_pointer == cSEED_dice) {
-                            append_entropy_bits_truncate("01", 2);
+                            append_entropy_bits("01", 2);
                             if (check_dice_count_end()) break;
-                            rectan(0, 35, 159, 43, BLACK); 
+                            //rectan(0, 35, 159, 43, BLACK); 
                             draw_shared_entropy_building();
                             update_dice_bit_count_display(bit_count_dice);
                         } else if (seed_pointer == cSEED_coin) {
                             if (bit_count_dice > 0) {
                                 bit_count_dice--;
                                 set_bit(data_array_256b, bit_count_dice, 0);
-                                rectan(0, 35, 159, 43, BLACK); 
+                                last_input_len = 0; // Clear purple highlight on delete
+                                //rectan(0, 35, 159, 43, BLACK); 
                                 draw_shared_entropy_building();
                                 update_dice_bit_count_display(bit_count_dice);
                             }
@@ -3711,9 +3813,9 @@ int main ( void ){
                     case UP_BT:
                         pulsed_bt = NONE;
                         if (seed_pointer == cSEED_dice) {
-                            append_entropy_bits_truncate("10", 2);
+                            append_entropy_bits("10", 2);
                             if (check_dice_count_end()) break;
-                            rectan(0, 35, 159, 43, BLACK); 
+                            //rectan(0, 35, 159, 43, BLACK); 
                             draw_shared_entropy_building();
                             update_dice_bit_count_display(bit_count_dice);
                         }
@@ -3721,33 +3823,33 @@ int main ( void ){
                     case DOWN_BT:
                         pulsed_bt = NONE;
                         if (seed_pointer == cSEED_dice) {
-                            append_entropy_bits_truncate("1", 1);
+                            append_entropy_bits("1", 1);
                         } else {
-                            append_entropy_bits_truncate("1", 1);
+                            append_entropy_bits("1", 1);
                         }
                         if (check_dice_count_end()) break;
-                        rectan(0, 35, 159, 43, BLACK); 
+                        //rectan(0, 35, 159, 43, BLACK); 
                         draw_shared_entropy_building();
                         update_dice_bit_count_display(bit_count_dice);
                         break;
                     case LEFT_BT:
                         pulsed_bt = NONE;
                         if (seed_pointer == cSEED_dice) {
-                            append_entropy_bits_truncate("0", 1);
+                            append_entropy_bits("0", 1);
                         } else {
-                            append_entropy_bits_truncate("0", 1);
+                            append_entropy_bits("0", 1);
                         }
                         if (check_dice_count_end()) break;
-                        rectan(0, 35, 159, 43, BLACK); 
+                        //rectan(0, 35, 159, 43, BLACK); 
                         draw_shared_entropy_building();
                         update_dice_bit_count_display(bit_count_dice);
                         break;
                     case RIGTH_BT:
                         pulsed_bt = NONE;
                         if (seed_pointer == cSEED_dice) {
-                            append_entropy_bits_truncate("00", 2);
+                            append_entropy_bits("00", 2);
                             if (check_dice_count_end()) break;
-                            rectan(0, 35, 159, 43, BLACK); 
+                            //rectan(0, 35, 159, 43, BLACK); 
                             draw_shared_entropy_building();
                             update_dice_bit_count_display(bit_count_dice);
                         }
@@ -3772,7 +3874,6 @@ int main ( void ){
                         pulsed_bt = NONE;
                         if (card_history_count > 0) {
                             remove_last_card_entropy();
-                            clean_card_history();
                             print_card_input_screen();
                         } else {
                             black_screen();
@@ -3781,8 +3882,7 @@ int main ( void ){
                         }
                         break;
                     case UP_BT:
-                        pulsed_bt = NONE;
-                        card_status_error = 0;
+                        pulsed_bt = NONE;                        
                         if (card_field_pointer == 0) {
                             card_rank_pointer++;
                             if (card_rank_pointer > 12) {
@@ -3797,8 +3897,7 @@ int main ( void ){
                         print_card_input_screen();
                         break;
                     case DOWN_BT:
-                        pulsed_bt = NONE;
-                        card_status_error = 0;
+                        pulsed_bt = NONE;                        
                         if (card_field_pointer == 0) {
                             card_rank_pointer--;
                             if (card_rank_pointer < 0) {
@@ -3813,14 +3912,12 @@ int main ( void ){
                         print_card_input_screen();
                         break;
                     case LEFT_BT:
-                        pulsed_bt = NONE;
-                        card_status_error = 0;
+                        pulsed_bt = NONE;                        
                         card_field_pointer = 0;
                         print_card_input_screen();
                         break;
                     case RIGTH_BT:
-                        pulsed_bt = NONE;
-                        card_status_error = 0;
+                        pulsed_bt = NONE;                        
                         card_field_pointer = 1;
                         print_card_input_screen();
                         break;
@@ -3939,7 +4036,15 @@ int main ( void ){
                                             }
                                         }
                                     }
-                                    // Finally show the full result
+
+                                    if (main_pointer == cMAIN_create) {
+                                        print_checksum_screen();
+                                        estado = SHOW_CHECKSUM_DETAILS;
+                                        pulsed_bt = NONE;
+                                        break;
+                                    }
+
+                                    // Finally show the full result for non-create paths
                                     extract_11bit_groups(append_checksum(data_array_256b,16 + size_pointer*16), 16 + size_pointer*16 +1);
 
                                     estado = SHOW_SEED;
@@ -4003,6 +4108,25 @@ int main ( void ){
                         lt_idx=clamped_sum(lt_idx,1);
                         print_word_number_top(word_number, xor_merge_words_available, main_pointer,  word_number_text);
                         print_keyboard(lt_idx, found_bool);
+                        pulsed_bt = NONE;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case SHOW_CHECKSUM_DETAILS:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        black_screen();
+                        extract_11bit_groups(append_checksum(data_array_256b, 16 + size_pointer * 16), 16 + size_pointer * 16 + 1);
+                        estado = SHOW_SEED;
+                        pulsed_bt = NONE;
+                        break;
+                    case BACK_BT:
+                    case UP_BT:
+                    case DOWN_BT:
+                    case LEFT_BT:
+                    case RIGTH_BT:
                         pulsed_bt = NONE;
                         break;
                     default:
