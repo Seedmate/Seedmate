@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Secure words.h Generator (UPPERCASE)</title>
+</head>
+<body style="font-family: monospace; background: #1e1e1e; color: #fff; padding: 20px;">
+    <h2>Secure words.h Generator (BIP39 UPPERCASE)</h2>
+    <p>Ensure you have an active Internet connection. The result will appear below:</p>
+    <textarea id="output" rows="30" style="width: 100%; background: #2d2d2d; color: #0f0; border: none; padding: 10px; font-family: monospace; resize: vertical;" readonly>Downloading and verifying the official list...</textarea>
+    
+    <script>
+        fetch('https://raw.githubusercontent.com/bitcoin/bips/master/bip-0039/english.txt')
+            .then(response => response.text())
+            .then(text => {
+                // Split by lines, trim trailing/leading spaces, and CONVERT TO UPPERCASE
+                const words = text.split('\n').map(w => w.trim().toUpperCase()).filter(w => w.length > 0);
+                
+                // Strict integrity check
+                if (words.length !== 2048) {
+                    document.getElementById('output').value = "CRITICAL ERROR: Found " + words.length + " words instead of 2048.";
+                    return;
+                }
+                
+                // Generate the C code
+                let c_code = "/* Automatically generated file. NON-STANDARD VERSION (UPPERCASE). DO NOT EDIT BY HAND. */\n";
+                c_code += "#ifndef WORDS_H\n#define WORDS_H\n\n";
+                c_code += "const char bip39_words[] =\n";
+                
+                // Write in chunks of 8 words to avoid excessively long lines for the compiler
+                for (let i = 0; i < words.length; i += 8) {
+                    const chunk = words.slice(i, i + 8);
+                    // Join words with null terminators and add one at the end of the chunk
+                    c_code += '    "' + chunk.join('\\0') + '\\0"\n';
+                }
+                
+                c_code += ";\n\n#endif // WORDS_H\n";
+                
+                // Display the generated code on the screen
+                document.getElementById('output').value = c_code;
+            })
+            .catch(err => {
+                document.getElementById('output').value = "Error connecting to GitHub: " + err;
+            });
+    </script>
+</body>
+</html>

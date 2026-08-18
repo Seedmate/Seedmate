@@ -18,6 +18,7 @@
 !*.ld
 !*.xml
 !*.properties
+!*.html
 
 # 5. Configuración del proyecto de MPLAB X
 !*.X/nbproject/project.xml

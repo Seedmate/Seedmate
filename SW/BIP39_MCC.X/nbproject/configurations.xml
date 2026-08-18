@@ -28,10 +28,10 @@
       <itemPath>../src/SPI.h</itemPath>
       <itemPath>../src/TFT.h</itemPath>
       <itemPath>../src/sha256.h</itemPath>
-      <itemPath>../src/words.h</itemPath>
       <itemPath>../src/QRCode-master/src/qrcode.h</itemPath>
       <itemPath>../src/SSS/shamir.h</itemPath>
       <itemPath>../src/SSS/memzero.h</itemPath>
+      <itemPath>../src/words_opt.h</itemPath>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
                    displayName="Important Files"

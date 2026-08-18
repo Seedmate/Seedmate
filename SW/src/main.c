@@ -66,7 +66,7 @@
 #include "SPI.h"                        // SPI functions
 #include "TFT.h"                        // TFT functions
 #include "SHA256.h"
-#include "words.h"
+#include "words_opt.h"
 #include <string.h>
 #include "SSS/shamir.h"
 #include "QRCode-master/src/qrcode.h"
@@ -1112,19 +1112,44 @@ void sel_SSS_screen(int sel){
 
 
 const char* get_word(int index) {
-    if (index < 0 || index >= 2047) {        
+    if (index < 0 || index >= 2048) {
+        return NULL;
     }
-    return words[index];
+    
+    const char* ptr = bip39_words; 
+    
+    
+    for (int i = 0; i < index; i++) {
+        while (*ptr != '\0') {
+            ptr++;
+        }
+        ptr++; 
+    }
+    
+    return ptr; 
 }
 
 
 int find_word_index(const char *word) {
-    for (int i = 0; i < 2048; ++i) {
-        if (strcmp(words[i], word) == 0) {
-            return i; // Found the word, return its index
-        }
+    if (word == NULL || word[0] == '\0') {
+        return -1;
     }
-    return -1; // Word not found
+
+    const char* ptr = bip39_words;
+    
+    for (int i = 0; i < 2048; ++i) {
+        if (strcmp(ptr, word) == 0) {
+            return i; // Encontramos la palabra, devolvemos su índice
+        }
+        
+        // Si no es, avanzamos el puntero hasta la siguiente palabra
+        while (*ptr != '\0') {
+            ptr++;
+        }
+        ptr++;
+    }
+    
+    return -1; // Palabra no encontrada
 }
 
 
@@ -1225,14 +1250,23 @@ static const char *search_unique_prefix(const char *prefix, char *result, size_t
         return NULL;
     }
 
+    const char* ptr = bip39_words;
+    
     for (int i = 0; i < 2048; ++i) {
-        if (strncmp(words[i], prefix, prefix_len) == 0) {
-            unique_match = words[i];
+        // Comparamos el prefijo con la palabra a la que apunta actualmente 'ptr'
+        if (strncmp(ptr, prefix, prefix_len) == 0) {
+            unique_match = ptr;
             match_count++;
             if (match_count > 1) {
-                return NULL;
+                return NULL; // Hay más de una coincidencia
             }
         }
+        
+        // Avanzamos al siguiente salto de palabra
+        while (*ptr != '\0') {
+            ptr++;
+        }
+        ptr++;
     }
 
     if (match_count == 0) {
@@ -1245,7 +1279,6 @@ static const char *search_unique_prefix(const char *prefix, char *result, size_t
     result[result_size - 1] = '\0';
     return result;
 }
-
 
 void draw_qr_code(const char *text) {
     // Generate standard QR (no Micro QR)
