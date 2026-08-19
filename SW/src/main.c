@@ -99,7 +99,7 @@
 
 
 #define cMAIN_n_opt 7
-#define cSEED_n_opt 5
+#define cSEED_n_opt 6
 #define cSIZE_n_opt 2
 #define cOBFUS_n_opt 3
 #define cXOR_n_opt 3
@@ -131,6 +131,7 @@
 #define cSEED_word 2
 #define cSEED_cards 3
 #define cSEED_timer 4
+#define cSEED_triple 5
 
 
 #define cSIZE_12 0
@@ -171,6 +172,10 @@ int obfuscation_pointer =0;
 int sss_pointer = 0;
 uint8_t  selected_share_id = 1;
 int shares_loaded = 0;
+
+int extract_word_offset = 0;
+int triple_view_state = 0;
+BYTE triple_backup_256b[36] = {0};
 
 int dice_x_pointer = 0;
 int dice_y_pointer = 25;
@@ -233,7 +238,14 @@ void set_bit(BYTE data_array[36], int bit_index, int value);
 const char* get_confirmed_word_from_entropy(const BYTE data_array[36], int index);
 int read_11bit_value(const BYTE data_array[36], int index);
 void print_checksum_screen(void);
+void print_triple_checksum(int word_target);
 const char* get_word(int index);
+
+// Advanced screen redraw logic to seal memory leak and handle navigation states natively
+void redraw_show_seed_with_offset(void);
+void refresh_triple_view(void);
+void extract_11bit_groups(BYTE *data, size_t size);
+
 
 void draw_hex16(unsigned int x, unsigned int y, uint16_t numero, int N, unsigned int color, unsigned int bg, unsigned int size) {
     char hex_text[5]; // 4 hex digits plus null terminator
@@ -303,6 +315,9 @@ typedef enum
     SEL_SHARE,
     TMR_INPUT,
     CARD_INPUT,
+    PROCESS_TRIPLE,
+    SHOW_TRIPLE_CHKSUM_12,
+    SHOW_TRIPLE_CHKSUM_24
 } state_t;
 
 state_t estado = INIT;
@@ -493,14 +508,54 @@ void grid_keyboard(){
     drawtext(67,107, "DEL", ST7735_WHITE, ST7735_WHITE, 1);
 }
 
-void grid_dices(){              // 1 2 3   y  4 5 6 abajo
+void draw_mini_dice(int x, int y, int value) {
+    // Dibujar el fondo del dado relleno de blanco
+    rectan(x, y, x + 6, y + 6, WHITE);
+
+    // Dibujar los puntos en NEGRO
+    // 1, 3, 5: Punto central
+    if (value == 1 || value == 3 || value == 5) {
+        fillRect(x + 3, y + 3, 1, 1, BLACK);
+    }
+    // 2, 3, 4, 5, 6: Puntos superior-izquierdo e inferior-derecho
+    if (value >= 2) {
+        fillRect(x + 1, y + 1, 1, 1, BLACK);
+        fillRect(x + 5, y + 5, 1, 1, BLACK);
+    }
+    // 4, 5, 6: Puntos superior-derecho e inferior-izquierdo
+    if (value >= 4) {
+        fillRect(x + 5, y + 1, 1, 1, BLACK);
+        fillRect(x + 1, y + 5, 1, 1, BLACK);
+    }
+    // 6: Puntos centrales-izquierdo y derecho
+    if (value == 6) {
+        fillRect(x + 1, y + 3, 1, 1, BLACK);
+        fillRect(x + 5, y + 3, 1, 1, BLACK);
+    }
+}
+
+void grid_dices(){              
     print_cursor_grid();
-    drawtext(123,107, "3=11", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(63,107, "1=01", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(93,107, "2=10", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(67,117, "4=0", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(123,117, "6=00", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(97,117, "5=1", ST7735_WHITE, ST7735_WHITE, 1);
+    
+    // Fila 1: Dados 1, 2, 3
+    draw_mini_dice(62, 107, 1);
+    drawtext(71, 107, "=01", ST7735_WHITE, ST7735_BLACK, 1);
+
+    draw_mini_dice(92, 107, 2);
+    drawtext(101, 107, "=10", ST7735_WHITE, ST7735_BLACK, 1);
+
+    draw_mini_dice(122, 107, 3);
+    drawtext(131, 107, "=11", ST7735_WHITE, ST7735_BLACK, 1);
+
+    // Fila 2: Dados 4, 5, 6
+    draw_mini_dice(65, 117, 4);
+    drawtext(74, 117, "=0", ST7735_WHITE, ST7735_BLACK, 1);
+
+    draw_mini_dice(95, 117, 5);
+    drawtext(104, 117, "=1", ST7735_WHITE, ST7735_BLACK, 1);
+
+    draw_mini_dice(122, 117, 6);
+    drawtext(131, 117, "=00", ST7735_WHITE, ST7735_BLACK, 1);
 }
 
 void grid_coins(){              // heads tails
@@ -956,6 +1011,58 @@ void print_checksum_screen(void) {
     grid_TMR(); 
 }
 
+void print_triple_checksum(int word_target) {
+    int b_len, c_len, b_start;
+    unsigned int b_val = 0, c_val = 0;
+    char b_str[8] = {0}, c_str[9] = {0};
+
+    if (word_target == 12) {
+        b_len = 7; c_len = 4; b_start = 121;
+        drawtext(1, 5, "Word 12 Checksum:", ST7735_WHITE, ST7735_BLACK, 1);
+        for(int i=0; i<7; i++) {
+            int bit = read_entropy_bit(data_array_256b, b_start + i);
+            b_str[i] = bit ? '1' : '0';
+            b_val = (b_val << 1) | bit;
+        }
+        for(int i=0; i<4; i++) {
+            int bit = read_entropy_bit(data_array_256b, 128 + i);
+            c_str[i] = bit ? '1' : '0';
+            c_val = (c_val << 1) | bit;
+        }
+    } else {
+        b_len = 3; c_len = 8; b_start = 253;
+        drawtext(1, 5, "Word 24 Checksum:", ST7735_WHITE, ST7735_BLACK, 1);
+        for(int i=0; i<3; i++) {
+            int bit = read_entropy_bit(data_array_256b, b_start + i);
+            b_str[i] = bit ? '1' : '0';
+            b_val = (b_val << 1) | bit;
+        }
+        for(int i=0; i<8; i++) {
+            int bit = read_entropy_bit(data_array_256b, 256 + i);
+            c_str[i] = bit ? '1' : '0';
+            c_val = (c_val << 1) | bit;
+        }
+    }
+
+    unsigned int correct_group = (b_val << c_len) | c_val;
+    const char* correct_word = get_word(correct_group);
+    char correct_dec_str[6];
+    u16_to_str_pad(correct_group, correct_dec_str, 4);
+
+    int y_cursor = 25;
+    drawtext(1, y_cursor, b_str, ST7735_ORANGE, ST7735_BLACK, 1);
+    drawtext(1 + (b_len * 6), y_cursor, c_str, ST7735_CYAN, ST7735_BLACK, 1);
+    y_cursor += 15;
+
+    drawtext(1, y_cursor, "decimal: ", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(55, y_cursor, correct_dec_str, ST7735_YELLOW, ST7735_BLACK, 1);
+    y_cursor += 15;
+
+    drawtext(1, y_cursor, "word: ", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(37, y_cursor, (char*)correct_word, ST7735_GREEN, ST7735_BLACK, 1);
+    grid_TMR(); 
+}
+
 void sel_input_screen(int sel) {
     char* options[] = {
         "FROM KEYBOARD",
@@ -1009,8 +1116,8 @@ void create_seed_screen(int sel){
         "ROLL DICE",
         "RANDOM WORD PICK",
         "DRAW CARDS",
-        "STOPWATCH TEST ONLY"
-
+        "STOPWATCH TEST ONLY",
+        "TRIPLE MNEMONIC"
     };
     for (int i = 0; i < cSEED_n_opt; i++) {
         uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
@@ -1139,7 +1246,7 @@ int find_word_index(const char *word) {
     
     for (int i = 0; i < 2048; ++i) {
         if (strcmp(ptr, word) == 0) {
-            return i; // Encontramos la palabra, devolvemos su �ndice
+            return i; // Encontramos la palabra, devolvemos su índice
         }
         
         // Si no es, avanzamos el puntero hasta la siguiente palabra
@@ -1258,7 +1365,7 @@ static const char *search_unique_prefix(const char *prefix, char *result, size_t
             unique_match = ptr;
             match_count++;
             if (match_count > 1) {
-                return NULL; // Hay m�s de una coincidencia
+                return NULL; // Hay más de una coincidencia
             }
         }
         
@@ -1378,6 +1485,40 @@ void white_screen(){
     rectan(0,0,159,127,WHITE);
 }
 
+void redraw_show_seed_with_offset(void) {
+    black_screen();
+    if (main_pointer == cMAIN_create && seed_pointer == cSEED_triple) {
+         extract_word_offset = (triple_view_state == 2) ? 12 : 0;
+    } else {
+         extract_word_offset = 0;
+         triple_view_state = 0;
+    }
+    
+    BYTE *c_buf = append_checksum(data_array_256b, 16 + size_pointer*16);
+    extract_11bit_groups(c_buf, 16  + size_pointer*16 +1);
+    free(c_buf); // Fixed implicit memory leak
+    
+    estado = SHOW_SEED;
+}
+
+void refresh_triple_view(void) {
+    if (triple_view_state == 0) {
+        for(int i=0; i<36; i++) data_array_256b[i] = triple_backup_256b[i];
+        size_pointer = cSIZE_24;
+    } else if (triple_view_state == 1) {
+        for(int i=0; i<36; i++) data_array_256b[i] = 0;
+        for(int i=0; i<16; i++) data_array_256b[i] = triple_backup_256b[i];
+        size_pointer = cSIZE_12;
+    } else if (triple_view_state == 2) {
+        for(int i=0; i<36; i++) data_array_256b[i] = 0;
+        for(int b=0; b<128; b++) {
+            int bit = read_entropy_bit(triple_backup_256b, 132 + b);
+            set_bit(data_array_256b, b, bit);
+        }
+        size_pointer = cSIZE_12;
+    }
+    redraw_show_seed_with_offset();
+}
 
 void reset_current_word_list_buffer(void) {
     for (int i = 0; i < 36; i++) {
@@ -1540,7 +1681,7 @@ void extract_11bit_groups(BYTE *data, size_t size) {
     int bit_index = 0;
     int y_index = 1;
     int x_index = 0;
-    int word_index = 1;
+    int word_index = 1 + extract_word_offset;
     unsigned int group = 0;
     int total_words = (size * 8) / 11;
     for (size_t i = 0; i < size * 8; i++) {
@@ -1560,9 +1701,15 @@ void extract_11bit_groups(BYTE *data, size_t size) {
             //sprintf(texto, "%02d", word_index);
             u16_to_str((unsigned int)word_index, word_index_text);
             drawtext(x_index,y_index, word_index_text, ST7735_WHITE, ST7735_BLACK, 1);
-                        const char *word = get_word(group);
-                        // Highlight the last word in green.
-            uint16_t color = (word_index == total_words) ? ST7735_GREEN : ST7735_WHITE;
+            const char *word = get_word(group);
+            
+            uint16_t color;
+            if (main_pointer == cMAIN_create && seed_pointer == cSEED_triple && triple_view_state == 0) {
+                color = (word_index == 12 || word_index == 23 || word_index == 24) ? ST7735_GREEN : ST7735_WHITE;
+            } else {
+                color = (word_index == total_words + extract_word_offset) ? ST7735_GREEN : ST7735_WHITE;
+            }
+
             drawtext(x_index + 15, y_index, (char *)word, color, ST7735_BLACK, 1);
             y_index+=9;
             if (y_index>100){
@@ -1593,6 +1740,10 @@ void extract_11bit_groups(BYTE *data, size_t size) {
         drawtext(146,40, shareid_text, ST7735_CYAN, ST7735_BLACK, 2);
         if (selected_share_id>1)print_up_arrow(72,123);
         if (selected_share_id<cN_MAX)print_down_arrow(80,123);
+    }
+    if (main_pointer == cMAIN_create && seed_pointer == cSEED_triple) {
+         if (triple_view_state > 0) print_up_arrow(72,123);
+         if (triple_view_state < 2) print_down_arrow(80,123);
     }
 }
 
@@ -2217,7 +2368,7 @@ void sel_sd_block_screen_generic(int sel) {
 void sel_sd_block_screen_wr(int sel) {
 
     drawtext(1, 10 , "SELECT SLOT TO WRITE", ST7735_WHITE, ST7735_BLACK, 1);
-    // Pintar 8 lÃ?Æ?Ã?â??Ã?â??Ã?Â­neas: "SLOT <num>"
+    // Paint 8 lines "SLOT <num>"
     print_slots(sel);
     print_SD_preview();
     grid_menuwr();
@@ -2294,11 +2445,11 @@ static void eval_poly_block(uint8_t *y_out,
 }
 
 
-/* Split genÃ?Æ?Ã?â??Ã?â??Ã?Â©rico:
+/* Generic split:
    - f(x) = c0 + c1*x + ... + cN*x^N  (N <= 6)
    - c0: secret buffer (len bytes)
    - coeffs: array of N pointers to buffers (c1..cN), each len bytes
-   - x_vals: array de x's (no cero, distintos entre sÃ?Æ?Ã?â??Ã?â??Ã?Â­)
+   - x_vals: array de x's (no cero, distintos entre s�??�??�??â??�??â??�??�?­)
    - shares: array of x_count pointers to output buffers (each len bytes)
 */
 bool sss_split_polyN(const uint8_t *c0,
@@ -2413,7 +2564,7 @@ static void tmr1_init(void)
 
 
 
-/* ===== ExtracciÃ?Æ?Ã?â??Ã?â??Ã?Â³n de entropÃ?Æ?Ã?â??Ã?â??Ã?Â­a: LSB ADC + jitter timer ===== */
+/* ===== Extracci�??�??�??â??�??â??�??�?³n de entrop�??�??�??â??�??â??�??�?­a: LSB ADC + jitter timer ===== */
 void dice_xy_pointer_line_adjust(){
     if ((seed_pointer==cSEED_timer) ||  (main_pointer ==cMAIN_SSS)){
          if (dice_x_pointer > cEND_OF_LINE-54){
@@ -2438,11 +2589,14 @@ bool check_dice_count_end(){
         if (main_pointer != cMAIN_SSS){
             black_screen();
             if (main_pointer == cMAIN_create) {
-                print_checksum_screen();
-                estado = SHOW_CHECKSUM_DETAILS;
+                if (seed_pointer == cSEED_triple) {
+                    estado = PROCESS_TRIPLE;
+                } else {
+                    print_checksum_screen();
+                    estado = SHOW_CHECKSUM_DETAILS;
+                }
             } else {
-                extract_11bit_groups(append_checksum(data_array_256b, 16 + size_pointer*16), 16  + size_pointer*16 +1);
-                estado = SHOW_SEED;
+                redraw_show_seed_with_offset();
             }
         }
         return true;
@@ -2749,9 +2903,17 @@ int main ( void ){
             case CREATE_SEED:        /////  SCREEN     2   /////////////
                 switch (pulsed_bt) {
                     case OK_BT:
-                        black_screen();
-                        print_selsize_screen(size_pointer);
-                        estado = SEL_SIZE;
+                        if (seed_pointer == cSEED_triple) {
+                            black_screen();
+                            sel_input_screen(selinput_pointer);
+                            estado = SEL_INPUT;
+                            size_pointer = cSIZE_24;
+                            entropy_bits = cENTROPY_BITS24W;
+                        } else {
+                            black_screen();
+                            print_selsize_screen(size_pointer);
+                            estado = SEL_SIZE;
+                        }
                         pulsed_bt = NONE;
                         break;
                     case BACK_BT:
@@ -3094,10 +3256,21 @@ int main ( void ){
                                 // Validate checksum.
                                 if (checksum_SD==buffer[cSD_CHECKSUM_ADDR]){
 
-                                    drawtext(70, 20 + 10*SDblock_pointer, "LOAD OK", ST7735_GREEN, ST7735_BLACK, 1);
-                                    black_screen();
                                     size_pointer=buffer[cSD_SIZE_ADDR];
-                                    if (main_pointer==cMAIN_SSS){
+                                    if (main_pointer == cMAIN_create && seed_pointer == cSEED_triple) {
+                                        if (size_pointer != cSIZE_24) {
+                                            drawtext(70, 20 + 10*SDblock_pointer, "WRONG SIZE", ST7735_RED, ST7735_BLACK, 1);
+                                            pulsed_bt = NONE;
+                                            break;
+                                        }
+                                        drawtext(70, 20 + 10*SDblock_pointer, "LOAD OK", ST7735_GREEN, ST7735_BLACK, 1);
+                                        black_screen();
+                                        estado = PROCESS_TRIPLE;
+                                        pulsed_bt = NONE;
+                                        break;
+                                    } else if (main_pointer==cMAIN_SSS){
+                                        drawtext(70, 20 + 10*SDblock_pointer, "LOAD OK", ST7735_GREEN, ST7735_BLACK, 1);
+                                        black_screen();
                                         sss_split_kofm(data_array_256b /* c0 */,
                                             coeffs, SSS_K /* k threshold */,
                                             LEN,
@@ -3107,6 +3280,8 @@ int main ( void ){
                                         for (int i = 0; i < 16 + size_pointer*16; i++) data_array_256b[i]=shares[selected_share_id-1][i];
 
                                     }else if (main_pointer==cMAIN_OBFUS) {
+                                        drawtext(70, 20 + 10*SDblock_pointer, "LOAD OK", ST7735_GREEN, ST7735_BLACK, 1);
+                                        black_screen();
                                         if (obfuscation_pointer==cOBFUS_NOT){
                                             not_operator(data_array_256b,16 + size_pointer*16);
                                         } else if (obfuscation_pointer==cOBFUS_SHIFT){
@@ -3119,14 +3294,13 @@ int main ( void ){
                                             addsub_11bit_groups(16 + size_pointer*16, shift_nbits, add_pointer);
                                         }
                                     }
-                                    extract_11bit_groups(append_checksum(data_array_256b,16 + size_pointer*16), 16 + size_pointer*16 +1);
+                                    redraw_show_seed_with_offset();
 
                                 } else {//checksum error
                                     drawtext(70, 20 + 10*SDblock_pointer, "NO SEED", ST7735_RED, ST7735_BLACK, 1);
                                     pulsed_bt = NONE;
                                     break;
                                 }
-                                estado = SHOW_SEED;
                                 pulsed_bt = NONE;
                                 break;
 
@@ -3151,7 +3325,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                    case UP_BT:
-                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de pÃ?Æ?Ã?â??Ã?â??Ã?Â¡gina y apunta a slot 8
+                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de p�??�??�??â??�??â??�??�?¡gina y apunta a slot 8
                             black_screen();
                             SDblock_pointer=cSDBLOCK_n_opt-1;
                             SD_page--;
@@ -3226,13 +3400,11 @@ int main ( void ){
                         break;
 
                      case BACK_BT:
-                        black_screen();
-                        extract_11bit_groups(append_checksum(data_array_256b, 16 + size_pointer*16), 16  + size_pointer*16 +1);
-                        estado = SHOW_SEED;
+                        redraw_show_seed_with_offset();
                         pulsed_bt = NONE;
                         break;
                     case UP_BT:
-                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de pÃ?Æ?Ã?â??Ã?â??Ã?Â¡gina y apunta a slot 8
+                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de p�??�??�??â??�??â??�??�?¡gina y apunta a slot 8
                             black_screen();
                             SDblock_pointer=cSDBLOCK_n_opt-1;
                             SD_page--;
@@ -3312,8 +3484,7 @@ int main ( void ){
                                         for (int i = 0; i < 16 + 16*size_pointer; i++) {
                                             data_array_256b[i] = data_array_256b[i] ^ xor_merge_word1[i]^ xor_merge_word2[i]^ xor_merge_word3[i];
                                         }
-                                        extract_11bit_groups(append_checksum(data_array_256b, 16 + size_pointer*16), 16  + size_pointer*16 +1);
-                                        estado = SHOW_SEED;
+                                        redraw_show_seed_with_offset();
                                         pulsed_bt = NONE;
                                         break;
 
@@ -3347,7 +3518,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case UP_BT:
-                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de pÃ?Æ?Ã?â??Ã?â??Ã?Â¡gina y apunta a slot 8
+                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de p�??�??�??â??�??â??�??�?¡gina y apunta a slot 8
                             black_screen();
                             SDblock_pointer=cSDBLOCK_n_opt-1;
                             SD_page--;
@@ -3423,14 +3594,13 @@ int main ( void ){
                                 if (shares_loaded >= (SSS_K)) { // We already have K shares
                                     black_screen();
                                     if (!shamir_interpolate(SSS_result,0,share_indices, shares_input,SSS_K,LEN)){
-                                        drawtext(10,39, "(Shamir error)", ST7735_RED, ST7735_BLACK, 1);
+                                        drawtext(5,39, "(SSS Error, repeated id?)", ST7735_RED, ST7735_BLACK, 1);
                                         estado = END_MODE;
                                         pulsed_bt = NONE;
                                         break;
                                     }
                                     for (int i = 0; i < 32; i++) data_array_256b[i]=SSS_result[i]; // pasar resultado a data array
-                                    extract_11bit_groups(append_checksum(data_array_256b, 16 + size_pointer*16), 16  + size_pointer*16 +1);
-                                    estado = SHOW_SEED;
+                                    redraw_show_seed_with_offset();
                                     pulsed_bt = NONE;
                                     break;
 
@@ -3459,7 +3629,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case UP_BT:
-                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de pÃ?Æ?Ã?â??Ã?â??Ã?Â¡gina y apunta a slot 8
+                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de p�??�??�??â??�??â??�??�?¡gina y apunta a slot 8
                             black_screen();
                             SDblock_pointer=cSDBLOCK_n_opt-1;
                             SD_page--;
@@ -3500,13 +3670,24 @@ int main ( void ){
                     case OK_BT:
                         if (selinput_pointer==cKEYBOARD){
                             black_screen();
-                            //if (main_pointer==cMAIN_NOT || main_pointer==cMAIN_SHIFT || main_pointer==cMAIN_XOR){
+                            if (seed_pointer == cSEED_triple && main_pointer == cMAIN_create) {
+                                estado = WRITE_WORD;
+                                word_number=1;
+                                clear_string(word);
+                                found = refresh_word_input_preview(word, result, sizeof(result), &found_bool);
+                                print_word_number_top(word_number, xor_merge_words_available, main_pointer, word_number_text);
+                                print_previous_confirmed_word(word_number, word_number_text);
+                                print_keyboard(lt_idx, found_bool);
+                            } else {
                                 print_selsize_screen(size_pointer);
                                 estado = SEL_SIZE;
-                            //}
+                            }
                         } else { //cFROMSD
                             black_screen();
-                            if (main_pointer==cMAIN_XOR){
+                            if (seed_pointer == cSEED_triple && main_pointer == cMAIN_create) {
+                                sel_sd_block_screen_generic(SDblock_pointer);
+                                estado = SEL_SD_BLOCK;
+                            } else if (main_pointer==cMAIN_XOR){
                                 print_selsize_screen(size_pointer);
                                 estado = SEL_SIZE;
                             }else if ((main_pointer==cMAIN_SSS) & (sss_pointer==cMERGE)){
@@ -3973,6 +4154,11 @@ int main ( void ){
 
                                 if (word_number > (entropy_bits / 11)) { // All words are already entered
                                     black_screen();
+                                    if (main_pointer == cMAIN_create && seed_pointer == cSEED_triple) {
+                                        estado = PROCESS_TRIPLE;
+                                        pulsed_bt = NONE;
+                                        break;
+                                    }
                                     if (main_pointer !=cMAIN_create) { // check checksum
                                         if(!matches_last_word_checksum(data_array_256b,result,size_pointer)){
                                             if ((main_pointer==cMAIN_XOR) || ((main_pointer==cMAIN_SSS) & (sss_pointer==cMERGE))) {
@@ -4026,8 +4212,7 @@ int main ( void ){
                                                 break;
                                             }
                                             for (int i = 0; i < 32; i++) data_array_256b[i] = SSS_result[i]; // Copy the result into the data buffer
-                                            extract_11bit_groups(append_checksum(data_array_256b, 16 + size_pointer*16), 16  + size_pointer*16 +1);
-                                            estado = SHOW_SEED;
+                                            redraw_show_seed_with_offset();
                                             pulsed_bt = NONE;
                                             break;
                                         }
@@ -4078,9 +4263,7 @@ int main ( void ){
                                     }
 
                                     // Finally show the full result for non-create paths
-                                    extract_11bit_groups(append_checksum(data_array_256b,16 + size_pointer*16), 16 + size_pointer*16 +1);
-
-                                    estado = SHOW_SEED;
+                                    redraw_show_seed_with_offset();
                                     pulsed_bt = NONE;
                                     break;
                                 }
@@ -4150,9 +4333,7 @@ int main ( void ){
             case SHOW_CHECKSUM_DETAILS:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        black_screen();
-                        extract_11bit_groups(append_checksum(data_array_256b, 16 + size_pointer * 16), 16 + size_pointer * 16 + 1);
-                        estado = SHOW_SEED;
+                        redraw_show_seed_with_offset();
                         pulsed_bt = NONE;
                         break;
                     case BACK_BT:
@@ -4196,8 +4377,11 @@ int main ( void ){
                 switch (pulsed_bt) {
                     case OK_BT:
                         white_screen();
-                        draw_QRSEED(append_checksum(data_array_256b,16 + size_pointer*16), 16 + size_pointer*16 +1);
-
+                        {
+                            BYTE *qr_buf = append_checksum(data_array_256b, 16 + size_pointer*16);
+                            draw_QRSEED(qr_buf, 16 + size_pointer*16 +1);
+                            free(qr_buf);
+                        }
                         estado = SHOW_QRSEED;
                         pulsed_bt = NONE;
                         break;
@@ -4206,19 +4390,27 @@ int main ( void ){
                         break;
                     case UP_BT:
                         if ((main_pointer==cMAIN_SSS) & (sss_pointer==cSPLIT) & (selected_share_id>1)){ // Shamir split: show previous share
-                            black_screen();
                             selected_share_id--;
-                            extract_11bit_groups(append_checksum(shares[selected_share_id-1],(size_pointer == cSIZE_12) ? 16 : 32), (size_pointer == cSIZE_12) ? 17 : 33);
                             for (int i = 0; i < 32; i++) data_array_256b[i]=shares[selected_share_id-1][i];
+                            redraw_show_seed_with_offset();
+                        } else if (main_pointer == cMAIN_create && seed_pointer == cSEED_triple) {
+                            if (triple_view_state > 0) {
+                                triple_view_state--;
+                                refresh_triple_view();
+                            }
                         }
                         pulsed_bt = NONE;
                         break;
                     case DOWN_BT:
                         if ((main_pointer==cMAIN_SSS) & (sss_pointer==cSPLIT) &(selected_share_id<(SSS_N))){ // Shamir split: show next share
-                            black_screen();
                             selected_share_id++;
-                            extract_11bit_groups(append_checksum(shares[selected_share_id-1],(size_pointer == cSIZE_12) ? 16 : 32), (size_pointer == cSIZE_12) ? 17 : 33);
                             for (int i = 0; i < 32; i++) data_array_256b[i]=shares[selected_share_id-1][i];
+                            redraw_show_seed_with_offset();
+                        } else if (main_pointer == cMAIN_create && seed_pointer == cSEED_triple) {
+                            if (triple_view_state < 2) {
+                                triple_view_state++;
+                                refresh_triple_view();
+                            }
                         }
                         pulsed_bt = NONE;
                         break;
@@ -4249,10 +4441,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case BACK_BT:
-                        black_screen();
-                        //main_screen(main_pointer);
-                        extract_11bit_groups(append_checksum(data_array_256b, 16 + size_pointer*16), 16  + size_pointer*16 +1);
-                        estado = SHOW_SEED;
+                        redraw_show_seed_with_offset();
                         pulsed_bt = NONE;
                         break;
                     case UP_BT:
@@ -4262,9 +4451,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case LEFT_BT:
-                        black_screen();
-                        extract_11bit_groups(append_checksum(data_array_256b, 16 + size_pointer*16), 16  + size_pointer*16 +1);
-                        estado = SHOW_SEED;
+                        redraw_show_seed_with_offset();
                         pulsed_bt = NONE;
                         break;
                     case RIGTH_BT:
@@ -4287,6 +4474,112 @@ int main ( void ){
                     print_keyboard(lt_idx, found_bool);
                     estado = WRITE_WORD;
                     pulsed_bt = NONE;
+                }
+                break;
+            case PROCESS_TRIPLE: {
+                black_screen();
+                drawtext(20, 50, "COMPUTING TRIPLE", ST7735_WHITE, ST7735_BLACK, 1);
+                drawtext(20, 65, "MNEMONIC...", ST7735_WHITE, ST7735_BLACK, 1);
+                
+                // 1. Fixing Word 12 (first 128 bits checksum)
+                BYTE hash12_first[SHA256_BLOCK_SIZE];
+                SHA256_CTX ctx;
+                sha256_init(&ctx);
+                sha256_update(&ctx, data_array_256b, 16);
+                sha256_final(&ctx, hash12_first);
+
+                for (int b = 0; b < 4; b++) {
+                    int bit = (hash12_first[0] >> (7 - b)) & 1;
+                    set_bit(data_array_256b, 128 + b, bit);
+                }
+
+                // 2. Bruteforcing the second half entropy
+                while (1) {
+                    SYS_Tasks(); // Keep watchdog/system happy
+                    
+                    // Hash full 256 bits for Word 24
+                    BYTE hash24[SHA256_BLOCK_SIZE];
+                    sha256_init(&ctx);
+                    sha256_update(&ctx, data_array_256b, 32);
+                    sha256_final(&ctx, hash24);
+
+                    for (int b = 0; b < 8; b++) {
+                        int bit = (hash24[0] >> (7 - b)) & 1;
+                        set_bit(data_array_256b, 256 + b, bit);
+                    }
+
+                    // Hash the 128 bits of the second seed
+                    BYTE second_half_entropy[16] = {0};
+                    for (int b = 0; b < 128; b++) {
+                        int bit = read_entropy_bit(data_array_256b, 132 + b);
+                        if (bit) second_half_entropy[b / 8] |= (1 << (7 - (b % 8)));
+                    }
+                    
+                    BYTE hash12_second[SHA256_BLOCK_SIZE];
+                    sha256_init(&ctx);
+                    sha256_update(&ctx, second_half_entropy, 16);
+                    sha256_final(&ctx, hash12_second);
+
+                    // Check if both hashes match
+                    bool match = true;
+                    for (int b = 0; b < 4; b++) {
+                        int bit_array = read_entropy_bit(data_array_256b, 260 + b);
+                        int bit_hash = (hash12_second[0] >> (7 - b)) & 1;
+                        if (bit_array != bit_hash) {
+                            match = false;
+                            break;
+                        }
+                    }
+
+                    if (match) break;
+
+                    // Increment the 256-bit entropy starting backwards
+                    int pos = 255;
+                    while (pos >= 132) {
+                        if (read_entropy_bit(data_array_256b, pos) == 0) {
+                            set_bit(data_array_256b, pos, 1);
+                            break;
+                        } else {
+                            set_bit(data_array_256b, pos, 0);
+                            pos--;
+                        }
+                    }
+                }
+                
+                // Back up the full 24-word generated entropy
+                for(int i=0; i<36; i++) triple_backup_256b[i] = data_array_256b[i];
+
+                black_screen();
+                print_triple_checksum(12);
+                estado = SHOW_TRIPLE_CHKSUM_12;
+                pulsed_bt = NONE;
+                break;
+            }
+
+            case SHOW_TRIPLE_CHKSUM_12:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        black_screen();
+                        print_triple_checksum(24);
+                        estado = SHOW_TRIPLE_CHKSUM_24;
+                        pulsed_bt = NONE;
+                        break;
+                    default:
+                        pulsed_bt = NONE;
+                        break;
+                }
+                break;
+
+            case SHOW_TRIPLE_CHKSUM_24:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        triple_view_state = 0;
+                        refresh_triple_view();
+                        pulsed_bt = NONE;
+                        break;
+                    default:
+                        pulsed_bt = NONE;
+                        break;
                 }
                 break;
             case END_MODE:
