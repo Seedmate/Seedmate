@@ -1343,29 +1343,32 @@ static const char *search_unique_prefix(const char *prefix, char *result, size_t
     size_t prefix_len;
     int match_count = 0;
 
-    if (result == NULL || result_size == 0) {
-        return NULL;
-    }
-
+    if (result == NULL || result_size == 0) return NULL;
     result[0] = '\0';
-    if (prefix == NULL) {
-        return NULL;
-    }
+    if (prefix == NULL) return NULL;
 
     prefix_len = strlen(prefix);
-    if (prefix_len == 0) {
-        return NULL;
-    }
+    if (prefix_len == 0) return NULL;
 
     const char* ptr = bip39_words;
     
     for (int i = 0; i < 2048; ++i) {
         // Comparamos el prefijo con la palabra a la que apunta actualmente 'ptr'
         if (strncmp(ptr, prefix, prefix_len) == 0) {
+            
+            // --- NUEVO: COMPROBACI”N DE COINCIDENCIA EXACTA ---
+            // Si el siguiente car·cter en el diccionario es el nulo, la longitud es idÈntica
+            if (ptr[prefix_len] == '\0') {
+                unique_match = ptr;
+                match_count = 1;
+                break; // Es la palabra exacta, dejamos de buscar
+            }
+            // --------------------------------------------------
+
             unique_match = ptr;
             match_count++;
             if (match_count > 1) {
-                return NULL; // Hay m√°s de una coincidencia
+                return NULL; // Hay m·s de una coincidencia
             }
         }
         
@@ -3315,7 +3318,7 @@ int main ( void ){
 
                     case BACK_BT:
                         black_screen();
-                        if (main_pointer==cMAIN_OBFUS || main_pointer==cMAIN_XOR || main_pointer==cMAIN_LOAD || main_pointer==cMAIN_SSS){
+                        if (main_pointer==cMAIN_OBFUS || main_pointer==cMAIN_XOR || main_pointer==cMAIN_LOAD || main_pointer==cMAIN_SSS || (main_pointer == cMAIN_create && seed_pointer == cSEED_triple)){
                             sel_input_screen(selinput_pointer);
                             estado = SEL_INPUT;
                         }else {
@@ -3727,6 +3730,9 @@ int main ( void ){
                                 sel_obfus_screen(obfuscation_pointer);
                                 estado = SEL_OBFUS;
                             }
+                        }else if (main_pointer == cMAIN_create) { 
+                            create_seed_screen(seed_pointer);
+                            estado = CREATE_SEED;
                         }else {
                             main_screen(main_pointer);
                             estado = MAIN;
