@@ -205,7 +205,7 @@ const char * const card_entropy_map[52] = {
 };
 
 #define NCOEFF 5
-#define BYTES_PER_COEFF 32 // lo mismo que LEN
+#define BYTES_PER_COEFF 32 // Same as LEN
 #define TOTAL_BYTES (NCOEFF * BYTES_PER_COEFF)
 
 uint8_t c0[BYTES_PER_COEFF] = { 0 };  // len = 1
@@ -229,7 +229,7 @@ static const char *search_unique_prefix(const char *prefix, char *result, size_t
 static BYTE *append_checksum(BYTE *data_array, int N);
 static void write_11bit_value(BYTE *buffer, int index, int value);
 static bool matches_last_word_checksum(BYTE *data_array, char *word_user, int sel_size);
-static int clamped_sum(int a, int b);
+
 static void shift_left(BYTE *data, int N);
 static void shift_right(BYTE *data, int N);
 static void not_operator(BYTE *data, int N);
@@ -240,12 +240,17 @@ int read_11bit_value(const BYTE data_array[36], int index);
 void print_checksum_screen(void);
 void print_triple_checksum(int word_target);
 const char* get_word(int index);
+int get_next_valid_key(int current_idx, int step, const char *current_word, bool ok_is_valid);
+int get_nearest_valid_key(int current_idx, const char *current_word, bool ok_is_valid);
 
 // Advanced screen redraw logic to seal memory leak and handle navigation states natively
 void redraw_show_seed_with_offset(void);
 void refresh_triple_view(void);
 void extract_11bit_groups(BYTE *data, size_t size);
 
+// Prototypes for smart keyboard prediction
+static void get_valid_next_letters(const char *prefix, bool *valid_letters);
+void print_keyboard_with_validation(int index, bool word_found, const char *current_word);
 
 void draw_hex16(unsigned int x, unsigned int y, uint16_t numero, int N, unsigned int color, unsigned int bg, unsigned int size) {
     char hex_text[5]; // 4 hex digits plus null terminator
@@ -509,25 +514,25 @@ void grid_keyboard(){
 }
 
 void draw_mini_dice(int x, int y, int value) {
-    // Dibujar el fondo del dado relleno de blanco
+    // Draw the background of the dice filled with white
     rectan(x, y, x + 6, y + 6, WHITE);
 
-    // Dibujar los puntos en NEGRO
-    // 1, 3, 5: Punto central
+    // Draw the dots in BLACK
+    // 1, 3, 5: Center dot
     if (value == 1 || value == 3 || value == 5) {
         fillRect(x + 3, y + 3, 1, 1, BLACK);
     }
-    // 2, 3, 4, 5, 6: Puntos superior-izquierdo e inferior-derecho
+    // 2, 3, 4, 5, 6: Top-left and bottom-right dots
     if (value >= 2) {
         fillRect(x + 1, y + 1, 1, 1, BLACK);
         fillRect(x + 5, y + 5, 1, 1, BLACK);
     }
-    // 4, 5, 6: Puntos superior-derecho e inferior-izquierdo
+    // 4, 5, 6: Top-right and bottom-left dots
     if (value >= 4) {
         fillRect(x + 5, y + 1, 1, 1, BLACK);
         fillRect(x + 1, y + 5, 1, 1, BLACK);
     }
-    // 6: Puntos centrales-izquierdo y derecho
+    // 6: Center-left and right dots
     if (value == 6) {
         fillRect(x + 1, y + 3, 1, 1, BLACK);
         fillRect(x + 5, y + 3, 1, 1, BLACK);
@@ -614,8 +619,6 @@ void main_screen_fast(int sel) {
 
     // Pinta la nueva en naranja
     drawtext(1, 5 + sel * 10, opciones[sel], ST7735_ORANGE, ST7735_BLACK, 1);
-    //esto tampoco hay que repintarlo
-    //if(SD_ready)drawtext(10, 118, "SD OK", ST7735_GREEN, ST7735_BLACK, 1);
 
     last_sel = sel;
 }
@@ -1126,6 +1129,128 @@ void create_seed_screen(int sel){
     grid_menu2();
 }
 
+
+int get_nearest_valid_key(int current_idx, const char *current_word, bool ok_is_valid) {
+    bool valid_letters[27];
+    get_valid_next_letters(current_word, valid_letters);
+    valid_letters[26] = ok_is_valid; // Dynamic OK state
+
+    if (current_idx >= 0 && current_idx < 27 && valid_letters[current_idx]) {
+        return current_idx;
+    }
+
+    int best_idx = current_idx; // Fallback to current position
+    int best_dist = 9999;
+    
+    int cx = current_idx % 9;
+    int cy = current_idx / 9;
+    
+    for (int i = 0; i < 27; i++) {
+        if (!valid_letters[i]) {
+            continue;
+        }
+        
+        int tx = i % 9;
+        int ty = i / 9;
+        
+        int dx = tx - cx;
+        int dy = ty - cy;
+        
+        int dist = (dx * dx) + (dy * dy);
+        
+        if (dist < best_dist) {
+            best_dist = dist;
+            best_idx = i;
+        }
+    }
+    
+    return best_idx;
+}
+
+int get_next_valid_key(int current_idx, int step, const char *current_word, bool ok_is_valid) {
+    bool valid_letters[27];
+    get_valid_next_letters(current_word, valid_letters);
+    valid_letters[26] = ok_is_valid; // Dynamic OK state
+    
+    bool has_other_valid = false;
+    for (int i = 0; i < 27; i++) {
+        if (i != current_idx && valid_letters[i]) {
+            has_other_valid = true;
+            break;
+        }
+    }
+    
+    if (!has_other_valid) {
+        return current_idx;
+    }
+    
+    int best_idx = current_idx;
+    int best_score = 99999;
+    
+    int cx = current_idx % 9;
+    int cy = current_idx / 9;
+    
+    for (int i = 0; i < 27; i++) {
+        if (i == current_idx || !valid_letters[i]) {
+            continue;
+        }
+        
+        int tx = i % 9;
+        int ty = i / 9;
+        
+        int forward_dist = 0;
+        int lateral_dist = 0;
+        int axis_max = 0;
+        
+        if (step == 1) { 
+            forward_dist = tx - cx;
+            int diff = ty - cy;
+            lateral_dist = (diff < 0) ? -diff : diff;
+            axis_max = 9;
+        } else if (step == -1) { 
+            forward_dist = cx - tx;
+            int diff = ty - cy;
+            lateral_dist = (diff < 0) ? -diff : diff;
+            axis_max = 9;
+        } else if (step == 9) { 
+            forward_dist = ty - cy;
+            int diff = tx - cx;
+            lateral_dist = (diff < 0) ? -diff : diff;
+            axis_max = 3;
+        } else if (step == -9) { 
+            forward_dist = cy - ty;
+            int diff = tx - cx;
+            lateral_dist = (diff < 0) ? -diff : diff;
+            axis_max = 3;
+        }
+        
+        int score = 0;
+        
+        if (forward_dist > 0) {
+            if (lateral_dist == 0) {
+                score = forward_dist; 
+            } else {
+                score = 100 + forward_dist + (lateral_dist * 4); 
+            }
+        } else {
+            int wrapped_forward = forward_dist + axis_max;
+            if (lateral_dist == 0) {
+                score = 200 + wrapped_forward; 
+            } else {
+                score = 300 + wrapped_forward + (lateral_dist * 4); 
+            }
+        }
+        
+        if (score < best_score) {
+            best_score = score;
+            best_idx = i;
+        }
+    }
+    
+    return best_idx;
+}
+
+
 void sel_obfus_screen(int sel){
     char* options[] = {
         "CIRCULAR SHIFT",
@@ -1246,17 +1371,17 @@ int find_word_index(const char *word) {
     
     for (int i = 0; i < 2048; ++i) {
         if (strcmp(ptr, word) == 0) {
-            return i; // Encontramos la palabra, devolvemos su Ã­ndice
+            return i; // Word found, return its index
         }
         
-        // Si no es, avanzamos el puntero hasta la siguiente palabra
+        // If not, advance pointer to the next word
         while (*ptr != '\0') {
             ptr++;
         }
         ptr++;
     }
     
-    return -1; // Palabra no encontrada
+    return -1; // Word not found
 }
 
 
@@ -1338,6 +1463,39 @@ static char *add_char(char *text, int letter_index, size_t capacity) {
     return text;
 }
 
+static void get_valid_next_letters(const char *prefix, bool *valid_letters) {
+    for (int i = 0; i < 26; i++) {
+        valid_letters[i] = false;
+    }
+
+    size_t prefix_len = 0;
+    if (prefix != NULL) {
+        prefix_len = strlen(prefix);
+    }
+
+    if (prefix_len == 0) {
+        for (int i = 0; i < 26; i++) {
+            if (i != ('x' - 'a')) valid_letters[i] = true;
+        }
+        return;
+    }
+
+    const char* ptr = bip39_words;
+    for (int i = 0; i < 2048; ++i) {
+        int cmp = strncmp(ptr, prefix, prefix_len);
+        if (cmp == 0) {
+            char next_char = ptr[prefix_len];
+            if (next_char >= 'A' && next_char <= 'Z') {
+                valid_letters[next_char - 'A'] = true;
+            }
+        } else if (cmp > 0) {
+            break; // Dictionary is sorted, we can stop
+        }
+        while (*ptr != '\0') ptr++;
+        ptr++;
+    }
+}
+
 static const char *search_unique_prefix(const char *prefix, char *result, size_t result_size) {
     const char *unique_match = NULL;
     size_t prefix_len;
@@ -1353,41 +1511,40 @@ static const char *search_unique_prefix(const char *prefix, char *result, size_t
     const char* ptr = bip39_words;
     
     for (int i = 0; i < 2048; ++i) {
-        // Comparamos el prefijo con la palabra a la que apunta actualmente 'ptr'
+        // Compare prefix with the currently pointed word
         if (strncmp(ptr, prefix, prefix_len) == 0) {
             
-            // --- NUEVO: COMPROBACIÓN DE COINCIDENCIA EXACTA ---
-            // Si el siguiente carácter en el diccionario es el nulo, la longitud es idéntica
+            // --- NEW: EXACT MATCH CHECK ---
+            // If the next character in the dictionary is null, the length is identical
             if (ptr[prefix_len] == '\0') {
                 unique_match = ptr;
                 match_count = 1;
-                break; // Es la palabra exacta, dejamos de buscar
+                break; // Exact match, stop searching
             }
             // --------------------------------------------------
 
             unique_match = ptr;
             match_count++;
             if (match_count > 1) {
-                return NULL; // Hay más de una coincidencia
+                return NULL; // More than one match
             }
         }
         
-        // Avanzamos al siguiente salto de palabra
+        // Advance to the next word
         while (*ptr != '\0') {
             ptr++;
         }
         ptr++;
     }
 
-    if (match_count == 0) {
-        strncpy(result, "nada", result_size - 1);
+        // Safe return if no match is found (though the smart keyboard makes this unreachable)
+        if (unique_match == NULL) {
+            return NULL;
+        }
+
+        strncpy(result, unique_match, result_size - 1);
         result[result_size - 1] = '\0';
         return result;
-    }
-
-    strncpy(result, unique_match, result_size - 1);
-    result[result_size - 1] = '\0';
-    return result;
 }
 
 void draw_qr_code(const char *text) {
@@ -1501,6 +1658,7 @@ void redraw_show_seed_with_offset(void) {
     extract_11bit_groups(c_buf, 16  + size_pointer*16 +1);
     free(c_buf); // Fixed implicit memory leak
     
+
     estado = SHOW_SEED;
 }
 
@@ -1544,7 +1702,7 @@ void clear_write_word_previous_display() {
 }
 
 
-void print_keyboard(int index, bool word_found){
+void print_keyboard(int index, bool word_found, bool *valid_letters){
 
     char letra;
     char letter_text[2];
@@ -1557,7 +1715,15 @@ void print_keyboard(int index, bool word_found){
     for (letra = 'A'; letra <= 'Z'; letra++) {
         letter_text[0] = letra;
         letter_text[1] = '\0';
-        color = (current_index == index) ? ST7735_ORANGE : ST7735_WHITE;
+        
+        if (current_index == index) {
+            color = ST7735_ORANGE;
+        } else if (valid_letters[current_index]) {
+            color = ST7735_WHITE;
+        } else {
+            color = ST7735_GREY;
+        }
+        
         drawtext(print_index_x,print_index_y, letter_text, color, ST7735_BLACK, 1);
         if (print_index_x > (cEND_OF_LINE - 30)){
             print_index_x = 10;
@@ -1579,7 +1745,11 @@ void print_keyboard(int index, bool word_found){
     grid_keyboard();
 }
 
-
+void print_keyboard_with_validation(int index, bool word_found, const char *current_word) {
+    bool valid_letters[26];
+    get_valid_next_letters(current_word, valid_letters);
+    print_keyboard(index, word_found, valid_letters);
+}
 
 
 void update_dice_bit_count_display(int bit_count_dice_local){
@@ -1953,46 +2123,26 @@ static void shift_right(BYTE *data, int N)
     }
 }
 
-static int clamped_sum(int a, int b) {
-    if ((a == 0) && (b == -1)) return 8;
-    if ((a == 8) && (b == 1)) return 0;
-    if ((a == 9) && (b == -1)) return 17;
-    if ((a == 17) && (b == 1)) return 9;
-    if ((a == 18) && (b == -1)) return 26;
-    if ((a == 26) && (b == 1)) return 18;
 
-    {
-        int result = a + b;
-        while (result < 0) {
-            result += 27;
-        }
-        while (result > 26) {
-            result -= 27;
-        }
-        return result;
-    }
-}
 
 const char* refresh_word_input_preview(char *word, char *result, size_t result_size, bool *found_bool) {
     const char *found = search_unique_prefix(word, result, result_size);
 
     *found_bool = false;
     clear_write_word_current_display();
-    drawtext(130,60, OK_MSG, ST7735_GREY, ST7735_BLACK, 1);
+    drawtext(130, 60, OK_MSG, ST7735_GREY, ST7735_BLACK, 1);
 
     if (strlen(word) == 0) {
         return found;
     }
 
-    drawtext(60,10, word, ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(60, 10, word, ST7735_WHITE, ST7735_BLACK, 1);
 
-    if (found != NULL && strcmp(found, "nada") == 0)  {
+    // --- DEAD CODE REMOVED: No more ST7735_RED "nada" checking ---
+    if (found != NULL) {
         clear_write_word_current_display();
-        drawtext(60,10, word, ST7735_RED, ST7735_BLACK, 1);
-    } else if (found) {
-        clear_write_word_current_display();
-        drawtext(60,10, result, ST7735_GREEN, ST7735_BLACK, 1);
-        drawtext(130,60, OK_MSG, ST7735_GREEN, ST7735_BLACK, 1);
+        drawtext(60, 10, result, ST7735_GREEN, ST7735_BLACK, 1);
+        drawtext(130, 60, OK_MSG, ST7735_GREEN, ST7735_BLACK, 1);
         *found_bool = true;
     }
 
@@ -2452,7 +2602,7 @@ static void eval_poly_block(uint8_t *y_out,
    - f(x) = c0 + c1*x + ... + cN*x^N  (N <= 6)
    - c0: secret buffer (len bytes)
    - coeffs: array of N pointers to buffers (c1..cN), each len bytes
-   - x_vals: array de x's (no cero, distintos entre sÃ??Ã??Ã??Ã¢??Ã??Ã¢??Ã??Ã?Â­)
+   - x_vals: array de x's (non-zero, distinct from each other)
    - shares: array of x_count pointers to output buffers (each len bytes)
 */
 bool sss_split_polyN(const uint8_t *c0,
@@ -2467,7 +2617,7 @@ bool sss_split_polyN(const uint8_t *c0,
     size_t off = 0;
     const uint8_t *c_in_local[POLY_DEGREE_MAX + 1]; // c0..cN
 
-    // Construye el vector de coeficientes esperado por eval_poly_block
+    // Build the coefficient vector expected by eval_poly_block
     c_in_local[0] = c0;
     for (size_t k = 1; k <= degree; ++k) {
         c_in_local[k] = coeffs[k - 1];
@@ -2479,7 +2629,7 @@ bool sss_split_polyN(const uint8_t *c0,
 
         for (size_t j = 0; j < x_count; ++j) {
             uint8_t x = x_vals[j];
-            // (Opcional) validar x != 0 y unicidad de x_vals[] en otro lugar
+            // (Optional) validate x != 0 and uniqueness of x_vals[] elsewhere
             eval_poly_block(shares[j] + off,
                             (const uint8_t **)&c_in_local,
                             degree,
@@ -2512,15 +2662,15 @@ void sss_eval_share(const uint8_t *secret, const uint8_t *a,
 
 void gen_a_nonzero(uint8_t *a, size_t len) {
     for (size_t i = 0; i < len; i++) {
-        a[i] = 0x01;  // constante no cero (puedes usar 0x01, 0xAA, etc.)
+        a[i] = 0x01;  // Non-zero constant (can use 0x01, 0xAA, etc.)
     }
 }
 
 
 /* Split (k-of-m) con polinomio grado N=k-1 <= 6
    - secret = c0
-   - coeffs[0..k-2] = c1..cN (aleatorios no cero, len bytes cada uno)
-   - shares[0..m-1]: punteros a buffers de salida (cada uno len bytes)
+   - coeffs[0..k-2] = c1..cN (Non-zero random, len bytes each)
+   - shares[0..m-1]: Pointers to output buffers (each len bytes)
 */
 bool sss_split_kofm(const uint8_t *secret,
                     const uint8_t *coeffs[], size_t k,  // k >= 1
@@ -2548,26 +2698,26 @@ bool sss_split_kofm(const uint8_t *secret,
 
 
 
-/* ===== Timer used for jitter collection ===== */
+/* ===== Entropy extraction: LSB ADC + timer jitter ===== */
 
 static void tmr1_init(void)
 {
 
 
-    T1CONbits.ON    = 0;        // Apaga Timer1 mientras configuramos
-    T1CONbits.TCS   = 0;        // 0 = reloj interno (PBCLK)
-    T1CONbits.TGATE = 0;        // Gate deshabilitado
+    T1CONbits.ON    = 0;        // Turn off Timer1 while configuring
+    T1CONbits.TCS   = 0;        // 0 = Internal clock (PBCLK)
+    T1CONbits.TGATE = 0;        // Gate disabled
     T1CONbits.TCKPS = 0;       // Prescaler
-    T1CONbits.SIDL = 0; // No parar en Idle
+    T1CONbits.SIDL = 0; // Do not stop in Idle
     PMD4bits.T1MD = 0;
     PR1 = 0xFFFF;
-    T1CONbits.ON    = 1;        // Arranca Timer1
+    T1CONbits.ON    = 1;        // Start Timer1
 
 }
 
 
 
-/* ===== ExtracciÃ??Ã??Ã??Ã¢??Ã??Ã¢??Ã??Ã?Â³n de entropÃ??Ã??Ã??Ã¢??Ã??Ã¢??Ã??Ã?Â­a: LSB ADC + jitter timer ===== */
+/* ===== Entropy extraction: LSB ADC + timer jitter ===== */
 void dice_xy_pointer_line_adjust(){
     if ((seed_pointer==cSEED_timer) ||  (main_pointer ==cMAIN_SSS)){
          if (dice_x_pointer > cEND_OF_LINE-54){
@@ -3021,7 +3171,7 @@ int main ( void ){
                                 found = refresh_word_input_preview(word, result, sizeof(result), &found_bool);
                                 print_word_number_top(word_number, xor_merge_words_available, main_pointer,  word_number_text);
                                 print_previous_confirmed_word(word_number, word_number_text);
-                                print_keyboard(lt_idx, found_bool);
+                                print_keyboard_with_validation(lt_idx, found_bool, word);
                             }else{//SD
                                 black_screen();
                                 estado = SEL_SD_BLOCK_XOR;
@@ -3042,7 +3192,7 @@ int main ( void ){
                             found = refresh_word_input_preview(word, result, sizeof(result), &found_bool);
                             print_word_number_top(word_number, xor_merge_words_available, main_pointer,  word_number_text);
                             print_previous_confirmed_word(word_number, word_number_text);
-                            print_keyboard(lt_idx, found_bool);
+                            print_keyboard_with_validation(lt_idx, found_bool, word);
                         } else if (seed_pointer==cSEED_dice || seed_pointer==cSEED_coin){// roll dice or coins
                             black_screen();
                             print_diceroll_screen(size_pointer, seed_pointer);
@@ -3056,7 +3206,7 @@ int main ( void ){
                             found = refresh_word_input_preview(word, result, sizeof(result), &found_bool);
                             print_word_number_top(word_number, xor_merge_words_available, main_pointer,  word_number_text);
                             print_previous_confirmed_word(word_number, word_number_text);
-                            print_keyboard(lt_idx, found_bool);
+                            print_keyboard_with_validation(lt_idx, found_bool, word);
                         }   else if (seed_pointer==cSEED_timer){//word pick
                             black_screen();
                             estado = TMR_INPUT;
@@ -3253,7 +3403,7 @@ int main ( void ){
                                 checksum_SD=1; // Reset checksum and account for the checksum byte
                                 XOR_SD = buffer[cSD_XOR_ADDR];
                                 for (int i = 0; i < 32; i++){
-                                    data_array_256b[i]=buffer[i] ^ XOR_SD;//cargar datos de entropia desde SD
+                                    data_array_256b[i]=buffer[i] ^ XOR_SD;// Load entropy data from SD
                                     checksum_SD+=buffer[i]; // Recompute checksum
                                 }
                                 // Validate checksum.
@@ -3328,7 +3478,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                    case UP_BT:
-                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de pÃ??Ã??Ã??Ã¢??Ã??Ã¢??Ã??Ã?Â¡gina y apunta a slot 8
+                        if ((SDblock_pointer == 0) & (SD_page >0)){// Page down and point to slot 8
                             black_screen();
                             SDblock_pointer=cSDBLOCK_n_opt-1;
                             SD_page--;
@@ -3407,7 +3557,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case UP_BT:
-                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de pÃ??Ã??Ã??Ã¢??Ã??Ã¢??Ã??Ã?Â¡gina y apunta a slot 8
+                        if ((SDblock_pointer == 0) & (SD_page >0)){// Page down and point to slot 8
                             black_screen();
                             SDblock_pointer=cSDBLOCK_n_opt-1;
                             SD_page--;
@@ -3466,7 +3616,7 @@ int main ( void ){
                             }
                             // Validate checksum.
                             if (checksum_SD==buffer[cSD_CHECKSUM_ADDR]){
-                                //comprobar size
+                                // Check size
                                 if (buffer[cSD_SIZE_ADDR]==size_pointer){
                                     drawtext(70, 20 + 10*SDblock_pointer, "XOR INPUT OK", ST7735_GREEN, ST7735_BLACK, 1);
                                     if (xor_merge_words_available<=xor_pointer){
@@ -3482,7 +3632,7 @@ int main ( void ){
                                         xor_merge_words_available++;
                                         pulsed_bt = NONE;
                                         break;
-                                    } else { // ya tenemos todo
+                                    } else { // We have everything
                                         black_screen();
                                         for (int i = 0; i < 16 + 16*size_pointer; i++) {
                                             data_array_256b[i] = data_array_256b[i] ^ xor_merge_word1[i]^ xor_merge_word2[i]^ xor_merge_word3[i];
@@ -3521,7 +3671,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case UP_BT:
-                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de pÃ??Ã??Ã??Ã¢??Ã??Ã¢??Ã??Ã?Â¡gina y apunta a slot 8
+                        if ((SDblock_pointer == 0) & (SD_page >0)){// Page down and point to slot 8
                             black_screen();
                             SDblock_pointer=cSDBLOCK_n_opt-1;
                             SD_page--;
@@ -3602,7 +3752,7 @@ int main ( void ){
                                         pulsed_bt = NONE;
                                         break;
                                     }
-                                    for (int i = 0; i < 32; i++) data_array_256b[i]=SSS_result[i]; // pasar resultado a data array
+                                    for (int i = 0; i < 32; i++) data_array_256b[i]=SSS_result[i]; // Move result to data array
                                     redraw_show_seed_with_offset();
                                     pulsed_bt = NONE;
                                     break;
@@ -3632,7 +3782,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case UP_BT:
-                        if ((SDblock_pointer == 0) & (SD_page >0)){//baja de pÃ??Ã??Ã??Ã¢??Ã??Ã¢??Ã??Ã?Â¡gina y apunta a slot 8
+                        if ((SDblock_pointer == 0) & (SD_page >0)){// Page down and point to slot 8
                             black_screen();
                             SDblock_pointer=cSDBLOCK_n_opt-1;
                             SD_page--;
@@ -3654,7 +3804,7 @@ int main ( void ){
                         sel_sd_block_screen_merge(SDblock_pointer,selected_share_id);
                         pulsed_bt = NONE;
                         break;
-                    case LEFT_BT://aqui no podemos subir y bajar de pagina
+                    case LEFT_BT:// Cannot page up/down here
                         if(selected_share_id>1)selected_share_id--;
                         sel_sd_block_screen_merge(SDblock_pointer,selected_share_id);
                         pulsed_bt = NONE;
@@ -3680,7 +3830,7 @@ int main ( void ){
                                 found = refresh_word_input_preview(word, result, sizeof(result), &found_bool);
                                 print_word_number_top(word_number, xor_merge_words_available, main_pointer, word_number_text);
                                 print_previous_confirmed_word(word_number, word_number_text);
-                                print_keyboard(lt_idx, found_bool);
+                                print_keyboard_with_validation(lt_idx, found_bool, word);
                             } else {
                                 print_selsize_screen(size_pointer);
                                 estado = SEL_SIZE;
@@ -3895,7 +4045,7 @@ int main ( void ){
                         found = refresh_word_input_preview(word, result, sizeof(result), &found_bool);
                         print_word_number_top(word_number, xor_merge_words_available, main_pointer,  word_number_text);
                         print_previous_confirmed_word(word_number, word_number_text);
-                        print_keyboard(lt_idx, found_bool);
+                        print_keyboard_with_validation(lt_idx, found_bool, word);
                     case BACK_BT://no return here
 
                         pulsed_bt = NONE;
@@ -4148,11 +4298,19 @@ int main ( void ){
             case WRITE_WORD:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        if (lt_idx < 26){
-                            word = add_char(word, lt_idx,32);
-                            found = refresh_word_input_preview(word, result, sizeof(result), &found_bool);
-                        }else if(lt_idx==26){//OK del teclado
-                            if (found != NULL && strcmp(found, "nada") != 0){
+                       if (lt_idx < 26){
+                           bool valid_letters[26];
+                           get_valid_next_letters(word, valid_letters);
+                           if (valid_letters[lt_idx]) {
+                               word = add_char(word, lt_idx, 32);
+                               found = refresh_word_input_preview(word, result, sizeof(result), &found_bool);
+
+                               lt_idx = get_nearest_valid_key(lt_idx, word, found_bool);
+
+                               print_keyboard_with_validation(lt_idx, found_bool, word);
+                           }
+                       } else if(lt_idx==26){
+                            if (found != NULL){
                                 // Store the bits
                                 write_11bit_value(data_array_256b, word_number,  find_word_index(found));
                                 clear_string(word);
@@ -4250,7 +4408,7 @@ int main ( void ){
                                             found = refresh_word_input_preview(word, result, sizeof(result), &found_bool);
                                             print_word_number_top(word_number, xor_merge_words_available, main_pointer,  word_number_text);
                                             print_previous_confirmed_word(word_number, word_number_text);
-                                            print_keyboard(lt_idx, found_bool);
+                                            print_keyboard_with_validation(lt_idx, found_bool, word);
                                             estado = WRITE_WORD;
                                             pulsed_bt = NONE;
                                             break;
@@ -4281,7 +4439,7 @@ int main ( void ){
                                 found = refresh_word_input_preview(word, result, sizeof(result), &found_bool);
                                 print_word_number_top(word_number, xor_merge_words_available, main_pointer,  word_number_text);
                                 print_previous_confirmed_word(word_number, word_number_text);
-                                print_keyboard(lt_idx, found_bool);
+                                print_keyboard_with_validation(lt_idx, found_bool, word);
                             }
                         }
                         pulsed_bt = NONE;
@@ -4300,36 +4458,37 @@ int main ( void ){
                             print_word_number_top(word_number, xor_merge_words_available, main_pointer,  word_number_text);
                             print_previous_confirmed_word(word_number, word_number_text);
                             lt_idx=0;
-                            print_keyboard(lt_idx, found_bool);
+                            print_keyboard_with_validation(lt_idx, found_bool, word);
 
                         }else{ // Normal backspace
                             remove_last_char(word);
                             found = refresh_word_input_preview(word, result, sizeof(result), &found_bool);
+                            print_keyboard_with_validation(lt_idx, found_bool, word);
                         }
                         pulsed_bt = NONE;
                         break;
                     case UP_BT:
-                        lt_idx=clamped_sum(lt_idx,-9);
+                        lt_idx = get_next_valid_key(lt_idx, -9, word, found_bool);
                         print_word_number_top(word_number, xor_merge_words_available, main_pointer,  word_number_text);
-                        print_keyboard(lt_idx, found_bool);
+                        print_keyboard_with_validation(lt_idx, found_bool, word);
                         pulsed_bt = NONE;
                         break;
                     case DOWN_BT:
-                        lt_idx=clamped_sum(lt_idx,9);
+                        lt_idx = get_next_valid_key(lt_idx, 9, word, found_bool);
                         print_word_number_top(word_number, xor_merge_words_available, main_pointer,  word_number_text);
-                        print_keyboard(lt_idx, found_bool);
+                        print_keyboard_with_validation(lt_idx, found_bool, word);
                         pulsed_bt = NONE;
                         break;
                     case LEFT_BT:
-                        lt_idx=clamped_sum(lt_idx,-1);
+                        lt_idx = get_next_valid_key(lt_idx, -1, word, found_bool);
                         print_word_number_top(word_number, xor_merge_words_available, main_pointer,  word_number_text);
-                        print_keyboard(lt_idx, found_bool);
+                        print_keyboard_with_validation(lt_idx, found_bool, word);
                         pulsed_bt = NONE;
                         break;
                     case RIGTH_BT:
-                        lt_idx=clamped_sum(lt_idx,1);
+                        lt_idx = get_next_valid_key(lt_idx, 1, word, found_bool);
                         print_word_number_top(word_number, xor_merge_words_available, main_pointer,  word_number_text);
-                        print_keyboard(lt_idx, found_bool);
+                        print_keyboard_with_validation(lt_idx, found_bool, word);
                         pulsed_bt = NONE;
                         break;
                     default:
@@ -4477,7 +4636,7 @@ int main ( void ){
                     found = refresh_word_input_preview(word, result, sizeof(result), &found_bool);
                     print_word_number_top(word_number, xor_merge_words_available, main_pointer,  word_number_text);
                     print_previous_confirmed_word(word_number, word_number_text);
-                    print_keyboard(lt_idx, found_bool);
+                    print_keyboard_with_validation(lt_idx, found_bool, word);
                     estado = WRITE_WORD;
                     pulsed_bt = NONE;
                 }
