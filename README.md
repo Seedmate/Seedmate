@@ -1,8 +1,10 @@
 # SeedMate
 
-SeedMate is a PIC32MM-based offline tool for generating, loading, transforming, splitting, merging, displaying, and exporting BIP39-compatible seed data.
+SeedMate is a PIC32MM-based offline device for generating, loading, transforming, splitting, merging, displaying, and exporting BIP39-compatible seed data.
 
-Status: Tested and production-ready. However, unexpected bugs may still occur. Review security, licensing, and third-party dependencies before deployment.
+www.seedmate.net
+
+Status: Tested and production-ready. However, unexpected bugs may still occur.
 
 ## Features
 
