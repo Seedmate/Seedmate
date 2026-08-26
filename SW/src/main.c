@@ -1129,7 +1129,7 @@ void sel_dice_mode_screen(int sel){
 
 void sel_hash_mode_screen(int sel){
     char* options[] = {
-        "1-6 STRING (Most manufacturers)",
+        "1-6 STRING),
         "0-5 STRING (Keystone)"
     };
     for (int i = 0; i < cHASH_MODE_n_opt; i++) {
@@ -1139,12 +1139,13 @@ void sel_hash_mode_screen(int sel){
     grid_menu2();
 }
 
-void print_dice_string_input_screen(int sel, const char* str, int target){
+// 1. Actualiza SOLO el contador superior (Llamar al añadir/borrar)
+void print_dice_string_counter(int current_len, int target) {
     char counter_text[16];
     char current_text[4];
     char target_text[4];
     
-    u16_to_str_pad((unsigned int)strlen(str), current_text, 3);
+    u16_to_str_pad((unsigned int)current_len, current_text, 3);
     u16_to_str_pad((unsigned int)target, target_text, 3);
     
     int pos = 0;
@@ -1154,32 +1155,46 @@ void print_dice_string_input_screen(int sel, const char* str, int target){
     counter_text[pos] = '\0';
     
     drawtext(50, 5, counter_text, ST7735_WHITE, ST7735_BLACK, 1);
-    
-    int str_len = strlen(str);
-    int chars_per_line = 25;
-    
-    // Clear and redraw wrapped string lines
-    for(int i = 0; i < 4; i++){
-        char line[26] = {0};
-        for(int j = 0; j < 25; j++) line[j] = ' '; // Clear old text
-        line[25] = '\0';
-        
-        if(str_len > i * chars_per_line){
-            int copy_len = str_len - i * chars_per_line;
-            if(copy_len > chars_per_line) copy_len = chars_per_line;
-            memcpy(line, &str[i * chars_per_line], copy_len);
-        }
-        drawtext(5, 20 + i * 15, line, ST7735_CYAN, ST7735_BLACK, 1);
-    }
-    
+}
+
+// 2. Actualiza SOLO el teclado inferior (Llamar al mover Izq/Der)
+void print_dice_string_keyboard(int sel) {
     const char* keys[7] = {"1", "2", "3", "4", "5", "6", "DEL"};
     int kx[7] = {10, 30, 50, 70, 90, 110, 130};
     
-    for(int i = 0; i < 7; i++){
+    for(int i = 0; i < 7; i++) {
         uint16_t color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
         drawtext(kx[i], 90, (char*)keys[i], color, ST7735_BLACK, 1);
     }
+}
+
+// 3. ACTUALIZACIÓN DELTA: Solo pinta o borra 1 caracter exacto
+void update_dice_string_char(int index, char c, bool is_delete) {
+    int chars_per_line = 25;
+    int line = index / chars_per_line;
+    int col = index % chars_per_line;
     
+    // Cada letra tamaño 1 ocupa 6 píxeles de ancho (5 + 1 espacio)
+    int x = 5 + (col * 6); 
+    int y = 20 + (line * 15);
+    
+    char single_char[2] = { is_delete ? ' ' : c, '\0' };
+    
+    // Si borramos, pintamos un espacio en negro para limpiar el píxel
+    drawtext(x, y, single_char, ST7735_CYAN, ST7735_BLACK, 1);
+}
+
+// 4. INIT: Función maestra para pintar todo AL ENTRAR a la pantalla
+void init_dice_string_input_screen(int sel, const char* str, int target) {
+    print_dice_string_counter(strlen(str), target);
+    
+    // Pintamos los caracteres que ya existan (por si entras desde otra pantalla)
+    int len = strlen(str);
+    for(int i = 0; i < len; i++) {
+        update_dice_string_char(i, str[i], false);
+    }
+    
+    print_dice_string_keyboard(sel);
     grid_keyboard();
 }
 
@@ -3334,7 +3349,7 @@ int main ( void ){
                             dice_input_idx = 0;
                             estado = DICE_STRING_INPUT;
                             int target = (size_pointer == cSIZE_12) ? 50 : 100;
-                            print_dice_string_input_screen(dice_input_idx, dice_string_buf, target);
+                            init_dice_string_input_screen(dice_input_idx, dice_string_buf, target);
                         } else if (seed_pointer==cSEED_dice || seed_pointer==cSEED_coin){// roll dice or coins
                             black_screen();
                             print_diceroll_screen(size_pointer, seed_pointer);
@@ -4382,12 +4397,29 @@ int main ( void ){
                 break;
             case DICE_STRING_INPUT:
                 switch (pulsed_bt) {
-                    case OK_BT: {
+                  case OK_BT: {
                         int target = (size_pointer == cSIZE_12) ? 50 : 100;
+                        int len = strlen(dice_string_buf);
+
                         if (dice_input_idx == 6) { // DEL Button
-                            remove_last_char(dice_string_buf);
+                            if (len > 0) {
+                                // 1. Delta update: borramos de la pantalla
+                                update_dice_string_char(len - 1, ' ', true);
+                                // 2. Borramos del buffer
+                                remove_last_char(dice_string_buf);
+                                // 3. Actualizamos el contador
+                                print_dice_string_counter(len - 1, target);
+                            }
                         } else {
-                            add_char_dice(dice_string_buf, dice_input_idx + 1, 101);
+                            if (len < target) {
+                                char new_char = '1' + dice_input_idx;
+                                // 1. Añadimos al buffer
+                                add_char_dice(dice_string_buf, dice_input_idx + 1, 101);
+                                // 2. Delta update: pintamos el nuevo caracter en pantalla
+                                update_dice_string_char(len, new_char, false);
+                                // 3. Actualizamos el contador
+                                print_dice_string_counter(len + 1, target);
+                            }
                         }
                         
                         if (strlen(dice_string_buf) >= target) {
@@ -4416,17 +4448,21 @@ int main ( void ){
                             black_screen();
                             print_checksum_screen();
                             estado = SHOW_CHECKSUM_DETAILS;
-                        } else {
-                            print_dice_string_input_screen(dice_input_idx, dice_string_buf, target);
                         }
                         pulsed_bt = NONE;
                         break;
                     }
-                    case BACK_BT: {
+     case BACK_BT: {
                         int target = (size_pointer == cSIZE_12) ? 50 : 100;
-                        if (strlen(dice_string_buf) > 0) {
+                        int len = strlen(dice_string_buf);
+                        
+                        if (len > 0) {
+                            // 1. Delta update: borramos el último caracter de la pantalla
+                            update_dice_string_char(len - 1, ' ', true);
+                            // 2. Borramos del buffer
                             remove_last_char(dice_string_buf);
-                            print_dice_string_input_screen(dice_input_idx, dice_string_buf, target);
+                            // 3. Actualizamos el contador
+                            print_dice_string_counter(len - 1, target);
                         } else {
                             black_screen();
                             print_selsize_screen(size_pointer);
@@ -4441,7 +4477,7 @@ int main ( void ){
                         } else {
                             dice_input_idx = 6;
                         }
-                        print_dice_string_input_screen(dice_input_idx, dice_string_buf, (size_pointer == cSIZE_12) ? 50 : 100);
+                        print_dice_string_keyboard(dice_input_idx);
                         pulsed_bt = NONE;
                         break;
                     case RIGTH_BT:
@@ -4450,7 +4486,7 @@ int main ( void ){
                         } else {
                             dice_input_idx = 0;
                         }
-                        print_dice_string_input_screen(dice_input_idx, dice_string_buf, (size_pointer == cSIZE_12) ? 50 : 100);
+                        print_dice_string_keyboard(dice_input_idx);
                         pulsed_bt = NONE;
                         break;
                     case UP_BT:
