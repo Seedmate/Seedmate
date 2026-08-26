@@ -108,6 +108,8 @@
 #define cQR_n_opt 2
 #define cSDBLOCK_n_opt 8
 #define cSELINPUT_n_opt 2
+#define cDICE_MODE_n_opt 2
+#define cHASH_MODE_n_opt 2
 #define cEND_OF_LINE 150
 #define cENTROPY_BITS12W 127//127
 #define cENTROPY_BITS24W 255//255
@@ -180,6 +182,11 @@ BYTE triple_backup_256b[36] = {0};
 int dice_x_pointer = 0;
 int dice_y_pointer = 25;
 
+int dice_mode_pointer = 0;
+int hash_mode_pointer = 0;
+char dice_string_buf[101] = {0};
+int dice_input_idx = 0; // 0-5 for '1'-'6', 6 for DEL
+
 BYTE data_array_256b[36] = {0}; // Increased buffer size to handle excess bits tracking
 int size_pointer = 0;
 int bit_count_dice = 0;
@@ -225,6 +232,7 @@ static size_t u16_to_str_pad(unsigned int n, char *buf, unsigned int width);
 static void clear_string(char *text);
 static void remove_last_char(char *text);
 static char *add_char(char *text, int letter_index, size_t capacity);
+static char *add_char_dice(char *text, int num, size_t capacity);
 static const char *search_unique_prefix(const char *prefix, char *result, size_t result_size);
 static BYTE *append_checksum(BYTE *data_array, int N);
 static void write_11bit_value(BYTE *buffer, int index, int value);
@@ -266,9 +274,6 @@ void draw_hex16(unsigned int x, unsigned int y, uint16_t numero, int N, unsigned
     unsigned coef = i / BYTES_PER_COEFF;  // 0..4
     unsigned off  = i % BYTES_PER_COEFF;  // 0..31
     coefficient_buffers[coef][off] = val;
-    //draw_hex16(50, 50, i, 1, ST7735_WHITE, ST7735_BLACK, 1);
-    //draw_hex16(50, 60, coef, 1, ST7735_WHITE, ST7735_BLACK, 1);
-    //draw_hex16(50, 70, off, 1, ST7735_WHITE, ST7735_BLACK, 1);
 }
 
 
@@ -322,7 +327,10 @@ typedef enum
     CARD_INPUT,
     PROCESS_TRIPLE,
     SHOW_TRIPLE_CHKSUM_12,
-    SHOW_TRIPLE_CHKSUM_24
+    SHOW_TRIPLE_CHKSUM_24,
+    SEL_DICE_MODE,
+    SEL_HASH_MODE,
+    DICE_STRING_INPUT
 } state_t;
 
 state_t estado = INIT;
@@ -340,29 +348,13 @@ typedef enum
 } PULSED_BT_t;
 
 
-//unsigned char SPI(unsigned char val);
-
-//void main(void);
-
-
-// *****************************************************************************
-// *****************************************************************************
-// Section: Main Entry Point
-// *****************************************************************************
-// *****************************************************************************
-
-
-
-
 void spi_send(uint8_t data) {
-
     for (int i = 0; i < 8; i++) {
         if (data & 0x80) SD_MOSI = 1; else SD_MOSI = 0; // MOSI
         SD_SCK = 1; // SCK HIGH
         data <<= 1;
         SD_SCK = 0; // SCK LOW
     }
-
 }
 
 
@@ -474,9 +466,7 @@ void grid_menu2_merge(){
 
 void grid_nbits(){
     print_cursor_grid();
-    //print_up_arrow(103,114);
     print_add_symbol(103,114);
-    //print_down_arrow(103,123);
     print_minus_symbol(103,123);
     print_ok();
     print_back();
@@ -484,18 +474,14 @@ void grid_nbits(){
 
 void grid_nbits_noback(){
     print_cursor_grid();
-    //print_up_arrow(103,114);
     print_add_symbol(103,114);
-    //print_down_arrow(103,123);
     print_minus_symbol(103,123);
     print_ok();
 }
 
 void grid_nbits_LR(){
     print_cursor_grid();
-    //print_up_arrow(103,114);
     print_add_symbol(103,114);
-    //print_down_arrow(103,123);
     print_minus_symbol(103,123);
     print_ok();
     print_back();
@@ -1129,6 +1115,74 @@ void create_seed_screen(int sel){
     grid_menu2();
 }
 
+void sel_dice_mode_screen(int sel){
+    char* options[] = {
+        "RAW ENTROPY BITS",
+        "STRING HASH"
+    };
+    for (int i = 0; i < cDICE_MODE_n_opt; i++) {
+        uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
+        drawtext(1, 10 + i * 10, options[i], color, ST7735_BLACK, 1);
+    }
+    grid_menu2();
+}
+
+void sel_hash_mode_screen(int sel){
+    char* options[] = {
+        "1-6 STRING (Most manufacturers)",
+        "0-5 STRING (Keystone)"
+    };
+    for (int i = 0; i < cHASH_MODE_n_opt; i++) {
+        uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
+        drawtext(1, 10 + i * 10, options[i], color, ST7735_BLACK, 1);
+    }
+    grid_menu2();
+}
+
+void print_dice_string_input_screen(int sel, const char* str, int target){
+    char counter_text[16];
+    char current_text[4];
+    char target_text[4];
+    
+    u16_to_str_pad((unsigned int)strlen(str), current_text, 3);
+    u16_to_str_pad((unsigned int)target, target_text, 3);
+    
+    int pos = 0;
+    memcpy(&counter_text[pos], current_text, 3); pos+=3;
+    counter_text[pos++] = '/';
+    memcpy(&counter_text[pos], target_text, 3); pos+=3;
+    counter_text[pos] = '\0';
+    
+    drawtext(50, 5, counter_text, ST7735_WHITE, ST7735_BLACK, 1);
+    
+    int str_len = strlen(str);
+    int chars_per_line = 25;
+    
+    // Clear and redraw wrapped string lines
+    for(int i = 0; i < 4; i++){
+        char line[26] = {0};
+        for(int j = 0; j < 25; j++) line[j] = ' '; // Clear old text
+        line[25] = '\0';
+        
+        if(str_len > i * chars_per_line){
+            int copy_len = str_len - i * chars_per_line;
+            if(copy_len > chars_per_line) copy_len = chars_per_line;
+            memcpy(line, &str[i * chars_per_line], copy_len);
+        }
+        drawtext(5, 20 + i * 15, line, ST7735_CYAN, ST7735_BLACK, 1);
+    }
+    
+    const char* keys[7] = {"1", "2", "3", "4", "5", "6", "DEL"};
+    int kx[7] = {10, 30, 50, 70, 90, 110, 130};
+    
+    for(int i = 0; i < 7; i++){
+        uint16_t color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
+        drawtext(kx[i], 90, (char*)keys[i], color, ST7735_BLACK, 1);
+    }
+    
+    grid_keyboard();
+}
+
 
 int get_nearest_valid_key(int current_idx, const char *current_word, bool ok_is_valid) {
     bool valid_letters[27];
@@ -1459,6 +1513,20 @@ static char *add_char(char *text, int letter_index, size_t capacity) {
     }
 
     text[len] = (char)('A' + letter_index);
+    text[len + 1] = '\0';
+    return text;
+}
+
+static char *add_char_dice(char *text, int num, size_t capacity) {
+    size_t len;
+    if (text == NULL || capacity == 0 || num < 1 || num > 6) {
+        return text;
+    }
+    len = strlen(text);
+    if (len + 1 >= capacity) {
+        return text;
+    }
+    text[len] = (char)('0' + num);
     text[len + 1] = '\0';
     return text;
 }
@@ -3062,6 +3130,10 @@ int main ( void ){
                             estado = SEL_INPUT;
                             size_pointer = cSIZE_24;
                             entropy_bits = cENTROPY_BITS24W;
+                        } else if (seed_pointer == cSEED_dice) {
+                            black_screen();
+                            sel_dice_mode_screen(dice_mode_pointer);
+                            estado = SEL_DICE_MODE;
                         } else {
                             black_screen();
                             print_selsize_screen(size_pointer);
@@ -3096,6 +3168,69 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     default:
+                        break;
+                }
+                break;
+            case SEL_DICE_MODE:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        black_screen();
+                        if (dice_mode_pointer == 0) { // Raw entropy bits
+                            print_selsize_screen(size_pointer);
+                            estado = SEL_SIZE;
+                        } else { // String hash
+                            sel_hash_mode_screen(hash_mode_pointer);
+                            estado = SEL_HASH_MODE;
+                        }
+                        pulsed_bt = NONE;
+                        break;
+                    case BACK_BT:
+                        black_screen();
+                        create_seed_screen(seed_pointer);
+                        estado = CREATE_SEED;
+                        pulsed_bt = NONE;
+                        break;
+                    case UP_BT:
+                        if (dice_mode_pointer > 0) dice_mode_pointer--;
+                        sel_dice_mode_screen(dice_mode_pointer);
+                        pulsed_bt = NONE;
+                        break;
+                    case DOWN_BT:
+                        if (dice_mode_pointer < (cDICE_MODE_n_opt - 1)) dice_mode_pointer++;
+                        sel_dice_mode_screen(dice_mode_pointer);
+                        pulsed_bt = NONE;
+                        break;
+                    default:
+                        pulsed_bt = NONE;
+                        break;
+                }
+                break;
+            case SEL_HASH_MODE:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        black_screen();
+                        print_selsize_screen(size_pointer);
+                        estado = SEL_SIZE;
+                        pulsed_bt = NONE;
+                        break;
+                    case BACK_BT:
+                        black_screen();
+                        sel_dice_mode_screen(dice_mode_pointer);
+                        estado = SEL_DICE_MODE;
+                        pulsed_bt = NONE;
+                        break;
+                    case UP_BT:
+                        if (hash_mode_pointer > 0) hash_mode_pointer--;
+                        sel_hash_mode_screen(hash_mode_pointer);
+                        pulsed_bt = NONE;
+                        break;
+                    case DOWN_BT:
+                        if (hash_mode_pointer < (cHASH_MODE_n_opt - 1)) hash_mode_pointer++;
+                        sel_hash_mode_screen(hash_mode_pointer);
+                        pulsed_bt = NONE;
+                        break;
+                    default:
+                        pulsed_bt = NONE;
                         break;
                 }
                 break;
@@ -3193,6 +3328,13 @@ int main ( void ){
                             print_word_number_top(word_number, xor_merge_words_available, main_pointer,  word_number_text);
                             print_previous_confirmed_word(word_number, word_number_text);
                             print_keyboard_with_validation(lt_idx, found_bool, word);
+                        } else if (seed_pointer==cSEED_dice && dice_mode_pointer == 1){ // String hash
+                            black_screen();
+                            dice_string_buf[0] = '\0';
+                            dice_input_idx = 0;
+                            estado = DICE_STRING_INPUT;
+                            int target = (size_pointer == cSIZE_12) ? 50 : 100;
+                            print_dice_string_input_screen(dice_input_idx, dice_string_buf, target);
                         } else if (seed_pointer==cSEED_dice || seed_pointer==cSEED_coin){// roll dice or coins
                             black_screen();
                             print_diceroll_screen(size_pointer, seed_pointer);
@@ -3230,9 +3372,19 @@ int main ( void ){
                         } else if (main_pointer==cMAIN_XOR || main_pointer==cMAIN_LOAD || main_pointer==cMAIN_SSS){
                             sel_input_screen(selinput_pointer);
                             estado = SEL_INPUT;
-                        } else {// create
-                            create_seed_screen(seed_pointer);
-                            estado = CREATE_SEED;
+                        } else {
+                            if (seed_pointer == cSEED_dice) {
+                                if (dice_mode_pointer == 1) { // String Hash back
+                                    sel_hash_mode_screen(hash_mode_pointer);
+                                    estado = SEL_HASH_MODE;
+                                } else { // Raw back
+                                    sel_dice_mode_screen(dice_mode_pointer);
+                                    estado = SEL_DICE_MODE;
+                                }
+                            } else {
+                                create_seed_screen(seed_pointer);
+                                estado = CREATE_SEED;
+                            }
                         }
                         pulsed_bt = NONE;
                         break;
@@ -4223,6 +4375,87 @@ int main ( void ){
                             draw_shared_entropy_building();
                             update_dice_bit_count_display(bit_count_dice);
                         }
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case DICE_STRING_INPUT:
+                switch (pulsed_bt) {
+                    case OK_BT: {
+                        int target = (size_pointer == cSIZE_12) ? 50 : 100;
+                        if (dice_input_idx == 6) { // DEL Button
+                            remove_last_char(dice_string_buf);
+                        } else {
+                            add_char_dice(dice_string_buf, dice_input_idx + 1, 101);
+                        }
+                        
+                        if (strlen(dice_string_buf) >= target) {
+                            // If Keystone standard (0-5 format) is selected, substitute '6' for '0'
+                            if (hash_mode_pointer == 1) { 
+                                for (int i = 0; i < target; i++) {
+                                    if (dice_string_buf[i] == '6') {
+                                        dice_string_buf[i] = '0';
+                                    }
+                                }
+                            }
+                            
+                            // Hash the full string input
+                            BYTE hash[SHA256_BLOCK_SIZE];
+                            SHA256_CTX ctx;
+                            sha256_init(&ctx);
+                            sha256_update(&ctx, (BYTE*)dice_string_buf, target);
+                            sha256_final(&ctx, hash);
+                            
+                            // Feed hash output to the main entropy storage
+                            for (int i = 0; i < 32; i++) {
+                                data_array_256b[i] = hash[i];
+                            }
+                            bit_count_dice = (target == 50) ? 128 : 256;
+                            
+                            black_screen();
+                            print_checksum_screen();
+                            estado = SHOW_CHECKSUM_DETAILS;
+                        } else {
+                            print_dice_string_input_screen(dice_input_idx, dice_string_buf, target);
+                        }
+                        pulsed_bt = NONE;
+                        break;
+                    }
+                    case BACK_BT: {
+                        int target = (size_pointer == cSIZE_12) ? 50 : 100;
+                        if (strlen(dice_string_buf) > 0) {
+                            remove_last_char(dice_string_buf);
+                            print_dice_string_input_screen(dice_input_idx, dice_string_buf, target);
+                        } else {
+                            black_screen();
+                            print_selsize_screen(size_pointer);
+                            estado = SEL_SIZE;
+                        }
+                        pulsed_bt = NONE;
+                        break;
+                    }
+                    case LEFT_BT:
+                        if (dice_input_idx > 0) {
+                            dice_input_idx--;
+                        } else {
+                            dice_input_idx = 6;
+                        }
+                        print_dice_string_input_screen(dice_input_idx, dice_string_buf, (size_pointer == cSIZE_12) ? 50 : 100);
+                        pulsed_bt = NONE;
+                        break;
+                    case RIGTH_BT:
+                        if (dice_input_idx < 6) {
+                            dice_input_idx++;
+                        } else {
+                            dice_input_idx = 0;
+                        }
+                        print_dice_string_input_screen(dice_input_idx, dice_string_buf, (size_pointer == cSIZE_12) ? 50 : 100);
+                        pulsed_bt = NONE;
+                        break;
+                    case UP_BT:
+                    case DOWN_BT:
+                        pulsed_bt = NONE;
                         break;
                     default:
                         break;
