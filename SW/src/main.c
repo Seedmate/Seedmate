@@ -185,7 +185,7 @@ int dice_y_pointer = 25;
 int dice_mode_pointer = 0;
 int hash_mode_pointer = 0;
 char dice_string_buf[101] = {0};
-int dice_input_idx = 0; // 0-5 for '1'-'6', 6 for DEL
+int dice_input_idx = 0; // 0-5 for '1'-'6'
 
 BYTE data_array_256b[36] = {0}; // Increased buffer size to handle excess bits tracking
 int size_pointer = 0;
@@ -493,6 +493,14 @@ void grid_keyboard(){
     print_cursor_grid();
     print_up_arrow(103,114);
     print_down_arrow(103,123);
+    print_left_arrow(73,123);
+    print_rigth_arrow(133,123);
+    print_ok();
+    drawtext(67,107, "DEL", ST7735_WHITE, ST7735_WHITE, 1);
+}
+
+void grid_keyboard_dice_hash(){
+    print_cursor_grid();
     print_left_arrow(73,123);
     print_rigth_arrow(133,123);
     print_ok();
@@ -1129,8 +1137,8 @@ void sel_dice_mode_screen(int sel){
 
 void sel_hash_mode_screen(int sel){
     char* options[] = {
-        "1-6 STRING),
-        "0-5 STRING (Keystone)"
+        "1-6 mode",
+        "0-5 mode (Keystone)"
     };
     for (int i = 0; i < cHASH_MODE_n_opt; i++) {
         uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
@@ -1139,9 +1147,9 @@ void sel_hash_mode_screen(int sel){
     grid_menu2();
 }
 
-// 1. Actualiza SOLO el contador superior (Llamar al añadir/borrar)
+// update only roll count
 void print_dice_string_counter(int current_len, int target) {
-    char counter_text[16];
+    char counter_text[24]; // Increased buffer size to fit the prefix
     char current_text[4];
     char target_text[4];
     
@@ -1149,53 +1157,63 @@ void print_dice_string_counter(int current_len, int target) {
     u16_to_str_pad((unsigned int)target, target_text, 3);
     
     int pos = 0;
-    memcpy(&counter_text[pos], current_text, 3); pos+=3;
+    
+    // Insert prefix
+    memcpy(&counter_text[pos], "Dice rolls: ", 12); 
+    pos += 12;
+    
+    // Insert the numbers
+    memcpy(&counter_text[pos], current_text, 3); 
+    pos += 3;
     counter_text[pos++] = '/';
-    memcpy(&counter_text[pos], target_text, 3); pos+=3;
+    memcpy(&counter_text[pos], target_text, 3); 
+    pos += 3;
     counter_text[pos] = '\0';
     
-    drawtext(50, 5, counter_text, ST7735_WHITE, ST7735_BLACK, 1);
+    // Adjusted X coordinate from 50 to 20 to keep it centered 
+    // and prevent overflowing the 160px width
+    drawtext(20, 5, counter_text, ST7735_WHITE, ST7735_BLACK, 1);
 }
 
-// 2. Actualiza SOLO el teclado inferior (Llamar al mover Izq/Der)
+// Update only number sel
 void print_dice_string_keyboard(int sel) {
-    const char* keys[7] = {"1", "2", "3", "4", "5", "6", "DEL"};
-    int kx[7] = {10, 30, 50, 70, 90, 110, 130};
+    const char* keys[7] = {"1", "2", "3", "4", "5", "6"};
+    int kx[6] = {25, 45, 65, 85, 105, 125};
     
-    for(int i = 0; i < 7; i++) {
+    for(int i = 0; i < 6; i++) {
         uint16_t color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
         drawtext(kx[i], 90, (char*)keys[i], color, ST7735_BLACK, 1);
     }
 }
 
-// 3. ACTUALIZACIÓN DELTA: Solo pinta o borra 1 caracter exacto
+//only updated the modified char to speed up
 void update_dice_string_char(int index, char c, bool is_delete) {
     int chars_per_line = 25;
     int line = index / chars_per_line;
     int col = index % chars_per_line;
     
-    // Cada letra tamaño 1 ocupa 6 píxeles de ancho (5 + 1 espacio)
+    // 1 letter = 5 pixels
     int x = 5 + (col * 6); 
     int y = 20 + (line * 15);
     
     char single_char[2] = { is_delete ? ' ' : c, '\0' };
     
-    // Si borramos, pintamos un espacio en negro para limpiar el píxel
+    // When deleting, write black on top
     drawtext(x, y, single_char, ST7735_CYAN, ST7735_BLACK, 1);
 }
 
-// 4. INIT: Función maestra para pintar todo AL ENTRAR a la pantalla
+// Draw everything the first time
 void init_dice_string_input_screen(int sel, const char* str, int target) {
     print_dice_string_counter(strlen(str), target);
     
-    // Pintamos los caracteres que ya existan (por si entras desde otra pantalla)
+    // Draw any existing characters (in case of returning from another screen)
     int len = strlen(str);
     for(int i = 0; i < len; i++) {
         update_dice_string_char(i, str[i], false);
     }
     
     print_dice_string_keyboard(sel);
-    grid_keyboard();
+    grid_keyboard_dice_hash();
 }
 
 
@@ -4401,25 +4419,14 @@ int main ( void ){
                         int target = (size_pointer == cSIZE_12) ? 50 : 100;
                         int len = strlen(dice_string_buf);
 
-                        if (dice_input_idx == 6) { // DEL Button
-                            if (len > 0) {
-                                // 1. Delta update: borramos de la pantalla
-                                update_dice_string_char(len - 1, ' ', true);
-                                // 2. Borramos del buffer
-                                remove_last_char(dice_string_buf);
-                                // 3. Actualizamos el contador
-                                print_dice_string_counter(len - 1, target);
-                            }
-                        } else {
-                            if (len < target) {
-                                char new_char = '1' + dice_input_idx;
-                                // 1. Añadimos al buffer
-                                add_char_dice(dice_string_buf, dice_input_idx + 1, 101);
-                                // 2. Delta update: pintamos el nuevo caracter en pantalla
-                                update_dice_string_char(len, new_char, false);
-                                // 3. Actualizamos el contador
-                                print_dice_string_counter(len + 1, target);
-                            }
+                        if (len < target) {
+                            char new_char = '1' + dice_input_idx;
+                            // 1. Añadimos al buffer
+                            add_char_dice(dice_string_buf, dice_input_idx + 1, 101);
+                            // 2. Delta update: pintamos el nuevo caracter en pantalla
+                            update_dice_string_char(len, new_char, false);
+                            // 3. Actualizamos el contador
+                            print_dice_string_counter(len + 1, target);
                         }
                         
                         if (strlen(dice_string_buf) >= target) {
@@ -4475,13 +4482,13 @@ int main ( void ){
                         if (dice_input_idx > 0) {
                             dice_input_idx--;
                         } else {
-                            dice_input_idx = 6;
+                            dice_input_idx = 5;
                         }
                         print_dice_string_keyboard(dice_input_idx);
                         pulsed_bt = NONE;
                         break;
                     case RIGTH_BT:
-                        if (dice_input_idx < 6) {
+                        if (dice_input_idx < 5) {
                             dice_input_idx++;
                         } else {
                             dice_input_idx = 0;
