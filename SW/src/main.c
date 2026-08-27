@@ -184,7 +184,9 @@ int dice_y_pointer = 25;
 
 int dice_mode_pointer = 0;
 int hash_mode_pointer = 0;
-char dice_string_buf[201] = {0};
+
+#define char_hash_limit 301
+char dice_string_buf[char_hash_limit] = {0};
 int dice_input_idx = 0; // 0-5 for '1'-'6', 6 for DONE
 
 BYTE data_array_256b[36] = {0}; // Increased buffer size to handle excess bits tracking
@@ -1176,14 +1178,26 @@ void print_dice_string_counter(int current_len, int target) {
 }
 
 // Update only number sel
-void print_dice_string_keyboard(int sel) {
+void print_dice_string_keyboard(int sel, int current_len, int target) {
     const char* keys[7] = {"1", "2", "3", "4", "5", "6", "DONE"};
     int kx[7] = {10, 30, 50, 70, 90, 110, 130};
     
-    for(int i = 0; i < 7; i++) {
+    for(int i = 0; i < 6; i++) {
         uint16_t color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
         drawtext(kx[i], 90, (char*)keys[i], color, ST7735_BLACK, 1);
     }
+    // DONE color logic
+    uint16_t done_color;
+    if (sel == 6) {
+        done_color = ST7735_ORANGE; //selected
+    } else if (current_len >= target) {
+        done_color = ST7735_GREEN;  // enough rolls, can be selected
+    } else {
+        done_color = ST7735_GREY;   // not enough rolls yet
+    }
+    
+   
+    drawtext(130, 90, "DONE", done_color, ST7735_BLACK, 1);
 }
 
 //only updated the modified char to speed up
@@ -1194,7 +1208,7 @@ void update_dice_string_char(int index, char c, bool is_delete) {
     
     // 1 letter = 5 pixels
     int x = 5 + (col * 6); 
-    int y = 20 + (line * 15);
+    int y = 20 + (line * 10);
     
     char single_char[2] = { is_delete ? ' ' : c, '\0' };
     
@@ -1202,17 +1216,16 @@ void update_dice_string_char(int index, char c, bool is_delete) {
     drawtext(x, y, single_char, ST7735_CYAN, ST7735_BLACK, 1);
 }
 
-// Draw everything the first time
 void init_dice_string_input_screen(int sel, const char* str, int target) {
-    print_dice_string_counter(strlen(str), target);
+    int len = strlen(str);
+    print_dice_string_counter(len, target);
     
     // Draw any existing characters (in case of returning from another screen)
-    int len = strlen(str);
     for(int i = 0; i < len; i++) {
         update_dice_string_char(i, str[i], false);
     }
     
-    print_dice_string_keyboard(sel);
+    print_dice_string_keyboard(sel, len, target);
     grid_keyboard_dice_hash();
 }
 
@@ -4420,14 +4433,16 @@ int main ( void ){
                         int len = strlen(dice_string_buf);
                         
                         if (dice_input_idx < 6) {
-                            if (len < 200) {
+                            if (len < char_hash_limit-1) {
                                 char new_char = '1' + dice_input_idx;
                                 // 1. Añadimos al buffer
-                                add_char_dice(dice_string_buf, dice_input_idx + 1, 201);
+                                add_char_dice(dice_string_buf, dice_input_idx + 1, char_hash_limit);
                                 // 2. Delta update: pintamos el nuevo caracter en pantalla
                                 update_dice_string_char(len, new_char, false);
                                 // 3. Actualizamos el contador
                                 print_dice_string_counter(len + 1, target);
+                                // 4. Refresh keyboard to update DONE color if target is reached
+                                print_dice_string_keyboard(dice_input_idx, len + 1, target);
                             }
                         } else if (dice_input_idx == 6) {
                             if (len >= target) {
@@ -4476,8 +4491,9 @@ int main ( void ){
                             // Prevent cursor from being stuck on DONE if length falls below target
                             if (len - 1 < target && dice_input_idx == 6) {
                                 dice_input_idx = 5;
-                                print_dice_string_keyboard(dice_input_idx);
                             }
+                            print_dice_string_keyboard(dice_input_idx, len - 1, target);
+                            
                         } else {
                             black_screen();
                             print_selsize_screen(size_pointer);
@@ -4494,7 +4510,7 @@ int main ( void ){
                         } else {
                             dice_input_idx = (len >= target) ? 6 : 5;
                         }
-                        print_dice_string_keyboard(dice_input_idx);
+                        print_dice_string_keyboard(dice_input_idx, len, target);
                         pulsed_bt = NONE;
                         break;
                     }
@@ -4507,7 +4523,7 @@ int main ( void ){
                         } else {
                             dice_input_idx = 0;
                         }
-                        print_dice_string_keyboard(dice_input_idx);
+                        print_dice_string_keyboard(dice_input_idx, len, target);
                         pulsed_bt = NONE;
                         break;
                     }
