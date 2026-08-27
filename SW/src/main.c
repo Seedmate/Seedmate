@@ -184,8 +184,8 @@ int dice_y_pointer = 25;
 
 int dice_mode_pointer = 0;
 int hash_mode_pointer = 0;
-char dice_string_buf[101] = {0};
-int dice_input_idx = 0; // 0-5 for '1'-'6'
+char dice_string_buf[201] = {0};
+int dice_input_idx = 0; // 0-5 for '1'-'6', 6 for DONE
 
 BYTE data_array_256b[36] = {0}; // Increased buffer size to handle excess bits tracking
 int size_pointer = 0;
@@ -536,7 +536,7 @@ void draw_mini_dice(int x, int y, int value) {
 void grid_dices(){              
     print_cursor_grid();
     
-    // Fila 1: Dados 1, 2, 3
+    // Row 1: Dice 1, 2, 3
     draw_mini_dice(62, 107, 1);
     drawtext(71, 107, "=01", ST7735_WHITE, ST7735_BLACK, 1);
 
@@ -546,7 +546,7 @@ void grid_dices(){
     draw_mini_dice(122, 107, 3);
     drawtext(131, 107, "=11", ST7735_WHITE, ST7735_BLACK, 1);
 
-    // Fila 2: Dados 4, 5, 6
+    // Row 2: Dice 4, 5, 6
     draw_mini_dice(65, 117, 4);
     drawtext(74, 117, "=0", ST7735_WHITE, ST7735_BLACK, 1);
 
@@ -607,11 +607,11 @@ void main_screen_fast(int sel) {
     };
 
     if (last_sel != -1 && last_sel != sel) {
-        // Repinta la anterior en blanco
+        // Repaint the previous one in white
         drawtext(1, 5 + last_sel * 10, opciones[last_sel], ST7735_WHITE, ST7735_BLACK, 1);
     }
 
-    // Pinta la nueva en naranja
+    // Paint the new one in orange
     drawtext(1, 5 + sel * 10, opciones[sel], ST7735_ORANGE, ST7735_BLACK, 1);
 
     last_sel = sel;
@@ -1177,10 +1177,10 @@ void print_dice_string_counter(int current_len, int target) {
 
 // Update only number sel
 void print_dice_string_keyboard(int sel) {
-    const char* keys[7] = {"1", "2", "3", "4", "5", "6"};
-    int kx[6] = {25, 45, 65, 85, 105, 125};
+    const char* keys[7] = {"1", "2", "3", "4", "5", "6", "DONE"};
+    int kx[7] = {10, 30, 50, 70, 90, 110, 130};
     
-    for(int i = 0; i < 6; i++) {
+    for(int i = 0; i < 7; i++) {
         uint16_t color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
         drawtext(kx[i], 90, (char*)keys[i], color, ST7735_BLACK, 1);
     }
@@ -1884,21 +1884,21 @@ void set_bit(BYTE data_array[36], int bit_index, int value) {
  void print_camera(int x,int y, int safe){
     int color = (safe == cSAFE) ? ST7735_GREEN : ST7735_RED;
     drawFastHLine(x,y,13,color);//base
-    drawFastHLine(x,y-8,4,color);//arriba izq
-    drawFastHLine(x+9,y-8,4,color);//arriba dcha
-    drawFastHLine(x+5,y-10,3,color);//arriba centro
-    drawFastHLine(x+5,y-7,3,color);//arriba lente
-    drawFastHLine(x+5,y-2,3,color);//abajo lente
-    drawFastVLine(x,y-7,7,color);//izq
-    drawFastVLine(x+12,y-7,7,color);//dcha
-    drawFastVLine(x+3,y-5,2,color);//lenta izq
-    drawFastVLine(x+9,y-5,2,color);//lenta dcha
-    drawFastVLine(x+4,y-3,1,color);//pixel suelto
-    drawFastVLine(x+8,y-3,1,color);//pixel suelto
-    drawFastVLine(x+4,y-6,1,color);//pixel suelto
-    drawFastVLine(x+8,y-6,1,color);//pixel suelto
-    drawFastVLine(x+4,y-9,1,color);//pixel suelto
-    drawFastVLine(x+8,y-9,1,color);//pixel suelto
+    drawFastHLine(x,y-8,4,color);//top left
+    drawFastHLine(x+9,y-8,4,color);//top right
+    drawFastHLine(x+5,y-10,3,color);//top center
+    drawFastHLine(x+5,y-7,3,color);//top lens
+    drawFastHLine(x+5,y-2,3,color);//bottom lens
+    drawFastVLine(x,y-7,7,color);//left
+    drawFastVLine(x+12,y-7,7,color);//right
+    drawFastVLine(x+3,y-5,2,color);//lens left
+    drawFastVLine(x+9,y-5,2,color);//lens right
+    drawFastVLine(x+4,y-3,1,color);//stray pixel
+    drawFastVLine(x+8,y-3,1,color);//stray pixel
+    drawFastVLine(x+4,y-6,1,color);//stray pixel
+    drawFastVLine(x+8,y-6,1,color);//stray pixel
+    drawFastVLine(x+4,y-9,1,color);//stray pixel
+    drawFastVLine(x+8,y-9,1,color);//stray pixel
 
 }
 
@@ -2050,7 +2050,7 @@ void draw_QRSEED(const unsigned char *data, size_t size) {
         // Convert every 11-bit group into a decimal chunk.
         if (bit_index == 11) {
 
-            char num_str[6]; // "dddd" + '\0' (+1 extra por seguridad)
+            char num_str[6]; // "dddd" + '\0' (+1 extra for safety)
 
             unsigned int idx = (group & 0x7FFu);
 
@@ -2109,7 +2109,7 @@ void print_word_number_top(int word_number, int xor_merge_words_available, int m
     }
 
     // Build the final label.
-    if (main_pointer==cMAIN_XOR) {//xor mode, indica A, B, C or D
+    if (main_pointer==cMAIN_XOR) {//xor mode, indicates A, B, C or D
         size_t len = u16_to_str((unsigned int)word_number, word_number_text);
         word_number_text[len] = suffix;
         word_number_text[len + 1] = '\0';
@@ -2356,7 +2356,7 @@ bool sd_init(void) {
     uint8_t r1 = sd_get_response();               // Read R1
     SD_CS = 1; spi_send(0xFF);                    // Release + extra clocks
     if (r1 != 0x01) {                             // Card must be in IDLE
-        //drawtext(10, 20, "CMD0 fallo", ST7735_RED, ST7735_BLACK, 1);
+        //drawtext(10, 20, "CMD0 failed", ST7735_RED, ST7735_BLACK, 1);
         return false;
     }
 
@@ -2427,7 +2427,7 @@ bool sd_init(void) {
     SD_CS = 1; spi_send(0xFF);
 
     if (r1 != 0x00) {
-        //drawtext(10, 80, "CMD58 fallo", ST7735_RED, ST7735_BLACK, 1);
+        //drawtext(10, 80, "CMD58 failed", ST7735_RED, ST7735_BLACK, 1);
         return false;
     }
 
@@ -2447,7 +2447,7 @@ bool sd_init(void) {
         r1 = sd_get_response();
         SD_CS = 1; spi_send(0xFF);
         if (r1 != 0x00) {
-            //drawtext(10, 110, "CMD16 fallo", ST7735_RED, ST7735_BLACK, 1);
+            //drawtext(10, 110, "CMD16 failed", ST7735_RED, ST7735_BLACK, 1);
             return false;
         }
     }
@@ -2457,16 +2457,16 @@ bool sd_init(void) {
 }
 
 
-// Lee la respuesta R1 del comando SD (primer byte distinto de 0xFF)
-// Devuelve 0xFF si hay timeout
+// Read R1 response of SD command (first byte different from 0xFF)
+// Returns 0xFF if there is a timeout
 uint8_t sd_get_r1(void) {
     uint8_t r;
-    uint32_t timeout = 20000; // margen amplio para bit banging
+    uint32_t timeout = 20000; // wide margin for bit banging
     while (timeout--) {
         r = spi_recv();
         if (r != 0xFF) return r; // Response received
     }
-    return 0xFF; // Timeoutt
+    return 0xFF; // Timeout
 }
 
 bool sd_write_block(uint32_t sector, const uint8_t *buffer) {
@@ -2477,7 +2477,7 @@ bool sd_write_block(uint32_t sector, const uint8_t *buffer) {
     uint8_t r1 = sd_get_r1();
     if (r1 != 0x00) { SD_CS=1; spi_send(0xFF); return false; }
 
-    // Token de inicio de datos
+    // Data start token
     spi_send(0xFE);
 
     // Write 512 bytes
@@ -2491,7 +2491,7 @@ bool sd_write_block(uint32_t sector, const uint8_t *buffer) {
     uint8_t resp = spi_recv();
     if ((resp & 0x1F) != 0x05) { SD_CS=1; spi_send(0xFF); return false; }
 
-    // Esperar a que la tarjeta termine (busy = 0x00, hasta que vuelva 0xFF)
+    // Wait for the card to finish (busy = 0x00, until it returns 0xFF)
     uint32_t wait = 100000;
     uint8_t b;
     do {
@@ -2515,7 +2515,7 @@ bool sd_read_block(uint32_t sector, uint8_t *buffer) {
     uint8_t r1 = sd_get_r1();
     if (r1 != 0x00) { SD_CS = 1; spi_send(0xFF); return false; }
 
-    // Esperar token de inicio de datos 0xFE
+    // Wait for data start token 0xFE
     uint32_t wait = 100000;
     uint8_t token;
     do {
@@ -2536,7 +2536,7 @@ bool sd_read_block(uint32_t sector, uint8_t *buffer) {
     return true;
 }
 
-//para la SD
+// for the SD
 uint8_t buffer[512];
 
 
@@ -2679,7 +2679,7 @@ static void eval_poly_block(uint8_t *y_out,
 {
     uint32_t X[8], Y[8], T[8], Ck[8];
 
-    // X = x_val para todas las lanes
+    // X = x_val for all lanes
     bitslice_setall(X, x_val);
 
     // Y = c_N
@@ -2788,7 +2788,7 @@ bool sss_split_kofm(const uint8_t *secret,
 
     uint8_t x_vals[255];
     for (size_t j = 0; j < m; ++j) {
-        x_vals[j] = (uint8_t)(j + 1); // x = 1..m (no incluye 0)
+        x_vals[j] = (uint8_t)(j + 1); // x = 1..m (does not include 0)
     }
 
     return sss_split_polyN(secret, coeffs, degree, len,
@@ -2972,7 +2972,7 @@ int main ( void ){
     uint8_t *shares_input[cN_MAX] = {sh1, sh2, sh3, sh4, sh5, sh6, sh7, sh8, sh9};
     uint8_t share_indices[cK_MAX] = { 1, 2,0,0,0,0 };
 
-    //int boton_pulsado = 0;
+    //int button_pressed = 0;
 //    int aux2=0;
     while ( true )
     {
@@ -2987,7 +2987,7 @@ int main ( void ){
             LED = 0;
             if (BT_OK ==0) {
                 BT_OK_ST=0;
-                //boton_pulsado=3;
+                //button_pressed=3;
                 pulsed_bt = OK_BT;
                 //drawtext(aux_int,40, "X", ST7735_WHITE, ST7735_BLACK, 1);
                 //aux_int = aux_int+5;
@@ -2999,7 +2999,7 @@ int main ( void ){
             LED = 0;
             if (BT1 ==0) {
                 BT1_ST=0;
-                //boton_pulsado=1;
+                //button_pressed=1;
                 pulsed_bt = BACK_BT;
                 }
          }  else if ((BT2 ==0) & (BT2_ST==1)) {
@@ -3010,7 +3010,7 @@ int main ( void ){
             if (BT2 ==0) {
                 BT2_ST=0;
                 pulsed_bt = LEFT_BT;
-                //boton_pulsado=2;
+                //button_pressed=2;
                 }
          }  else if ((BT4 ==0) & (BT4_ST==1)) {
             LED = 1;
@@ -3571,7 +3571,7 @@ int main ( void ){
                         if (main_pointer==cMAIN_ERASESD) { // Erase
                             for (int i = 0; i < 512; i++) buffer[i] = 0; // Clear the sector buffer
                             if (sd_write_block(SDblock_pointer+SD_page*cSDBLOCK_n_opt, buffer)) { // Write the block
-                                drawtext(70, 20 + 10*SDblock_pointer, "ERASE SUCESS", ST7735_GREEN, ST7735_BLACK, 1);
+                                drawtext(70, 20 + 10*SDblock_pointer, "ERASE SUCCESS", ST7735_GREEN, ST7735_BLACK, 1);
                             } else {
                                 drawtext(70, 20 + 10*SDblock_pointer, "ERASE ERROR ", ST7735_RED, ST7735_BLACK, 1);
                             }
@@ -3728,7 +3728,7 @@ int main ( void ){
 
                         buffer[cSD_SIZE_ADDR]=size_pointer; // Store size metadata next
                         if (sd_write_block(SDblock_pointer+SD_page*cSDBLOCK_n_opt, buffer)) { // Write the block
-                            drawtext(70, 20 + 10*SDblock_pointer, "WRITE SUCESS", ST7735_GREEN, ST7735_BLACK, 1);
+                            drawtext(70, 20 + 10*SDblock_pointer, "WRITE SUCCESS", ST7735_GREEN, ST7735_BLACK, 1);
                         } else {
                             drawtext(70, 20 + 10*SDblock_pointer, "WRITE ERROR ", ST7735_RED, ST7735_BLACK, 1);
                         }
@@ -4415,61 +4415,69 @@ int main ( void ){
                 break;
             case DICE_STRING_INPUT:
                 switch (pulsed_bt) {
-                  case OK_BT: {
+                    case OK_BT: {
                         int target = (size_pointer == cSIZE_12) ? 50 : 100;
                         int len = strlen(dice_string_buf);
-
-                        if (len < target) {
-                            char new_char = '1' + dice_input_idx;
-                            // 1. Añadimos al buffer
-                            add_char_dice(dice_string_buf, dice_input_idx + 1, 101);
-                            // 2. Delta update: pintamos el nuevo caracter en pantalla
-                            update_dice_string_char(len, new_char, false);
-                            // 3. Actualizamos el contador
-                            print_dice_string_counter(len + 1, target);
-                        }
                         
-                        if (strlen(dice_string_buf) >= target) {
-                            // If Keystone standard (0-5 format) is selected, substitute '6' for '0'
-                            if (hash_mode_pointer == 1) { 
-                                for (int i = 0; i < target; i++) {
-                                    if (dice_string_buf[i] == '6') {
-                                        dice_string_buf[i] = '0';
+                        if (dice_input_idx < 6) {
+                            if (len < 200) {
+                                char new_char = '1' + dice_input_idx;
+                                // 1. AÃ±adimos al buffer
+                                add_char_dice(dice_string_buf, dice_input_idx + 1, 201);
+                                // 2. Delta update: pintamos el nuevo caracter en pantalla
+                                update_dice_string_char(len, new_char, false);
+                                // 3. Actualizamos el contador
+                                print_dice_string_counter(len + 1, target);
+                            }
+                        } else if (dice_input_idx == 6) {
+                            if (len >= target) {
+                                // If Keystone standard (0-5 format) is selected, substitute '6' for '0'
+                                if (hash_mode_pointer == 1) { 
+                                    for (int i = 0; i < len; i++) {
+                                        if (dice_string_buf[i] == '6') {
+                                            dice_string_buf[i] = '0';
+                                        }
                                     }
                                 }
+                                
+                                // Hash the full string input
+                                BYTE hash[SHA256_BLOCK_SIZE];
+                                SHA256_CTX ctx;
+                                sha256_init(&ctx);
+                                sha256_update(&ctx, (BYTE*)dice_string_buf, len);
+                                sha256_final(&ctx, hash);
+                                
+                                // Feed hash output to the main entropy storage
+                                for (int i = 0; i < 32; i++) {
+                                    data_array_256b[i] = hash[i];
+                                }
+                                bit_count_dice = (size_pointer == cSIZE_12) ? 128 : 256;
+                                
+                                black_screen();
+                                print_checksum_screen();
+                                estado = SHOW_CHECKSUM_DETAILS;
                             }
-                            
-                            // Hash the full string input
-                            BYTE hash[SHA256_BLOCK_SIZE];
-                            SHA256_CTX ctx;
-                            sha256_init(&ctx);
-                            sha256_update(&ctx, (BYTE*)dice_string_buf, target);
-                            sha256_final(&ctx, hash);
-                            
-                            // Feed hash output to the main entropy storage
-                            for (int i = 0; i < 32; i++) {
-                                data_array_256b[i] = hash[i];
-                            }
-                            bit_count_dice = (target == 50) ? 128 : 256;
-                            
-                            black_screen();
-                            print_checksum_screen();
-                            estado = SHOW_CHECKSUM_DETAILS;
                         }
                         pulsed_bt = NONE;
                         break;
                     }
-     case BACK_BT: {
+                    case BACK_BT: {
                         int target = (size_pointer == cSIZE_12) ? 50 : 100;
                         int len = strlen(dice_string_buf);
                         
                         if (len > 0) {
-                            // 1. Delta update: borramos el último caracter de la pantalla
+                            // 1. Delta update: borramos el Ãºltimo caracter de la pantalla
                             update_dice_string_char(len - 1, ' ', true);
                             // 2. Borramos del buffer
                             remove_last_char(dice_string_buf);
                             // 3. Actualizamos el contador
                             print_dice_string_counter(len - 1, target);
+                            
+                            // Prevent cursor from being stuck on DONE if length falls below target
+                            if (len - 1 < target && dice_input_idx == 6) {
+                                dice_input_idx = 5;
+                                print_dice_string_keyboard(dice_input_idx);
+                            }
                         } else {
                             black_screen();
                             print_selsize_screen(size_pointer);
@@ -4478,17 +4486,23 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     }
-                    case LEFT_BT:
+                    case LEFT_BT: {
+                        int target = (size_pointer == cSIZE_12) ? 50 : 100;
+                        int len = strlen(dice_string_buf);
                         if (dice_input_idx > 0) {
                             dice_input_idx--;
                         } else {
-                            dice_input_idx = 5;
+                            dice_input_idx = (len >= target) ? 6 : 5;
                         }
                         print_dice_string_keyboard(dice_input_idx);
                         pulsed_bt = NONE;
                         break;
-                    case RIGTH_BT:
-                        if (dice_input_idx < 5) {
+                    }
+                    case RIGTH_BT: {
+                        int target = (size_pointer == cSIZE_12) ? 50 : 100;
+                        int len = strlen(dice_string_buf);
+                        int max_idx = (len >= target) ? 6 : 5;
+                        if (dice_input_idx < max_idx) {
                             dice_input_idx++;
                         } else {
                             dice_input_idx = 0;
@@ -4496,6 +4510,7 @@ int main ( void ){
                         print_dice_string_keyboard(dice_input_idx);
                         pulsed_bt = NONE;
                         break;
+                    }
                     case UP_BT:
                     case DOWN_BT:
                         pulsed_bt = NONE;
