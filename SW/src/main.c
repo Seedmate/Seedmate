@@ -110,6 +110,7 @@
 #define cSELINPUT_n_opt 2
 #define cDICE_MODE_n_opt 2
 #define cHASH_MODE_n_opt 2
+#define cRESOURCE_n_opt 3
 #define cEND_OF_LINE 150
 #define cENTROPY_BITS12W 127//127
 #define cENTROPY_BITS24W 255//255
@@ -122,7 +123,11 @@
 #define cMAIN_XOR 3
 #define cMAIN_OBFUS 4
 #define cMAIN_ERASESD 5
-#define cMAIN_QR 6 // tutorial
+#define cMAIN_QR 6 // Resources menu
+
+#define cRESOURCE_tutorial 0
+#define cRESOURCE_backup 1
+#define cRESOURCE_dice_test 2
 
 #define cOBFUS_SHIFT 0
 #define cOBFUS_NOT 1
@@ -163,8 +168,8 @@
 #define  cMERGE 1
 
 // SSS limits
-#define  cK_MAX 6 //max 6th order polinomial
-#define  cN_MAX 9//max 9 samples
+#define  cK_MAX 6 // Max 6th order polynomial
+#define  cN_MAX 9 // Max 9 samples
 
 #define INCORRECT_MSG "INCORRECT SET OF WORDS"
 #define OK_MSG "OK"
@@ -172,6 +177,7 @@
 int main_pointer = 0;
 int obfuscation_pointer =0;
 int sss_pointer = 0;
+int resource_pointer = 0;
 uint8_t  selected_share_id = 1;
 int shares_loaded = 0;
 
@@ -319,8 +325,10 @@ typedef enum
     SEL_K,
     SEL_INPUT,
     QR_TUTORIAL,
+    RESOURCE_MENU,
+    RESOURCE_QR_VIEW,
     WORD_LIST_ERROR,
-    END_MODE,//final
+    END_MODE, // Final
     SEL_SHIFT,
     SEL_NBITS_SHIFT,
     SEL_ADD_SUB,
@@ -559,7 +567,7 @@ void grid_dices(){
     drawtext(131, 117, "=00", ST7735_WHITE, ST7735_BLACK, 1);
 }
 
-void grid_coins(){              // heads tails
+void grid_coins(){              // Heads tails
     print_cursor_grid();
     drawtext(64,117, "HEAD", ST7735_WHITE, ST7735_WHITE, 1);
     drawtext(94,117, "TAIL", ST7735_WHITE, ST7735_WHITE, 1);
@@ -586,7 +594,7 @@ void main_screen(int sel) {
         "SEED WORD XOR",
         "OBFUSCATION",
         "ERASE SD",
-        "VIEW TUTORIAL"
+        "RESOURCES"
     };
 
     for (int i = 0; i < cMAIN_n_opt; i++) {
@@ -596,6 +604,21 @@ void main_screen(int sel) {
     if(SD_ready)drawtext(10, 118, "SD OK", ST7735_GREEN, ST7735_BLACK, 1);
     grid_menu1();
 }
+
+void resource_screen(int sel) {
+    char* options[] = {
+        "TUTORIAL",
+        "BACKUP TOOL",
+        "DICE TESTER"
+    };
+
+    for (int i = 0; i < cRESOURCE_n_opt; i++) {
+        uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
+        drawtext(1, 10 + i * 10, options[i], color, ST7735_BLACK, 1);
+    }
+    grid_menu2();
+}
+
 static int last_sel = 0;
 void main_screen_fast(int sel) {
     char* opciones[] = {
@@ -605,7 +628,7 @@ void main_screen_fast(int sel) {
         "SEED WORD XOR",
         "OBFUSCATION",
         "ERASE SD",
-        "VIEW TUTORIAL"
+        "RESOURCES"
     };
 
     if (last_sel != -1 && last_sel != sel) {
@@ -1149,7 +1172,7 @@ void sel_hash_mode_screen(int sel){
     grid_menu2();
 }
 
-// update only roll count
+// Update only roll count
 void print_dice_string_counter(int current_len, int target) {
     char counter_text[24]; // Increased buffer size to fit the prefix
     char current_text[4];
@@ -1177,7 +1200,7 @@ void print_dice_string_counter(int current_len, int target) {
     drawtext(20, 5, counter_text, ST7735_WHITE, ST7735_BLACK, 1);
 }
 
-// Update only number sel
+// Update only number selection
 void print_dice_string_keyboard(int sel, int current_len, int target) {
     const char* keys[7] = {"1", "2", "3", "4", "5", "6", "DONE"};
     int kx[7] = {10, 30, 50, 70, 90, 110, 130};
@@ -1189,26 +1212,26 @@ void print_dice_string_keyboard(int sel, int current_len, int target) {
     // DONE color logic
     uint16_t done_color;
     if (sel == 6) {
-        done_color = ST7735_ORANGE; //selected
+        done_color = ST7735_ORANGE; // Selected
     } else if (current_len >= target) {
-        done_color = ST7735_GREEN;  // enough rolls, can be selected
+        done_color = ST7735_GREEN;  // Enough rolls, can be selected
     } else {
-        done_color = ST7735_GREY;   // not enough rolls yet
+        done_color = ST7735_GREY;   // Not enough rolls yet
     }
     
-   
     drawtext(130, 90, "DONE", done_color, ST7735_BLACK, 1);
 }
 
-//only updated the modified char to speed up
+// Only update the modified character to speed up
 void update_dice_string_char(int index, char c, bool is_delete) {
     int chars_per_line = 25;
     int line = index / chars_per_line;
     int col = index % chars_per_line;
     
-    // 1 letter = 5 pixels
+    // 1 letter = 5 pixels width + 1 pixel space = 6
     int x = 5 + (col * 6); 
-    int y = 20 + (line * 10);
+    // Start higher at Y=14 (just below the counter) and use 9px line spacing to prevent overlap
+    int y = 14 + (line * 9);
     
     char single_char[2] = { is_delete ? ' ' : c, '\0' };
     
@@ -1669,7 +1692,7 @@ void draw_qr_code(const char *text) {
     QRCode qrcode;
 
     // Initialize the QR code with ECC_LOW correction.
-    if (length>50){
+    if (length>39){
         qrcode_initText(&qrcode, qrcodeData, 3, ECC_LOW, text);
     }else{
         qrcode_initText(&qrcode, qrcodeData, 2, ECC_LOW, text);
@@ -1875,12 +1898,12 @@ void update_dice_bit_count_display(int bit_count_dice_local){
 
 void set_bit(BYTE data_array[36], int bit_index, int value) {
     if (bit_index < 0 || bit_index >= 288 || (value != 0 && value != 1)) {
-        //index out of range
+        // Index out of range
         return;
     }
 
     int byte_index = bit_index / 8;
-    int bit_position = 7 - (bit_index % 8); // MSB a LSB
+    int bit_position = 7 - (bit_index % 8); // MSB to LSB
 
     if (value == 1) {
         data_array[byte_index] |= (1 << bit_position);
@@ -1896,22 +1919,22 @@ void set_bit(BYTE data_array[36], int bit_index, int value) {
  }
  void print_camera(int x,int y, int safe){
     int color = (safe == cSAFE) ? ST7735_GREEN : ST7735_RED;
-    drawFastHLine(x,y,13,color);//base
-    drawFastHLine(x,y-8,4,color);//top left
-    drawFastHLine(x+9,y-8,4,color);//top right
-    drawFastHLine(x+5,y-10,3,color);//top center
-    drawFastHLine(x+5,y-7,3,color);//top lens
-    drawFastHLine(x+5,y-2,3,color);//bottom lens
-    drawFastVLine(x,y-7,7,color);//left
-    drawFastVLine(x+12,y-7,7,color);//right
-    drawFastVLine(x+3,y-5,2,color);//lens left
-    drawFastVLine(x+9,y-5,2,color);//lens right
-    drawFastVLine(x+4,y-3,1,color);//stray pixel
-    drawFastVLine(x+8,y-3,1,color);//stray pixel
-    drawFastVLine(x+4,y-6,1,color);//stray pixel
-    drawFastVLine(x+8,y-6,1,color);//stray pixel
-    drawFastVLine(x+4,y-9,1,color);//stray pixel
-    drawFastVLine(x+8,y-9,1,color);//stray pixel
+    drawFastHLine(x,y,13,color); // Base
+    drawFastHLine(x,y-8,4,color); // Top left
+    drawFastHLine(x+9,y-8,4,color); // Top right
+    drawFastHLine(x+5,y-10,3,color); // Top center
+    drawFastHLine(x+5,y-7,3,color); // Top lens
+    drawFastHLine(x+5,y-2,3,color); // Bottom lens
+    drawFastVLine(x,y-7,7,color); // Left
+    drawFastVLine(x+12,y-7,7,color); // Right
+    drawFastVLine(x+3,y-5,2,color); // Lens left
+    drawFastVLine(x+9,y-5,2,color); // Lens right
+    drawFastVLine(x+4,y-3,1,color); // Stray pixel
+    drawFastVLine(x+8,y-3,1,color); // Stray pixel
+    drawFastVLine(x+4,y-6,1,color); // Stray pixel
+    drawFastVLine(x+8,y-6,1,color); // Stray pixel
+    drawFastVLine(x+4,y-9,1,color); // Stray pixel
+    drawFastVLine(x+8,y-9,1,color); // Stray pixel
 
 }
 
@@ -1985,7 +2008,6 @@ void extract_11bit_groups(BYTE *data, size_t size) {
         if (bit_index == 11) {
 
             char word_index_text[12]; // 3 digits plus null terminator
-            //sprintf(texto, "%02d", word_index);
             u16_to_str((unsigned int)word_index, word_index_text);
             drawtext(x_index,y_index, word_index_text, ST7735_WHITE, ST7735_BLACK, 1);
             const char *word = get_word(group);
@@ -2006,7 +2028,6 @@ void extract_11bit_groups(BYTE *data, size_t size) {
             group = 0;
             bit_index = 0;
             word_index+=1;
-            //delay_ms(500);
         }
     }
     print_camera(145,20,cNOTSAFE);
@@ -2040,13 +2061,10 @@ void draw_QRSEED(const unsigned char *data, size_t size) {
     int word_index = 0;             // Rendered word counter
     unsigned int group = 0;         // Accumulated 11-bit value (0..2047)
     const int bits_total = (int)(size * 8);
-    //const int total_words = bits_total / 11;
 
     // Output buffer: 4 digits per word plus the NUL terminator.
     char text_buf[98];
     size_t text_len = 0;
-
-
 
     text_buf[0] = '\0';
 
@@ -2066,7 +2084,6 @@ void draw_QRSEED(const unsigned char *data, size_t size) {
             char num_str[6]; // "dddd" + '\0' (+1 extra for safety)
 
             unsigned int idx = (group & 0x7FFu);
-
 
             int written = (int)u16_to_str_pad(idx, num_str, 4);
 
@@ -2096,10 +2113,7 @@ void draw_QRSEED(const unsigned char *data, size_t size) {
 
     }
 
-    //drawtext(45,15, text_buf, ST7735_BLACK, ST7735_WHITE , 1);
-
     draw_qr_code(text_buf);
-    //draw_compactqr_code(size, data);
     print_camera(2,50,cNOTSAFE);
     print_camera(2,80,cNOTSAFE);
     print_camera(145,50,cNOTSAFE);
@@ -2122,7 +2136,7 @@ void print_word_number_top(int word_number, int xor_merge_words_available, int m
     }
 
     // Build the final label.
-    if (main_pointer==cMAIN_XOR) {//xor mode, indicates A, B, C or D
+    if (main_pointer==cMAIN_XOR) {// XOR mode, indicates A, B, C or D
         size_t len = u16_to_str((unsigned int)word_number, word_number_text);
         word_number_text[len] = suffix;
         word_number_text[len + 1] = '\0';
@@ -2365,18 +2379,15 @@ bool sd_init(void) {
     // ---- CMD0: GO_IDLE_STATE ----
     SD_CS = 0;
     sd_send_cmd(0, 0x00000000, 0x95);
-    //drawtext(10, 10, "(CMD0)", ST7735_WHITE, ST7735_BLACK, 1);
     uint8_t r1 = sd_get_response();               // Read R1
     SD_CS = 1; spi_send(0xFF);                    // Release + extra clocks
     if (r1 != 0x01) {                             // Card must be in IDLE
-        //drawtext(10, 20, "CMD0 failed", ST7735_RED, ST7735_BLACK, 1);
         return false;
     }
 
     // ---- CMD8: SEND_IF_COND ----
     SD_CS = 0;
     sd_send_cmd(8, 0x000001AA, 0x87);             // Check 2.7-3.6V range + echo 0xAA
-    //drawtext(10, 30, "(CMD8)", ST7735_WHITE, ST7735_BLACK, 1);
     r1 = sd_get_response();
     uint8_t cmd8_extra[4] = {0};
     // Read the 4 extra bytes (echo + voltage).
@@ -2388,16 +2399,14 @@ bool sd_init(void) {
 
     if (r1 == 0x01) {
         if (cmd8_extra[2] == 0x01 && cmd8_extra[3] == 0xAA) {
-            //drawtext(10, 40, "CMD8 OK", ST7735_GREEN, ST7735_BLACK, 1);
+            // OK
         } else {
-            //drawtext(10, 40, "CMD8 FAIL", ST7735_RED, ST7735_BLACK, 1);
             return false;
         }
     }
 
 
     bool v2_card = (r1 == 0x01);                  // v2 cards usually answer with 0x01
-    // If r1 == 0x05 (illegal command), it is likely an SD v1 card.
 
     // ---- Loop: CMD55 + ACMD41 ----
     // Request HCS=1 for SDHC/SDXC-capable cards.
@@ -2406,16 +2415,13 @@ bool sd_init(void) {
         // CMD55
         SD_CS = 0;
         sd_send_cmd(55, 0x00000000, 0x65);
-        //drawtext(10, 40, "(CMD55)", ST7735_WHITE, ST7735_BLACK, 1);
         r1 = sd_get_response();
         SD_CS = 1; spi_send(0xFF);
-        // r1 can be 0x01 if still idle, 0x00 if ready, or 0xFF on timeout.
 
         // ACMD41 (argument carries HCS when the card is v2)
         SD_CS = 0;
         uint32_t arg = v2_card ? 0x40000000 : 0x00000000; // HCS bit31
         sd_send_cmd(41, arg, 0x77);
-        //drawtext(10, 50, "(ACMD41)", ST7735_WHITE, ST7735_BLACK, 1);
         r1 = sd_get_response();
         SD_CS = 1; spi_send(0xFF);
 
@@ -2423,14 +2429,12 @@ bool sd_init(void) {
     } while (--tries);
 
     if (r1 != 0x00) {
-        //drawtext(10, 60, "ACMD41 timeout", ST7735_RED, ST7735_BLACK, 1);
         return false;
     }
 
     // ---- CMD58: READ_OCR ----
     SD_CS = 0;
     sd_send_cmd(58, 0x00000000, 0xFD);
-    //drawtext(10, 70, "(CMD58)", ST7735_WHITE, ST7735_BLACK, 1);
     r1 = sd_get_response();
     uint8_t ocr[4] = {0};
     ocr[0] = spi_recv(); // MSB
@@ -2440,32 +2444,23 @@ bool sd_init(void) {
     SD_CS = 1; spi_send(0xFF);
 
     if (r1 != 0x00) {
-        //drawtext(10, 80, "CMD58 failed", ST7735_RED, ST7735_BLACK, 1);
         return false;
     }
 
-    // Bit CCS (Card Capacity Status) en OCR MSB bit6
+    // Bit CCS (Card Capacity Status) in OCR MSB bit6
     sd_is_sdhc = (ocr[0] & 0x40) != 0;
-    if (sd_is_sdhc) {
-        //drawtext(10, 90, "SDHC/SDXC", ST7735_GREEN, ST7735_BLACK, 1);
-    } else {
-        //drawtext(10, 90, "SDSC", ST7735_CYAN, ST7735_BLACK, 1);
-    }
 
-    // ---- CMD16: SET_BLOCKLEN (solo SDSC; SDHC ignora, siempre 512) ----
+    // ---- CMD16: SET_BLOCKLEN (only SDSC; SDHC ignores, always 512) ----
     if (!sd_is_sdhc) {
         SD_CS = 0;
         sd_send_cmd(16, 512, 0x15);
-        //drawtext(10, 100, "(CMD16)", ST7735_WHITE, ST7735_BLACK, 1);
         r1 = sd_get_response();
         SD_CS = 1; spi_send(0xFF);
         if (r1 != 0x00) {
-            //drawtext(10, 110, "CMD16 failed", ST7735_RED, ST7735_BLACK, 1);
             return false;
         }
     }
 
-    //drawtext(10, 120, "SD Ready", ST7735_GREEN, ST7735_BLACK, 1);
     return true;
 }
 
@@ -2474,7 +2469,7 @@ bool sd_init(void) {
 // Returns 0xFF if there is a timeout
 uint8_t sd_get_r1(void) {
     uint8_t r;
-    uint32_t timeout = 20000; // wide margin for bit banging
+    uint32_t timeout = 20000; // Wide margin for bit banging
     while (timeout--) {
         r = spi_recv();
         if (r != 0xFF) return r; // Response received
@@ -2518,8 +2513,8 @@ bool sd_write_block(uint32_t sector, const uint8_t *buffer) {
 }
 
 
-// Para SDHC, el 'sector' va como argumento directo.
-// Para SDSC, el argumento es byte address = sector * 512.
+// For SDHC, 'sector' is passed as a direct argument.
+// For SDSC, the argument is byte address = sector * 512.
 bool sd_read_block(uint32_t sector, uint8_t *buffer) {
     uint32_t arg = sd_is_sdhc ? sector : (sector * 512);
 
@@ -2549,7 +2544,7 @@ bool sd_read_block(uint32_t sector, uint8_t *buffer) {
     return true;
 }
 
-// for the SD
+// Buffer for the SD card
 uint8_t buffer[512];
 
 
@@ -2586,7 +2581,6 @@ void print_SD_preview(){
             }
             // Validate checksum.
             if (checksum_SD_aux==buffer[cSD_CHECKSUM_ADDR]){
-                //drawtext(60, 20 + 10*SDblock_pointer, "LOAD OK", ST7735_GREEN, ST7735_BLACK, 1);
                 size_pointer_aux=buffer[cSD_SIZE_ADDR];
                         if (size_pointer_aux==cSIZE_12){// 12 words
                             drawtext(48, 20 + 10*i, "12W", ST7735_CYAN, ST7735_BLACK, 1);
@@ -2596,12 +2590,7 @@ void print_SD_preview(){
             }   else {
                 drawtext(48, 20 + 10*i, "   ", ST7735_CYAN, ST7735_BLACK, 1);
             }
-
-
-            //draw_hex16(45, 20 + i * 10, (uint16_t)XOR_SD_aux, 1, ST7735_WHITE, ST7735_BLACK, 1);
-            //drawtext(25, 20 + i * 10, XOR_SD_aux, ST7735_WHITE, ST7735_BLACK, 1);
         } else {
-            //drawtext(50, 20 + 10*i, "SD error", ST7735_RED, ST7735_BLACK, 1);
             break;
         }
     }
@@ -2620,11 +2609,6 @@ void sel_sd_block_screen_generic(int sel) {
             drawtext(67, 10 , " TO READ", ST7735_WHITE, ST7735_BLACK, 1);
             break;
     }
-    //if (last_sel_sd != -1 && last_sel_sd != sel) {
-    //    print_slots_fast(sel);
-    //}else{
-    //    print_slots(sel);
-    //}
     print_slots(sel);
 
     print_SD_preview();
@@ -2707,8 +2691,6 @@ static void eval_poly_block(uint8_t *y_out,
     }
 
     unbitslice(y_out, Y, blk_len);
-
-    // Optionally clear temporaries if they contain sensitive material
 }
 
 
@@ -2716,7 +2698,7 @@ static void eval_poly_block(uint8_t *y_out,
    - f(x) = c0 + c1*x + ... + cN*x^N  (N <= 6)
    - c0: secret buffer (len bytes)
    - coeffs: array of N pointers to buffers (c1..cN), each len bytes
-   - x_vals: array de x's (non-zero, distinct from each other)
+   - x_vals: array of x's (non-zero, distinct from each other)
    - shares: array of x_count pointers to output buffers (each len bytes)
 */
 bool sss_split_polyN(const uint8_t *c0,
@@ -2743,7 +2725,6 @@ bool sss_split_polyN(const uint8_t *c0,
 
         for (size_t j = 0; j < x_count; ++j) {
             uint8_t x = x_vals[j];
-            // (Optional) validate x != 0 and uniqueness of x_vals[] elsewhere
             eval_poly_block(shares[j] + off,
                             (const uint8_t **)&c_in_local,
                             degree,
@@ -2781,7 +2762,7 @@ void gen_a_nonzero(uint8_t *a, size_t len) {
 }
 
 
-/* Split (k-of-m) con polinomio grado N=k-1 <= 6
+/* Split (k-of-m) with polynomial degree N=k-1 <= 6
    - secret = c0
    - coeffs[0..k-2] = c1..cN (Non-zero random, len bytes each)
    - shares[0..m-1]: Pointers to output buffers (each len bytes)
@@ -2797,7 +2778,7 @@ bool sss_split_kofm(const uint8_t *secret,
 
     if (degree > POLY_DEGREE_MAX) return false;
     if (m == 0) return false;
-    if (m > 255) return false; // x son uint8
+    if (m > 255) return false; // x are uint8
 
     uint8_t x_vals[255];
     for (size_t j = 0; j < m; ++j) {
@@ -2816,17 +2797,14 @@ bool sss_split_kofm(const uint8_t *secret,
 
 static void tmr1_init(void)
 {
-
-
     T1CONbits.ON    = 0;        // Turn off Timer1 while configuring
     T1CONbits.TCS   = 0;        // 0 = Internal clock (PBCLK)
     T1CONbits.TGATE = 0;        // Gate disabled
-    T1CONbits.TCKPS = 0;       // Prescaler
-    T1CONbits.SIDL = 0; // Do not stop in Idle
-    PMD4bits.T1MD = 0;
-    PR1 = 0xFFFF;
+    T1CONbits.TCKPS = 0;        // Prescaler
+    T1CONbits.SIDL  = 0;        // Do not stop in Idle
+    PMD4bits.T1MD   = 0;
+    PR1             = 0xFFFF;
     T1CONbits.ON    = 1;        // Start Timer1
-
 }
 
 
@@ -2918,40 +2896,30 @@ int main ( void ){
     int BT6_ST= 1;
 
 
-    //menu pointer handling
+    // Menu pointer handling
     int xor_pointer = 0;
     int shift_pointer = 0;
     int add_pointer = 0;
 
 
     int SSS_K = 2;
-    //int SSS_N = 2;
     int SSS_N = 9;
     int sel_K_N = 0;
     int shift_nbits = 1;
-    //int QR_pointer = 0;
     int SDblock_pointer = 0;
     int selinput_pointer = 0;
 
     uint16_t time_now ;
-    //uint8_t  time_low ;
-
-    //dice rolling variables
-
-
 
     BYTE checksum_SD =0;
     BYTE XOR_SD =0;
-    //BYTE data_array_256b[32] = {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 };
 
     BYTE xor_merge_word1[32] = {0};
     BYTE xor_merge_word2[32] = {0};
     BYTE xor_merge_word3[32] = {0};
     int xor_merge_words_available = 0;
 
-    int lt_idx = 0; //letter index
-
-
+    int lt_idx = 0; // Letter index
 
     char* word = malloc(32 * sizeof(char));
     char result[32]; // Search result preview
@@ -2965,17 +2933,9 @@ int main ( void ){
     int word_number = 1; // Tracks the word being entered
     char word_number_text[12];
 
-
     const size_t LEN = 32;
 
-
-    //uint8_t secret[LEN], a[LEN];
-    //uint8_t secret[LEN];
     uint8_t SSS_result[LEN];
-
-    // f(x) = c0 + c1*x + c2*x^2
-
-
 
     const uint8_t *coeffs[cK_MAX-1] = { c0, c1, c2, c3, c4 }; // Maximum polynomial degree 6
     uint8_t sh1[LEN], sh2[LEN], sh3[LEN], sh4[LEN], sh5[LEN], sh6[LEN], sh7[LEN], sh8[LEN], sh9[LEN];
@@ -2985,14 +2945,12 @@ int main ( void ){
     uint8_t *shares_input[cN_MAX] = {sh1, sh2, sh3, sh4, sh5, sh6, sh7, sh8, sh9};
     uint8_t share_indices[cK_MAX] = { 1, 2,0,0,0,0 };
 
-    //int button_pressed = 0;
-//    int aux2=0;
     while ( true )
     {
         /* Maintain state machines of all polled MPLAB Harmony modules. */
         SYS_Tasks ( );
 
-        // button pressing logic
+        // Button pressing logic
         if ((BT_OK ==0) & (BT_OK_ST==1)) {
             LED = 1;
             update_entropy_coefficients(); // Capture fresh coefficient bytes on each press
@@ -3000,10 +2958,7 @@ int main ( void ){
             LED = 0;
             if (BT_OK ==0) {
                 BT_OK_ST=0;
-                //button_pressed=3;
                 pulsed_bt = OK_BT;
-                //drawtext(aux_int,40, "X", ST7735_WHITE, ST7735_BLACK, 1);
-                //aux_int = aux_int+5;
                 }
          }  else if ((BT1 ==0) & (BT1_ST==1)) {
             LED = 1;
@@ -3012,7 +2967,6 @@ int main ( void ){
             LED = 0;
             if (BT1 ==0) {
                 BT1_ST=0;
-                //button_pressed=1;
                 pulsed_bt = BACK_BT;
                 }
          }  else if ((BT2 ==0) & (BT2_ST==1)) {
@@ -3023,7 +2977,6 @@ int main ( void ){
             if (BT2 ==0) {
                 BT2_ST=0;
                 pulsed_bt = LEFT_BT;
-                //button_pressed=2;
                 }
          }  else if ((BT4 ==0) & (BT4_ST==1)) {
             LED = 1;
@@ -3046,8 +2999,6 @@ int main ( void ){
          }  else if ((BT6 ==0) & (BT6_ST==1)) {
             LED = 1;
             update_entropy_coefficients();
-            //draw_hex16(10, 10, TMR1, 1, ST7735_WHITE, ST7735_BLACK, 1);
-//             ADC_test();
             delay_ms(30);
             LED = 0;
             if (BT6 ==0) {
@@ -3074,7 +3025,7 @@ int main ( void ){
             BT6_ST=1;
             }
         }
-        // END button pressing logic
+        // End button pressing logic
 
 
         // STATE MACHINE
@@ -3101,39 +3052,35 @@ int main ( void ){
             case MAIN:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        if (main_pointer==cMAIN_create){// create new seed
+                        if (main_pointer==cMAIN_create){// Create new seed
                             black_screen();
                             create_seed_screen(seed_pointer);
                             estado = CREATE_SEED;
-                        } else if (main_pointer==cMAIN_LOAD ){// load seed words
+                        } else if (main_pointer==cMAIN_LOAD ){// Load seed words
                             black_screen();
                             sel_input_screen(selinput_pointer);
                             estado = SEL_INPUT;
-                            //seed_pointer=2; //word pick
                         } else if (main_pointer==cMAIN_XOR){// XOR
                             black_screen();
                             print_xorsel_screen(xor_pointer);
                             estado = SEL_XOR;
-                        } else if (main_pointer==cMAIN_OBFUS){// obfuscation
+                        } else if (main_pointer==cMAIN_OBFUS){// Obfuscation
                             black_screen();
                             sel_obfus_screen(obfuscation_pointer);
                             estado = SEL_OBFUS;
 
-                        } else if (main_pointer==cMAIN_SSS){// shamir
+                        } else if (main_pointer==cMAIN_SSS){// Shamir
                             black_screen();
                             sel_SSS_screen(sss_pointer);
                             estado = SEL_SSS;
-                        } else if (main_pointer==cMAIN_ERASESD){//ERASE SD
+                        } else if (main_pointer==cMAIN_ERASESD){// Erase SD
                             black_screen();
                             sel_sd_block_screen_generic(SDblock_pointer);
                             estado = SEL_SD_BLOCK;
-                        } else if (main_pointer==cMAIN_QR){// tutorial
-                            white_screen();
-                            draw_qr_code("youtu.be/8vy5LIxT1ls");                            
-                            print_camera(2,65,cSAFE);
-                            estado = QR_TUTORIAL;
-                            print_left_arrow_black(5,123);
-
+                        } else if (main_pointer==cMAIN_QR){// Resources menu
+                            black_screen();
+                            resource_screen(resource_pointer);
+                            estado = RESOURCE_MENU;
                         }
                         pulsed_bt = NONE;
                         break;
@@ -3164,6 +3111,64 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     default:
+                        break;
+                }
+                break;
+            case RESOURCE_MENU:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        black_screen();
+                        white_screen();
+                        if (resource_pointer == cRESOURCE_tutorial) {
+                            draw_qr_code("youtu.be/8vy5LIxT1ls");
+                        } else if (resource_pointer == cRESOURCE_backup) {
+                            draw_qr_code("seedmate.github.io/Seedmate_HTML_backup/");
+                        } else if (resource_pointer == cRESOURCE_dice_test) {
+                            draw_qr_code("seedmate.github.io/Dice_tester/");
+                        }
+                        print_camera(2, 65, cSAFE);
+                        estado = RESOURCE_QR_VIEW;
+                        print_left_arrow_black(5, 123);
+                        pulsed_bt = NONE;
+                        break;
+                    case BACK_BT:
+                        black_screen();
+                        main_screen(main_pointer);
+                        estado = MAIN;
+                        pulsed_bt = NONE;
+                        break;
+                    case UP_BT:
+                        if (resource_pointer > 0) {
+                            resource_pointer--;
+                        }
+                        resource_screen(resource_pointer);
+                        pulsed_bt = NONE;
+                        break;
+                    case DOWN_BT:
+                        if (resource_pointer < (cRESOURCE_n_opt - 1)) {
+                            resource_pointer++;
+                        }
+                        resource_screen(resource_pointer);
+                        pulsed_bt = NONE;
+                        break;
+                    default:
+                        pulsed_bt = NONE;
+                        break;
+                }
+                break;
+            case RESOURCE_QR_VIEW:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        pulsed_bt = NONE;
+                        break;
+                    case BACK_BT:
+                        black_screen();
+                        resource_screen(resource_pointer);
+                        estado = RESOURCE_MENU;
+                        pulsed_bt = NONE;
+                        break;
+                    default:
+                        pulsed_bt = NONE;
                         break;
                 }
                 break;
@@ -3284,12 +3289,11 @@ int main ( void ){
                 switch (pulsed_bt) {
                     case OK_BT:
                         black_screen();
-                        if (obfuscation_pointer==cOBFUS_NOT ){// negate seed words
+                        if (obfuscation_pointer==cOBFUS_NOT ){// Negate seed words
                             sel_input_screen(selinput_pointer);
                             estado = SEL_INPUT;
-                            //seed_pointer=2; //word pick
 
-                        } else if (obfuscation_pointer==cOBFUS_SHIFT){// shift words
+                        } else if (obfuscation_pointer==cOBFUS_SHIFT){// Shift words
                             sel_shift_screen(shift_pointer);
                             estado = SEL_SHIFT;
                         } else {// cOBFUS_ADD
@@ -3336,7 +3340,7 @@ int main ( void ){
                         }   else {
                             entropy_bits = cENTROPY_BITS24W;
                         }
-                        if (main_pointer==cMAIN_XOR) { // xor stuff
+                        if (main_pointer==cMAIN_XOR) { // XOR stuff
                             xor_merge_words_available=0; // Reset
                             for (int i = 0; i < 32; i++){
                                 xor_merge_word1[i] = 0;
@@ -3353,7 +3357,7 @@ int main ( void ){
                                 print_word_number_top(word_number, xor_merge_words_available, main_pointer,  word_number_text);
                                 print_previous_confirmed_word(word_number, word_number_text);
                                 print_keyboard_with_validation(lt_idx, found_bool, word);
-                            }else{//SD
+                            }else{// SD
                                 black_screen();
                                 estado = SEL_SD_BLOCK_XOR;
                                 sel_sd_block_screen_generic(SDblock_pointer);
@@ -3365,7 +3369,7 @@ int main ( void ){
                             pulsed_bt = NONE;
                             break;
 
-                        } else if (main_pointer==cMAIN_LOAD || main_pointer==cMAIN_OBFUS || main_pointer==cMAIN_SSS ){//check seed or obfuscate/SSS
+                        } else if (main_pointer==cMAIN_LOAD || main_pointer==cMAIN_OBFUS || main_pointer==cMAIN_SSS ){// Check seed or obfuscate/SSS
                             black_screen();
                             estado = WRITE_WORD;
                             word_number=1;
@@ -3381,12 +3385,12 @@ int main ( void ){
                             estado = DICE_STRING_INPUT;
                             int target = (size_pointer == cSIZE_12) ? 50 : 100;
                             init_dice_string_input_screen(dice_input_idx, dice_string_buf, target);
-                        } else if (seed_pointer==cSEED_dice || seed_pointer==cSEED_coin){// roll dice or coins
+                        } else if (seed_pointer==cSEED_dice || seed_pointer==cSEED_coin){// Roll dice or coins
                             black_screen();
                             print_diceroll_screen(size_pointer, seed_pointer);
                             estado = ROLL_DICE1;
                             bit_count_dice = 0;
-                        } else if (seed_pointer==cSEED_word){//word pick
+                        } else if (seed_pointer==cSEED_word){// Word pick
                             black_screen();
                             estado = WRITE_WORD;
                             word_number=1;
@@ -3395,7 +3399,7 @@ int main ( void ){
                             print_word_number_top(word_number, xor_merge_words_available, main_pointer,  word_number_text);
                             print_previous_confirmed_word(word_number, word_number_text);
                             print_keyboard_with_validation(lt_idx, found_bool, word);
-                        }   else if (seed_pointer==cSEED_timer){//word pick
+                        }   else if (seed_pointer==cSEED_timer){// Stopwatch test only
                             black_screen();
                             estado = TMR_INPUT;
                             dice_x_pointer = 0;
@@ -3500,8 +3504,6 @@ int main ( void ){
                 switch (pulsed_bt) {
                     case OK_BT:
                         black_screen();
-                        //print_selsize_screen(size_pointer);
-                        //estado = SEL_SIZE;
                         print_nbits_screen(shift_nbits);
                         estado = SEL_NBITS_SHIFT;
                         pulsed_bt = NONE;
@@ -3540,8 +3542,6 @@ int main ( void ){
                 switch (pulsed_bt) {
                     case OK_BT:
                         black_screen();
-                        //print_selsize_screen(size_pointer);
-                        //estado = SEL_SIZE;
                         print_nbits_screen(shift_nbits);
                         estado = SEL_NBITS_SHIFT;
                         pulsed_bt = NONE;
@@ -3579,8 +3579,6 @@ int main ( void ){
             case SEL_SD_BLOCK:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        //clear preview text
-                        //drawtext(50, 20 + 10*SDblock_pointer, "           ", ST7735_BLACK, ST7735_BLACK, 1);
                         if (main_pointer==cMAIN_ERASESD) { // Erase
                             for (int i = 0; i < 512; i++) buffer[i] = 0; // Clear the sector buffer
                             if (sd_write_block(SDblock_pointer+SD_page*cSDBLOCK_n_opt, buffer)) { // Write the block
@@ -3625,9 +3623,8 @@ int main ( void ){
                                         sss_split_kofm(data_array_256b /* c0 */,
                                             coeffs, SSS_K /* k threshold */,
                                             LEN,
-                                            cN_MAX /* total shares */, // always kept at max capacity
+                                            cN_MAX /* total shares */, // Always kept at max capacity
                                             shares);
-                                        //extract_11bit_groups(append_checksum(shares[selected_share_id],16), 17);
                                         for (int i = 0; i < 16 + size_pointer*16; i++) data_array_256b[i]=shares[selected_share_id-1][i];
 
                                     }else if (main_pointer==cMAIN_OBFUS) {
@@ -3647,7 +3644,7 @@ int main ( void ){
                                     }
                                     redraw_show_seed_with_offset();
 
-                                } else {//checksum error
+                                } else {// Checksum error
                                     drawtext(70, 20 + 10*SDblock_pointer, "NO SEED", ST7735_RED, ST7735_BLACK, 1);
                                     pulsed_bt = NONE;
                                     break;
@@ -3723,8 +3720,6 @@ int main ( void ){
             case SEL_SD_BLOCK_WR:
                 switch (pulsed_bt) {
                     case OK_BT: // Write
-                        //clear preview
-                        //drawtext(50, 20 + 10*SDblock_pointer, "           ", ST7735_BLACK, ST7735_BLACK, 1);
                         // Reinitialize the SD card if the first read fails.
                         if (!sd_read_block(SDblock_pointer +SD_page*cSDBLOCK_n_opt, buffer)) {
                             sd_init();
@@ -3799,8 +3794,6 @@ int main ( void ){
             case SEL_SD_BLOCK_XOR:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        //clear preview
-                        //drawtext(50, 20 + 10*SDblock_pointer, "           ", ST7735_BLACK, ST7735_BLACK, 1);
                         // Reinitialize the SD card if the first read fails.
                         if (!sd_read_block(SDblock_pointer +SD_page*cSDBLOCK_n_opt, buffer)) {
                             sd_init();
@@ -3846,7 +3839,7 @@ int main ( void ){
                                     break;
                                 }
 
-                            } else {//checksum error
+                            } else {// Checksum error
                                 drawtext(70, 20 + 10*SDblock_pointer, "NO SEED", ST7735_RED, ST7735_BLACK, 1);
                                 pulsed_bt = NONE;
                                 break;
@@ -3911,8 +3904,6 @@ int main ( void ){
            case SEL_SD_BLOCK_MERGE:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        //clear preview
-                        //drawtext(50, 20 + 10*SDblock_pointer, "           ", ST7735_BLACK, ST7735_BLACK, 1);
                         // Reinitialize the SD card if the first read fails.
                         if (!sd_read_block(SDblock_pointer +SD_page*cSDBLOCK_n_opt, buffer)) {
                             sd_init();
@@ -3957,7 +3948,7 @@ int main ( void ){
 
                                 }
 
-                            } else {//checksum error
+                            } else {// Checksum error
                                 drawtext(70, 20 + 10*SDblock_pointer, "NO SEED FOUND", ST7735_RED, ST7735_BLACK, 1);
                                 pulsed_bt = NONE;
                                 break;
@@ -4033,7 +4024,7 @@ int main ( void ){
                                 print_selsize_screen(size_pointer);
                                 estado = SEL_SIZE;
                             }
-                        } else { //cFROMSD
+                        } else { // cFROMSD
                             black_screen();
                             if (seed_pointer == cSEED_triple && main_pointer == cMAIN_create) {
                                 sel_sd_block_screen_generic(SDblock_pointer);
@@ -4052,7 +4043,7 @@ int main ( void ){
                                 size_pointer=cSIZE_24;
                                 entropy_bits = cENTROPY_BITS24W;
                                 print_TMR_screen(size_pointer);
-                            }else{// cMAIN_OBFUS o cMAIN_LOAD
+                            }else{// cMAIN_OBFUS or cMAIN_LOAD
                                 sel_sd_block_screen_generic(SDblock_pointer);
                                 estado = SEL_SD_BLOCK;
                             }
@@ -4119,7 +4110,7 @@ int main ( void ){
                         if (sss_pointer==cSPLIT){
                             print_selkn_screen(SSS_K, SSS_N, sel_K_N);
                             estado = SEL_KN;
-                        } else {//merge
+                        } else {// Merge
                             print_selk_screen(SSS_K);
                             estado = SEL_K;
                         }
@@ -4244,7 +4235,7 @@ int main ( void ){
                         print_word_number_top(word_number, xor_merge_words_available, main_pointer,  word_number_text);
                         print_previous_confirmed_word(word_number, word_number_text);
                         print_keyboard_with_validation(lt_idx, found_bool, word);
-                    case BACK_BT://no return here
+                    case BACK_BT:// No return here
 
                         pulsed_bt = NONE;
                         break;
@@ -4347,14 +4338,13 @@ int main ( void ){
                         break;
                 }
                 break;
-            case ROLL_DICE1:  /////  ROLL DICE   or COIN/////////////
+            case ROLL_DICE1:  /////  ROLL DICE or COIN /////////////
                 switch (pulsed_bt) {
                     case OK_BT:
                         pulsed_bt = NONE;
                         if (seed_pointer == cSEED_dice) {
                             append_entropy_bits("11", 2);
                             if (check_dice_count_end()) break;
-                            //rectan(0, 35, 159, 43, BLACK); 
                             draw_shared_entropy_building();
                             update_dice_bit_count_display(bit_count_dice);
                         }
@@ -4364,7 +4354,6 @@ int main ( void ){
                         if (seed_pointer == cSEED_dice) {
                             append_entropy_bits("01", 2);
                             if (check_dice_count_end()) break;
-                            //rectan(0, 35, 159, 43, BLACK); 
                             draw_shared_entropy_building();
                             update_dice_bit_count_display(bit_count_dice);
                         } else if (seed_pointer == cSEED_coin) {
@@ -4372,7 +4361,6 @@ int main ( void ){
                                 bit_count_dice--;
                                 set_bit(data_array_256b, bit_count_dice, 0);
                                 last_input_len = 0; // Clear purple highlight on delete
-                                //rectan(0, 35, 159, 43, BLACK); 
                                 draw_shared_entropy_building();
                                 update_dice_bit_count_display(bit_count_dice);
                             }
@@ -4383,7 +4371,6 @@ int main ( void ){
                         if (seed_pointer == cSEED_dice) {
                             append_entropy_bits("10", 2);
                             if (check_dice_count_end()) break;
-                            //rectan(0, 35, 159, 43, BLACK); 
                             draw_shared_entropy_building();
                             update_dice_bit_count_display(bit_count_dice);
                         }
@@ -4396,7 +4383,6 @@ int main ( void ){
                             append_entropy_bits("1", 1);
                         }
                         if (check_dice_count_end()) break;
-                        //rectan(0, 35, 159, 43, BLACK); 
                         draw_shared_entropy_building();
                         update_dice_bit_count_display(bit_count_dice);
                         break;
@@ -4408,7 +4394,6 @@ int main ( void ){
                             append_entropy_bits("0", 1);
                         }
                         if (check_dice_count_end()) break;
-                        //rectan(0, 35, 159, 43, BLACK); 
                         draw_shared_entropy_building();
                         update_dice_bit_count_display(bit_count_dice);
                         break;
@@ -4417,7 +4402,6 @@ int main ( void ){
                         if (seed_pointer == cSEED_dice) {
                             append_entropy_bits("00", 2);
                             if (check_dice_count_end()) break;
-                            //rectan(0, 35, 159, 43, BLACK); 
                             draw_shared_entropy_building();
                             update_dice_bit_count_display(bit_count_dice);
                         }
@@ -4435,11 +4419,11 @@ int main ( void ){
                         if (dice_input_idx < 6) {
                             if (len < char_hash_limit-1) {
                                 char new_char = '1' + dice_input_idx;
-                                // 1. Añadimos al buffer
+                                // 1. Add to buffer
                                 add_char_dice(dice_string_buf, dice_input_idx + 1, char_hash_limit);
-                                // 2. Delta update: pintamos el nuevo caracter en pantalla
+                                // 2. Delta update: draw the new character on screen
                                 update_dice_string_char(len, new_char, false);
-                                // 3. Actualizamos el contador
+                                // 3. Update the counter
                                 print_dice_string_counter(len + 1, target);
                                 // 4. Refresh keyboard to update DONE color if target is reached
                                 print_dice_string_keyboard(dice_input_idx, len + 1, target);
@@ -4481,11 +4465,11 @@ int main ( void ){
                         int len = strlen(dice_string_buf);
                         
                         if (len > 0) {
-                            // 1. Delta update: borramos el último caracter de la pantalla
+                            // 1. Delta update: erase the last character from the screen
                             update_dice_string_char(len - 1, ' ', true);
-                            // 2. Borramos del buffer
+                            // 2. Delete from buffer
                             remove_last_char(dice_string_buf);
-                            // 3. Actualizamos el contador
+                            // 3. Update the counter
                             print_dice_string_counter(len - 1, target);
                             
                             // Prevent cursor from being stuck on DONE if length falls below target
@@ -4630,7 +4614,7 @@ int main ( void ){
                                         pulsed_bt = NONE;
                                         break;
                                     }
-                                    if (main_pointer !=cMAIN_create) { // check checksum
+                                    if (main_pointer !=cMAIN_create) { // Check checksum
                                         if(!matches_last_word_checksum(data_array_256b,result,size_pointer)){
                                             if ((main_pointer==cMAIN_XOR) || ((main_pointer==cMAIN_SSS) & (sss_pointer==cMERGE))) {
                                                 show_word_list_retry_error();
@@ -4664,7 +4648,7 @@ int main ( void ){
                                         sss_split_kofm(data_array_256b /* c0 */,
                                             coeffs, SSS_K /* k threshold */,
                                             LEN,
-                                            cN_MAX /* total shares */, // always kept at max capacity
+                                            cN_MAX /* total shares */, // Always kept at max capacity
                                             shares);
                                         for (int i = 0; i < 16 + size_pointer*16; i++) data_array_256b[i]=shares[selected_share_id-1][i];
 
@@ -4845,6 +4829,7 @@ int main ( void ){
                     default:
                         break;
                 }
+                break;
             case SHOW_SEED:
                 switch (pulsed_bt) {
                     case OK_BT:
@@ -4892,7 +4877,7 @@ int main ( void ){
                         estado=SEL_SD_BLOCK_WR;
                         pulsed_bt = NONE;
                         break;
-                    case RIGTH_BT: //compact QR
+                    case RIGTH_BT: // Compact QR
                         white_screen();
                         draw_compactqr_code(16 + size_pointer*16, data_array_256b);
                         print_camera(2,50,cNOTSAFE);
@@ -4907,6 +4892,7 @@ int main ( void ){
                     default:
                         break;
                 }
+                break;
            case SHOW_QRSEED:
                 switch (pulsed_bt) {
                     case OK_BT:
@@ -5064,7 +5050,6 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     default:
-                        pulsed_bt = NONE;
                         break;
                 }
                 break;
