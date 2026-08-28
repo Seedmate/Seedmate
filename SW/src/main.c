@@ -191,7 +191,7 @@ int dice_y_pointer = 25;
 int dice_mode_pointer = 0;
 int hash_mode_pointer = 0;
 
-#define char_hash_limit 301
+#define char_hash_limit 501
 char dice_string_buf[char_hash_limit] = {0};
 int dice_input_idx = 0; // 0-5 for '1'-'6', 6 for DONE
 
@@ -1225,18 +1225,46 @@ void print_dice_string_keyboard(int sel, int current_len, int target) {
 // Only update the modified character to speed up
 void update_dice_string_char(int index, char c, bool is_delete) {
     int chars_per_line = 25;
-    int line = index / chars_per_line;
-    int col = index % chars_per_line;
+    int screen_capacity = 200; // 8 lines * 25 characters
+    
+    // Wrap the index to fit within the 200-character screen limit
+    int wrapped_index = index % screen_capacity;
+    int wrap_count = index / screen_capacity;
+    
+    int line = wrapped_index / chars_per_line;
+    int col = wrapped_index % chars_per_line;
     
     // 1 letter = 5 pixels width + 1 pixel space = 6
     int x = 5 + (col * 6); 
     // Start higher at Y=14 (just below the counter) and use 9px line spacing to prevent overlap
     int y = 14 + (line * 9);
     
-    char single_char[2] = { is_delete ? ' ' : c, '\0' };
+    char single_char[2] = { '\0', '\0' };
+    uint16_t color;
     
-    // When deleting, write black on top
-    drawtext(x, y, single_char, ST7735_CYAN, ST7735_BLACK, 1);
+    if (is_delete) {
+        if (wrap_count > 0) {
+            // Restore the character from the previous page
+            single_char[0] = dice_string_buf[index - screen_capacity];
+            color = (wrap_count == 1) ? ST7735_CYAN : ST7735_YELLOW;
+        } else {
+            // Erase character on the first page by redrawing the exact same character in BLACK
+            single_char[0] = dice_string_buf[index]; 
+            color = ST7735_BLACK;
+        }
+    } else {
+        single_char[0] = c;
+        // Alternate colors based on how many times the screen has wrapped
+        if (wrap_count == 0) {
+            color = ST7735_CYAN;   // 1st page (0-199)
+        } else if (wrap_count == 1) {
+            color = ST7735_YELLOW; // 2nd page (200-399)
+        } else {
+            color = ST7735_MAGENTA; // 3rd page and beyond
+        }
+    }
+    
+    drawtext(x, y, single_char, color, ST7735_BLACK, 1);
 }
 
 void init_dice_string_input_screen(int sel, const char* str, int target) {
