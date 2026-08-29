@@ -354,6 +354,14 @@ void PBKDF2_HMAC_SHA512(const char *password, const char *salt,
             if (j % 16 == 0) {
                 SYS_Tasks(); 
             }
+            
+            // NEW: Simple UI Progress Bar 
+            // 2048 iterations / 20 = ~102. Draw a new block every 5%.
+            if (j % 102 == 0) {
+                int chunk = j / 102; // Yields 1 through 20
+                // Paints a small 4x10 pixel green block across the screen
+                rectan(20 + (chunk * 5), 70, 24 + (chunk * 5), 80, ST7735_GREEN);
+            }
         }
 
         size_t offset = (i - 1) * SHA512_SIZE;
@@ -1485,12 +1493,12 @@ void print_child_config_screen(void) {
     uint16_t index_color = (bip85_cursor == 1) ? ST7735_ORANGE : ST7735_WHITE;
 
     const char *size_str = (bip85_size == cSIZE_12) ? "12 words" : "24 words";
-    drawtext(1, 30, (char*)size_str, size_color, ST7735_BLACK, 1);
+    drawtext(10, 30, (char*)size_str, size_color, ST7735_BLACK, 1);
 
     char index_str[12];
     u16_to_str((unsigned int)bip85_index, index_str);
     rectan(80, 30, 159, 38, BLACK); // clear index area
-    drawtext(80, 30, index_str, index_color, ST7735_BLACK, 1);
+    drawtext(100, 30, index_str, index_color, ST7735_BLACK, 1);
 
     grid_bip85();
 }
@@ -2897,6 +2905,26 @@ bool sd_read_block(uint32_t sector, uint8_t *buffer) {
 uint8_t buffer[512];
 
 
+static int load_and_verify_sd_slot(int absolute_slot) {
+    if (!sd_read_block(absolute_slot, buffer)) {
+        sd_init();
+    }
+    if (sd_read_block(absolute_slot, buffer)) {
+        BYTE checksum_SD = 1;
+        BYTE XOR_SD = buffer[cSD_XOR_ADDR];
+        for (int i = 0; i < 32; i++) {
+            data_array_256b[i] = buffer[i] ^ XOR_SD;
+            checksum_SD += buffer[i];
+        }
+        if (checksum_SD == buffer[cSD_CHECKSUM_ADDR]) {
+            return 0; // Success
+        }
+        return 2; // Checksum Error
+    }
+    return 1; // SD Error
+}
+
+
 void print_slots(int sel){
 
     for (int i = 0; i < cSDBLOCK_n_opt; i++) {
@@ -3260,7 +3288,7 @@ int main ( void ){
 
     uint16_t time_now ;
 
-    BYTE checksum_SD =0;
+    //BYTE checksum_SD =0;
     BYTE XOR_SD =0;
 
     BYTE xor_merge_word1[32] = {0};
@@ -3991,76 +4019,58 @@ int main ( void ){
                             break;
 
                         }else{ // Read
-
-                            // Reinitialize the SD card if the first read fails.
-                            if (!sd_read_block(SDblock_pointer +SD_page*cSDBLOCK_n_opt, buffer)) {
-                                sd_init();
-                            }
-                            if (sd_read_block(SDblock_pointer +SD_page*cSDBLOCK_n_opt, buffer)) {
-                                checksum_SD=1; // Reset checksum and account for the checksum byte
-                                XOR_SD = buffer[cSD_XOR_ADDR];
-                                for (int i = 0; i < 32; i++){
-                                    data_array_256b[i]=buffer[i] ^ XOR_SD;// Load entropy data from SD
-                                    checksum_SD+=buffer[i]; // Recompute checksum
-                                }
-                                // Validate checksum.
-                                if (checksum_SD==buffer[cSD_CHECKSUM_ADDR]){
-
-                                    size_pointer=buffer[cSD_SIZE_ADDR];
-                                    if (main_pointer == cMAIN_create && seed_pointer == cSEED_triple) {
-                                        if (size_pointer != cSIZE_24) {
-                                            drawtext(70, 20 + 10*SDblock_pointer, "WRONG SIZE", ST7735_RED, ST7735_BLACK, 1);
-                                            pulsed_bt = NONE;
-                                            break;
-                                        }
-                                        drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
-                                        black_screen();
-                                        estado = PROCESS_TRIPLE;
-                                        pulsed_bt = NONE;
-                                        break;
-                                    } else if (main_pointer==cMAIN_SSS){
-                                        drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
-                                        black_screen();
-                                        sss_split_kofm(data_array_256b /* c0 */,
-                                            coeffs, SSS_K /* k threshold */,
-                                            LEN,
-                                            cN_MAX /* total shares */, // Always kept at max capacity
-                                            shares);
-                                        for (int i = 0; i < 16 + size_pointer*16; i++) data_array_256b[i]=shares[selected_share_id-1][i];
-
-                                    }else if (main_pointer==cMAIN_OBFUS) {
-                                        drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
-                                        black_screen();
-                                        if (obfuscation_pointer==cOBFUS_NOT){
-                                            not_operator(data_array_256b,16 + size_pointer*16);
-                                        } else if (obfuscation_pointer==cOBFUS_SHIFT){
-                                            if (shift_pointer== cLEFT){
-                                                for (int i = 0; i < shift_nbits; i++) shift_left(data_array_256b,16 + size_pointer*16);
-                                            } else {
-                                                for (int i = 0; i < shift_nbits; i++) shift_right(data_array_256b,16 + size_pointer*16);
-                                            }
-                                        } else if (obfuscation_pointer==cOBFUS_ADD){
-                                            addsub_11bit_groups(16 + size_pointer*16, shift_nbits, add_pointer);
-                                        }
-                                    }else if (main_pointer==cMAIN_BIP85) {
-                                        drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
-                                        black_screen();
-                                        drawtext(20, 50, "COMPUTING CHILD", ST7735_WHITE, ST7735_BLACK, 1);
-                                        drawtext(20, 65, "MNEMONIC...", ST7735_WHITE, ST7735_BLACK, 1);
-                                        estado = PROCESS_BIP85;
+                            int sd_status = load_and_verify_sd_slot(SDblock_pointer + SD_page * cSDBLOCK_n_opt);
+                            if (sd_status == 0) {
+                                size_pointer=buffer[cSD_SIZE_ADDR];
+                                if (main_pointer == cMAIN_create && seed_pointer == cSEED_triple) {
+                                    if (size_pointer != cSIZE_24) {
+                                        drawtext(70, 20 + 10*SDblock_pointer, "WRONG SIZE", ST7735_RED, ST7735_BLACK, 1);
                                         pulsed_bt = NONE;
                                         break;
                                     }
-                                    redraw_show_seed_with_offset();
+                                    drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
+                                    black_screen();
+                                    estado = PROCESS_TRIPLE;
+                                    pulsed_bt = NONE;
+                                    break;
+                                } else if (main_pointer==cMAIN_SSS){
+                                    drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
+                                    black_screen();
+                                    sss_split_kofm(data_array_256b /* c0 */,
+                                        coeffs, SSS_K /* k threshold */,
+                                        LEN,
+                                        cN_MAX /* total shares */, // Always kept at max capacity
+                                        shares);
+                                    for (int i = 0; i < 16 + size_pointer*16; i++) data_array_256b[i]=shares[selected_share_id-1][i];
 
-                                } else {// Checksum error
-                                    drawtext(70, 20 + 10*SDblock_pointer, "NO SEED", ST7735_RED, ST7735_BLACK, 1);
+                                }else if (main_pointer==cMAIN_OBFUS) {
+                                    drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
+                                    black_screen();
+                                    if (obfuscation_pointer==cOBFUS_NOT){
+                                        not_operator(data_array_256b,16 + size_pointer*16);
+                                    } else if (obfuscation_pointer==cOBFUS_SHIFT){
+                                        if (shift_pointer== cLEFT){
+                                            for (int i = 0; i < shift_nbits; i++) shift_left(data_array_256b,16 + size_pointer*16);
+                                        } else {
+                                            for (int i = 0; i < shift_nbits; i++) shift_right(data_array_256b,16 + size_pointer*16);
+                                        }
+                                    } else if (obfuscation_pointer==cOBFUS_ADD){
+                                        addsub_11bit_groups(16 + size_pointer*16, shift_nbits, add_pointer);
+                                    }
+                                }else if (main_pointer==cMAIN_BIP85) {
+                                    drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
+                                    black_screen();
+                                    drawtext(30, 30, "COMPUTING CHILD", ST7735_WHITE, ST7735_BLACK, 1);
+                                    drawtext(30, 45, "MNEMONIC...", ST7735_WHITE, ST7735_BLACK, 1);
+                                    estado = PROCESS_BIP85;
                                     pulsed_bt = NONE;
                                     break;
                                 }
+                                redraw_show_seed_with_offset();
+                            } else if (sd_status == 2) {
+                                drawtext(70, 20 + 10*SDblock_pointer, "NO SEED", ST7735_RED, ST7735_BLACK, 1);
                                 pulsed_bt = NONE;
                                 break;
-
                             } else {
                                 black_screen();
                                 drawtext(10, 30, "SD ERROR", ST7735_RED, ST7735_BLACK, 1);
@@ -4068,6 +4078,8 @@ int main ( void ){
                                 pulsed_bt = NONE;
                                 break;
                             }
+                            pulsed_bt = NONE;
+                            break;
                         }
 
                     case BACK_BT:
@@ -4203,19 +4215,9 @@ int main ( void ){
             case SEL_SD_BLOCK_XOR:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        // Reinitialize the SD card if the first read fails.
-                        if (!sd_read_block(SDblock_pointer +SD_page*cSDBLOCK_n_opt, buffer)) {
-                            sd_init();
-                        }
-                        if (sd_read_block(SDblock_pointer+SD_page*cSDBLOCK_n_opt, buffer)) {
-                            checksum_SD=1; // Reset checksum and account for the checksum byte
-                            XOR_SD = buffer[cSD_XOR_ADDR];
-                            for (int i = 0; i < 32; i++){
-                                data_array_256b[i]=buffer[i]^ XOR_SD; // Load entropy data from SD
-                                checksum_SD+=buffer[i]; // Recompute checksum
-                            }
-                            // Validate checksum.
-                            if (checksum_SD==buffer[cSD_CHECKSUM_ADDR]){
+                        {
+                            int sd_status = load_and_verify_sd_slot(SDblock_pointer + SD_page * cSDBLOCK_n_opt);
+                            if (sd_status == 0) {
                                 // Check size
                                 if (buffer[cSD_SIZE_ADDR]==size_pointer){
                                     drawtext(70, 20 + 10*SDblock_pointer, "XOR INPUT OK", ST7735_GREEN, ST7735_BLACK, 1);
@@ -4248,18 +4250,17 @@ int main ( void ){
                                     break;
                                 }
 
-                            } else {// Checksum error
+                            } else if (sd_status == 2) {// Checksum error
                                 drawtext(70, 20 + 10*SDblock_pointer, "NO SEED", ST7735_RED, ST7735_BLACK, 1);
                                 pulsed_bt = NONE;
                                 break;
+                            } else {
+                                black_screen();
+                                drawtext(10, 30, "SD ERROR", ST7735_RED, ST7735_BLACK, 1);
+                                estado = END_MODE;
+                                pulsed_bt = NONE;
+                                break;
                             }
-                            pulsed_bt = NONE;
-                            break;
-
-                        } else {
-                            black_screen();
-                            drawtext(10, 30, "SD ERROR", ST7735_RED, ST7735_BLACK, 1);
-                            estado = END_MODE;
                             pulsed_bt = NONE;
                             break;
                         }
@@ -4313,19 +4314,9 @@ int main ( void ){
            case SEL_SD_BLOCK_MERGE:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        // Reinitialize the SD card if the first read fails.
-                        if (!sd_read_block(SDblock_pointer +SD_page*cSDBLOCK_n_opt, buffer)) {
-                            sd_init();
-                        }
-                        if (sd_read_block(SDblock_pointer+SD_page*cSDBLOCK_n_opt, buffer)) {
-                            checksum_SD=1; // Reset checksum and account for the checksum byte
-                            XOR_SD = buffer[cSD_XOR_ADDR];
-                            for (int i = 0; i < 32; i++){
-                                data_array_256b[i]=buffer[i]^ XOR_SD; // Load entropy data from SD
-                                checksum_SD+=buffer[i]; // Recompute checksum
-                            }
-                            // Validate checksum.
-                            if (checksum_SD==buffer[cSD_CHECKSUM_ADDR]){
+                        {
+                            int sd_status = load_and_verify_sd_slot(SDblock_pointer + SD_page * cSDBLOCK_n_opt);
+                            if (sd_status == 0) {
                                 // Load size from the first share and validate the rest.
                                 if (shares_loaded==0){
                                     size_pointer=buffer[cSD_SIZE_ADDR];
@@ -4356,19 +4347,17 @@ int main ( void ){
                                     break;
 
                                 }
-
-                            } else {// Checksum error
+                            } else if (sd_status == 2) {// Checksum error
                                 drawtext(70, 20 + 10*SDblock_pointer, "NO SEED FOUND", ST7735_RED, ST7735_BLACK, 1);
                                 pulsed_bt = NONE;
                                 break;
+                            } else {
+                                black_screen();
+                                drawtext(10, 30, "SD ERROR", ST7735_RED, ST7735_BLACK, 1);
+                                estado = END_MODE;
+                                pulsed_bt = NONE;
+                                break;
                             }
-                            pulsed_bt = NONE;
-                            break;
-
-                        } else {
-                            black_screen();
-                            drawtext(10, 30, "SD ERROR", ST7735_RED, ST7735_BLACK, 1);
-                            estado = END_MODE;
                             pulsed_bt = NONE;
                             break;
                         }
