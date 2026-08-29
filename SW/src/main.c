@@ -104,7 +104,6 @@
 #define cSIZE_n_opt 2
 #define cOBFUS_n_opt 3
 #define cXOR_n_opt 3
-#define cSHIFT_n_opt 2
 #define cSSS_n_opt 2
 #define cQR_n_opt 2
 #define cSDBLOCK_n_opt 8
@@ -113,8 +112,8 @@
 #define cHASH_MODE_n_opt 2
 #define cRESOURCE_n_opt 4
 #define cEND_OF_LINE 150
-#define cENTROPY_BITS12W 127//127
-#define cENTROPY_BITS24W 255//255
+#define cENTROPY_BITS12W 127
+#define cENTROPY_BITS24W 255
 #define cCARD_MAX_HISTORY 128
 
 
@@ -329,7 +328,7 @@ void PBKDF2_HMAC_SHA512(const char *password, const char *salt,
     uint32_t blockCount = (dkLen + SHA512_SIZE - 1) / SHA512_SIZE;
     BYTE U[SHA512_SIZE];
     BYTE T[SHA512_SIZE];
-    BYTE saltBlock[32]; // <-- FIX: Reduced from 256 to safely fit in stack
+    BYTE saltBlock[32]; 
     size_t saltLen = strlen(salt);
 
     for (uint32_t i = 1; i <= blockCount; i++) {
@@ -350,16 +349,14 @@ void PBKDF2_HMAC_SHA512(const char *password, const char *salt,
                 T[k] ^= U[k];
             }
             
-            // FIX: Keep the system and watchdog happy during the heavy 2048-iteration hash loop
+            // Keep the system and watchdog happy during the heavy hash loop
             if (j % 16 == 0) {
                 SYS_Tasks(); 
             }
             
-            // NEW: Simple UI Progress Bar 
-            // 2048 iterations / 20 = ~102. Draw a new block every 5%.
+            // Simple UI Progress Bar 
             if (j % 102 == 0) {
                 int chunk = j / 102; // Yields 1 through 20
-                // Paints a small 4x10 pixel green block across the screen
                 rectan(20 + (chunk * 5), 70, 24 + (chunk * 5), 80, ST7735_GREEN);
             }
         }
@@ -387,7 +384,6 @@ static void get_mnemonic_string(char *out_str) {
     int bit_index = 0;
     int words_extracted = 0;
     
-    // Size of c_buf is entropy_bytes + 1
     for (size_t i = 0; i < (entropy_bytes + 1) * 8; i++) {
         int byte_idx = i / 8;
         int bit_pos = 7 - (i % 8);
@@ -416,7 +412,6 @@ static void get_mnemonic_string(char *out_str) {
             if (words_extracted == target_words) break;
         }
     }
-    //free(c_buf);
 }
 
 static void add_256_mod_n(uint8_t *out, const uint8_t *a, const uint8_t *b) {
@@ -452,7 +447,6 @@ static void add_256_mod_n(uint8_t *out, const uint8_t *a, const uint8_t *b) {
     if (over) {
         int borrow = 0;
         for (int i = 31; i >= 0; i--) {
-            // Force strict integer wrapping to prevent compiler sign-promotion bugs
             int diff = (int)res[i] - (int)n[i] - borrow;
             if (diff < 0) {
                 diff += 256;
@@ -522,46 +516,14 @@ static void process_bip85_derivation(void) {
         
         HmacSha512(c, 32, data, 37, I);
         
-        // FIX 1: Proper BIP32 child key addition mod n
+        // Proper BIP32 child key addition mod n
         add_256_mod_n(k, I, k); // k_i = (I_L + k_par) % n
         memcpy(c, I + 32, 32);  // c_i = I_R
     }
     
-    // FIX 2: BIP85 explicitly requires HMAC-SHA512 step here using "bip-entropy-from-k"
+    // BIP85 explicitly requires HMAC-SHA512 step here using "bip-entropy-from-k"
     uint8_t bip85_hmac_out[64];
     HmacSha512((uint8_t *)"bip-entropy-from-k", 18, k, 32, bip85_hmac_out);
-    
-    /*
-    // --- DIAGNOSTIC OVERLAY ---
-    black_screen();
-    char dbg[6] = {0};
-    strncpy(dbg, mnemonic_str, 6);
-    
-    // 1. Check String Construction
-    drawtext(1, 10, "Mnem: ", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(40, 10, dbg, ST7735_YELLOW, ST7735_BLACK, 1);
-    
-    // 2. Check PBKDF2 Master Seed (First 4 bytes)
-    drawtext(1, 30, "Seed: ", ST7735_WHITE, ST7735_BLACK, 1);
-    draw_hex16(40, 30, (seed[0]<<8)|seed[1], 1, ST7735_YELLOW, ST7735_BLACK, 1);
-    draw_hex16(64, 30, (seed[2]<<8)|seed[3], 1, ST7735_YELLOW, ST7735_BLACK, 1);
-    
-    // 3. Check BIP32 Path Derivation (First 4 bytes of final child private key)
-    drawtext(1, 50, "k_out: ", ST7735_WHITE, ST7735_BLACK, 1);
-    draw_hex16(40, 50, (k[0]<<8)|k[1], 1, ST7735_YELLOW, ST7735_BLACK, 1);
-    draw_hex16(64, 50, (k[2]<<8)|k[3], 1, ST7735_YELLOW, ST7735_BLACK, 1);
-
-    // 4. Check BIP85 Hash (First 4 bytes of raw entropy)
-    drawtext(1, 70, "BIP85: ", ST7735_WHITE, ST7735_BLACK, 1);
-    draw_hex16(40, 70, (bip85_hmac_out[0]<<8)|bip85_hmac_out[1], 1, ST7735_YELLOW, ST7735_BLACK, 1);
-    draw_hex16(64, 70, (bip85_hmac_out[2]<<8)|bip85_hmac_out[3], 1, ST7735_YELLOW, ST7735_BLACK, 1);
-
-    drawtext(1, 100, "PRESS OK TO CONTINUE", ST7735_GREEN, ST7735_BLACK, 1);
-    
-    // Halt state machine until user manually verifies screen
-    while(BT_OK == 1) { SYS_Tasks(); } 
-    while(BT_OK == 0) { SYS_Tasks(); } // Wait for button release
-    // --- END DIAGNOSTIC --- */
     
     memset(data_array_256b, 0, 36);
     int target_bytes = (bip85_size == cSIZE_12) ? 16 : 32;
@@ -609,6 +571,7 @@ typedef enum
     SEL_SIZE,
     SEL_XOR,
     SEL_OBFUS,
+    OBFUS_CONFIG,
     ROLL_DICE1,
     SHOW_CHECKSUM_DETAILS,
     SHOW_SEED,
@@ -627,9 +590,6 @@ typedef enum
     RESOURCE_MENU,
     RESOURCE_QR_VIEW,
     WORD_LIST_ERROR,
-    SEL_SHIFT,
-    SEL_NBITS_SHIFT,
-    SEL_ADD_SUB,
     SEL_SHARE,
     TMR_INPUT,
     CARD_INPUT,
@@ -1205,7 +1165,6 @@ static void print_card_input_screen(void) {
     draw_card_bit_counter();
     draw_card_selection();
     
-    //rectan(0, 35, 159, 43, BLACK); 
     draw_shared_entropy_building();
     grid_keyboard();
 }
@@ -1518,6 +1477,36 @@ void print_child_config_screen(void) {
     grid_bip85();
 }
 
+// Unified Obfuscation Configuration Screen
+int obfus_cursor = 0;
+int obfus_dir_op = 0;
+int obfus_amount = 1;
+
+void print_obfus_config_screen(void) {
+    drawtext(1, 10, "Operation:", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(100, 10, "Amount:", ST7735_WHITE, ST7735_BLACK, 1);
+
+    uint16_t op_color = (obfus_cursor == 0) ? ST7735_ORANGE : ST7735_WHITE;
+    uint16_t amt_color = (obfus_cursor == 1) ? ST7735_ORANGE : ST7735_WHITE;
+
+    const char *op_str = "";
+    if (obfuscation_pointer == cOBFUS_SHIFT) {
+        op_str = (obfus_dir_op == 0) ? "LEFT SHIFT " : "RIGHT SHIFT";
+    } else {
+        op_str = (obfus_dir_op == 0) ? "ADD WORDS" : "SUB WORDS";
+    }
+    
+    drawtext(10, 30, (char*)op_str, op_color, ST7735_BLACK, 1);
+
+    char amt_str[12];
+    u16_to_str((unsigned int)obfus_amount, amt_str);
+    rectan(100, 30, 159, 38, BLACK); // clear amount area
+    drawtext(100, 30, amt_str, amt_color, ST7735_BLACK, 1);
+
+    grid_bip85(); // Left/Right/Up/Down/OK/Back
+}
+
+
 // Update only roll count
 void print_dice_string_counter(int current_len, int target) {
     char counter_text[24]; // Increased buffer size to fit the prefix
@@ -1798,32 +1787,6 @@ void print_xorsel_screen(int sel){
     grid_menu2();
 }
 
-void sel_shift_screen(int sel){
-    char* options[] = {
-        "CIRCULAR LEFT SHIFT",
-        "CIRCULAR RIGHT SHIFT"
-
-    };
-    for (int i = 0; i < cSHIFT_n_opt; i++) {
-        uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, 10 + i * 10, options[i], color, ST7735_BLACK, 1);
-    }
-    grid_menu2();
-}
-
-
-
-void sel_add_screen(int sel){
-    char* options[] = {
-        "ADD",
-        "SUBSTRACT"
-    };
-    for (int i = 0; i < cSHIFT_n_opt; i++) {
-        uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, 10 + i * 10, options[i], color, ST7735_BLACK, 1);
-    }
-    grid_menu2();
-}
 
 void sel_SSS_screen(int sel){
     char* options[] = {
@@ -2025,14 +1988,13 @@ static const char *search_unique_prefix(const char *prefix, char *result, size_t
         // Compare prefix with the currently pointed word
         if (strncmp(ptr, prefix, prefix_len) == 0) {
             
-            // --- NEW: EXACT MATCH CHECK ---
+            // --- EXACT MATCH CHECK ---
             // If the next character in the dictionary is null, the length is identical
             if (ptr[prefix_len] == '\0') {
                 unique_match = ptr;
                 match_count = 1;
                 break; // Exact match, stop searching
             }
-            // --------------------------------------------------
 
             unique_match = ptr;
             match_count++;
@@ -2167,7 +2129,7 @@ void redraw_show_seed_with_offset(void) {
     
     BYTE *c_buf = append_checksum(data_array_256b, 16 + size_pointer*16);
     extract_11bit_groups(c_buf, 16  + size_pointer*16 +1);
-    free(c_buf); // Fixed implicit memory leak
+    free(c_buf); 
     
 
     estado = SHOW_SEED;
@@ -2221,7 +2183,6 @@ void print_keyboard(int index, bool word_found, bool *valid_letters){
     int print_index_y=30;
     int current_index = 0;
     uint16_t color;
-    //drawtext(65,10, "____", ST7735_WHITE, ST7735_BLACK, 1);
 
     for (letra = 'A'; letra <= 'Z'; letra++) {
         letter_text[0] = letra;
@@ -2555,7 +2516,7 @@ static bool matches_last_word_checksum(BYTE *data_array, char *word_user, int se
     }
 
     matches = check_last_word(checksum_buffer, (size_t)(17 + 16 * sel_size), word_user);
-    //free(checksum_buffer);
+    
     return matches;
 }
 
@@ -2619,7 +2580,7 @@ const char* refresh_word_input_preview(char *word, char *result, size_t result_s
 
     drawtext(60, 10, word, ST7735_WHITE, ST7735_BLACK, 1);
 
-    // --- DEAD CODE REMOVED: No more ST7735_RED "nada" checking ---
+    
     if (found != NULL) {
         clear_write_word_current_display();
         drawtext(60, 10, result, ST7735_GREEN, ST7735_BLACK, 1);
@@ -2630,19 +2591,7 @@ const char* refresh_word_input_preview(char *word, char *result, size_t result_s
     return found;
 }
 
-void print_nbits_screen(int shift_nbits){
-    char shift_nbits_text[6];
-    drawtext(70,30, "    ", ST7735_BLACK, ST7735_BLACK, 2);
-    u16_to_str((unsigned int)shift_nbits, shift_nbits_text);
-    if (main_pointer==cMAIN_OBFUS && obfuscation_pointer==cOBFUS_SHIFT){
-        drawtext(10,15, "NUMBER OF BITS TO SHIFT:", ST7735_WHITE, ST7735_BLACK, 1);
-    } else {
-       drawtext(10,15, "ADD/SUB TO EACH WORD:", ST7735_WHITE, ST7735_BLACK, 1);
-    }
-    drawtext(70,30, shift_nbits_text, ST7735_ORANGE, ST7735_BLACK, 2);
-    grid_nbits();
 
-}
 
 void print_selkn_screen(int k, int n, int sel){
     char k_text[3];
@@ -3197,6 +3146,13 @@ bool check_dice_count_end(){
 // State Machine Transition Helpers
 // ============================================================================
 
+// Helper to transition to the SEL_SD_BLOCK screen
+PULSED_BT_t transition_to_sd_block(int sd_ptr) {
+    black_screen();
+    sel_sd_block_screen_generic(sd_ptr);
+    estado = SEL_SD_BLOCK;
+    return NONE;
+}
 // Helper to transition to the MAIN screen
 PULSED_BT_t transition_to_main(void) {
     black_screen();
@@ -3287,14 +3243,12 @@ int main ( void ){
 
     // Menu pointer handling
     int xor_pointer = 0;
-    int shift_pointer = 0;
-    int add_pointer = 0;
+
 
 
     int SSS_K = 2;
     int SSS_N = 9;
     int sel_K_N = 0;
-    int shift_nbits = 1;
     int SDblock_pointer = 0;
     int selinput_pointer = 0;
 
@@ -3440,9 +3394,7 @@ int main ( void ){
                 switch (pulsed_bt) {
                     case OK_BT:
                         if (main_pointer==cMAIN_create){// Create new seed
-                            black_screen();
-                            create_seed_screen(seed_pointer);
-                            estado = CREATE_SEED;
+                            pulsed_bt = transition_to_create_seed();
                         } else if (main_pointer==cMAIN_LOAD ){// Load seed words
                             pulsed_bt = transition_to_input(selinput_pointer);
                         } else if (main_pointer == cMAIN_BIP85) { // BIP85 child seed
@@ -3455,15 +3407,12 @@ int main ( void ){
                             estado = SEL_XOR;
                         } else if (main_pointer==cMAIN_OBFUS){// Obfuscation
                             pulsed_bt = transition_to_obfus();
-
                         } else if (main_pointer==cMAIN_SSS){// Shamir
                             black_screen();
                             sel_SSS_screen(sss_pointer);
                             estado = SEL_SSS;
                         } else if (main_pointer==cMAIN_ERASESD){// Erase SD
-                            black_screen();
-                            sel_sd_block_screen_generic(SDblock_pointer);
-                            estado = SEL_SD_BLOCK;
+                            pulsed_bt = transition_to_sd_block(SDblock_pointer);
                         } else if (main_pointer==cMAIN_QR){// Resources menu
                             black_screen();
                             resource_screen(resource_pointer);
@@ -3617,10 +3566,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case BACK_BT:
-                        black_screen();
-                        main_screen(0);
-                        estado = MAIN;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_main();
                         break;
                     case UP_BT:
                         if (seed_pointer > 0) {
@@ -3649,21 +3595,17 @@ int main ( void ){
             case SEL_DICE_MODE:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        black_screen();
                         if (dice_mode_pointer == 0) { // Raw entropy bits
-                            print_selsize_screen(size_pointer);
-                            estado = SEL_SIZE;
+                            pulsed_bt = transition_to_size();
                         } else { // String hash
+                            black_screen();
                             sel_hash_mode_screen(hash_mode_pointer);
                             estado = SEL_HASH_MODE;
                         }
                         pulsed_bt = NONE;
                         break;
                     case BACK_BT:
-                        black_screen();
-                        create_seed_screen(seed_pointer);
-                        estado = CREATE_SEED;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_create_seed();
                         break;
                     case UP_BT:
                         if (dice_mode_pointer > 0) dice_mode_pointer--;
@@ -3709,19 +3651,15 @@ int main ( void ){
             case SEL_OBFUS:        /////  OBFUS SCREEN   /////////////
                 switch (pulsed_bt) {
                     case OK_BT:
-                        black_screen();
-                        if (obfuscation_pointer==cOBFUS_NOT ){// Negate seed words
-                            sel_input_screen(selinput_pointer);
-                            estado = SEL_INPUT;
-
-                        } else if (obfuscation_pointer==cOBFUS_SHIFT){// Shift words
-                            sel_shift_screen(shift_pointer);
-                            estado = SEL_SHIFT;
-                        } else {// cOBFUS_ADD
-                            sel_add_screen(add_pointer);
-                            estado = SEL_ADD_SUB;
+                        if (obfuscation_pointer==cOBFUS_NOT ){ // Negate seed words
+                            pulsed_bt = transition_to_input(selinput_pointer);
+                        } else { // Shift or Add/Sub
+                            black_screen();
+                            obfus_cursor = 0;
+                            print_obfus_config_screen();
+                            estado = OBFUS_CONFIG;
+                            pulsed_bt = NONE;
                         }
-                        pulsed_bt = NONE;
                         break;
                     case BACK_BT:
                         pulsed_bt = transition_to_main();
@@ -3744,6 +3682,48 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case RIGTH_BT:
+                        pulsed_bt = NONE;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case OBFUS_CONFIG:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        pulsed_bt = transition_to_input(selinput_pointer);
+                        break;
+                    case BACK_BT:
+                        pulsed_bt = transition_to_obfus();
+                        break;
+                    case LEFT_BT:
+                        obfus_cursor = 0;
+                        print_obfus_config_screen();
+                        pulsed_bt = NONE;
+                        break;
+                    case RIGTH_BT:
+                        obfus_cursor = 1;
+                        print_obfus_config_screen();
+                        pulsed_bt = NONE;
+                        break;
+                    case UP_BT:
+                        if (obfus_cursor == 0) {
+                            obfus_dir_op = !obfus_dir_op;
+                        } else {
+                            obfus_amount++;
+                        }
+                        print_obfus_config_screen();
+                        pulsed_bt = NONE;
+                        break;
+                    case DOWN_BT:
+                        if (obfus_cursor == 0) {
+                            obfus_dir_op = !obfus_dir_op;
+                        } else {
+                            if (obfus_amount > 1) {
+                                obfus_amount--;
+                            }
+                        }
+                        print_obfus_config_screen();
                         pulsed_bt = NONE;
                         break;
                     default:
@@ -3776,9 +3756,7 @@ int main ( void ){
                                 print_previous_confirmed_word(word_number, word_number_text);
                                 print_keyboard_with_validation(lt_idx, found_bool, word);
                             }else{// SD
-                                black_screen();
-                                estado = SEL_SD_BLOCK_XOR;
-                                sel_sd_block_screen_generic(SDblock_pointer);
+                                pulsed_bt = transition_to_sd_block(SDblock_pointer);
                             }
                         }else if ((main_pointer==cMAIN_SSS) & (sss_pointer==cMERGE)){
                             black_screen();
@@ -3833,25 +3811,23 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case BACK_BT:
-                        black_screen();
                         if (main_pointer==cMAIN_OBFUS) {
-                            sel_obfus_screen(obfuscation_pointer);
-                            estado = SEL_OBFUS;
+                            pulsed_bt = transition_to_obfus();
                         } else if (main_pointer==cMAIN_XOR || main_pointer==cMAIN_LOAD || main_pointer==cMAIN_SSS || main_pointer==cMAIN_BIP85){
-                            sel_input_screen(selinput_pointer);
-                            estado = SEL_INPUT;
+                            pulsed_bt = transition_to_input(selinput_pointer);
                         } else {
                             if (seed_pointer == cSEED_dice) {
                                 if (dice_mode_pointer == 1) { // String Hash back
+                                    black_screen();
                                     sel_hash_mode_screen(hash_mode_pointer);
                                     estado = SEL_HASH_MODE;
                                 } else { // Raw back
+                                    black_screen();
                                     sel_dice_mode_screen(dice_mode_pointer);
                                     estado = SEL_DICE_MODE;
                                 }
                             } else {
-                                create_seed_screen(seed_pointer);
-                                estado = CREATE_SEED;
+                                pulsed_bt = transition_to_create_seed();
                             }
                         }
                         pulsed_bt = NONE;
@@ -3912,76 +3888,6 @@ int main ( void ){
                         break;
                 }
                 break;
-            case SEL_SHIFT:        /////  SCREEN     2   /////////////
-                switch (pulsed_bt) {
-                    case OK_BT:
-                        black_screen();
-                        print_nbits_screen(shift_nbits);
-                        estado = SEL_NBITS_SHIFT;
-                        pulsed_bt = NONE;
-                        break;
-                    case BACK_BT:
-                        pulsed_bt = transition_to_obfus();
-                        break;
-                    case UP_BT:
-                        if (shift_pointer > 0) {
-                            shift_pointer--;
-                        }
-                        sel_shift_screen(shift_pointer);
-                        pulsed_bt = NONE;
-                        break;
-                    case DOWN_BT:
-                        if (shift_pointer < (cSHIFT_n_opt-1)) {
-                            shift_pointer++;
-                        }
-                        sel_shift_screen(shift_pointer);
-                        pulsed_bt = NONE;
-                        break;
-                    case LEFT_BT:
-                        pulsed_bt = NONE;
-                        break;
-                    case RIGTH_BT:
-                        pulsed_bt = NONE;
-                        break;
-                    default:
-                        break;
-                }
-                break;
-            case SEL_ADD_SUB:
-                switch (pulsed_bt) {
-                    case OK_BT:
-                        black_screen();
-                        print_nbits_screen(shift_nbits);
-                        estado = SEL_NBITS_SHIFT;
-                        pulsed_bt = NONE;
-                        break;
-                    case BACK_BT:
-                        pulsed_bt = transition_to_obfus();
-                        break;
-                    case UP_BT:
-                        if (add_pointer > 0) {
-                            add_pointer--;
-                        }
-                        sel_add_screen(add_pointer);
-                        pulsed_bt = NONE;
-                        break;
-                    case DOWN_BT:
-                        if (add_pointer < (cSHIFT_n_opt-1)) {
-                            add_pointer++;
-                        }
-                        sel_add_screen(add_pointer);
-                        pulsed_bt = NONE;
-                        break;
-                    case LEFT_BT:
-                        pulsed_bt = NONE;
-                        break;
-                    case RIGTH_BT:
-                        pulsed_bt = NONE;
-                        break;
-                    default:
-                        break;
-                }
-                break;
             case SEL_SD_BLOCK:
                 switch (pulsed_bt) {
                     case OK_BT:
@@ -4026,13 +3932,13 @@ int main ( void ){
                                     if (obfuscation_pointer==cOBFUS_NOT){
                                         not_operator(data_array_256b,16 + size_pointer*16);
                                     } else if (obfuscation_pointer==cOBFUS_SHIFT){
-                                        if (shift_pointer== cLEFT){
-                                            for (int i = 0; i < shift_nbits; i++) shift_left(data_array_256b,16 + size_pointer*16);
+                                        if (obfus_dir_op == 0){
+                                            for (int i = 0; i < obfus_amount; i++) shift_left(data_array_256b,16 + size_pointer*16);
                                         } else {
-                                            for (int i = 0; i < shift_nbits; i++) shift_right(data_array_256b,16 + size_pointer*16);
+                                            for (int i = 0; i < obfus_amount; i++) shift_right(data_array_256b,16 + size_pointer*16);
                                         }
                                     } else if (obfuscation_pointer==cOBFUS_ADD){
-                                        addsub_11bit_groups(16 + size_pointer*16, shift_nbits, add_pointer);
+                                        addsub_11bit_groups(16 + size_pointer*16, obfus_amount, obfus_dir_op);
                                     }
                                 }else if (main_pointer==cMAIN_BIP85) {
                                     drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
@@ -4060,15 +3966,11 @@ int main ( void ){
                         }
 
                     case BACK_BT:
-                        black_screen();
                         if (main_pointer==cMAIN_OBFUS || main_pointer==cMAIN_XOR || main_pointer==cMAIN_LOAD || main_pointer==cMAIN_SSS || main_pointer==cMAIN_BIP85 || (main_pointer == cMAIN_create && seed_pointer == cSEED_triple)){
-                            sel_input_screen(selinput_pointer);
-                            estado = SEL_INPUT;
+                            pulsed_bt = transition_to_input(selinput_pointer);
                         }else {
-                            main_screen(main_pointer);
-                            estado = MAIN;
+                            pulsed_bt = transition_to_main();
                         }
-                        pulsed_bt = NONE;
                         break;
                    case UP_BT:
                         if ((SDblock_pointer == 0) & (SD_page >0)){// Page down and point to slot 8
@@ -4390,17 +4292,14 @@ int main ( void ){
                                 print_previous_confirmed_word(word_number, word_number_text);
                                 print_keyboard_with_validation(lt_idx, found_bool, word);
                             } else {
-                                print_selsize_screen(size_pointer);
-                                estado = SEL_SIZE;
+                                pulsed_bt = transition_to_size();
                             }
                         } else { // cFROMSD
                             black_screen();
                             if (seed_pointer == cSEED_triple && main_pointer == cMAIN_create) {
-                                sel_sd_block_screen_generic(SDblock_pointer);
-                                estado = SEL_SD_BLOCK;
+                                pulsed_bt = transition_to_sd_block(SDblock_pointer);
                             } else if (main_pointer==cMAIN_XOR){
-                                print_selsize_screen(size_pointer);
-                                estado = SEL_SIZE;
+                                pulsed_bt = transition_to_size();
                             }else if ((main_pointer==cMAIN_SSS) & (sss_pointer==cMERGE)){
                                 sel_sd_block_screen_merge(SDblock_pointer,selected_share_id);
                                 estado = SEL_SD_BLOCK_MERGE;
@@ -4413,40 +4312,40 @@ int main ( void ){
                                 entropy_bits = cENTROPY_BITS24W;
                                 print_TMR_screen(size_pointer);
                             }else{// cMAIN_OBFUS or cMAIN_LOAD or cMAIN_BIP85
-                                sel_sd_block_screen_generic(SDblock_pointer);
-                                estado = SEL_SD_BLOCK;
+                                pulsed_bt = transition_to_sd_block(SDblock_pointer);
                             }
                         }
                         pulsed_bt = NONE;
                         break;
                     case BACK_BT:
-                        black_screen();
                         if (main_pointer == cMAIN_XOR)   {
+                            black_screen();
                             print_xorsel_screen(xor_pointer);
                             estado = SEL_XOR;
                         }else if((main_pointer==cMAIN_SSS) & (sss_pointer==cSPLIT)){
+                            black_screen();
                             print_selkn_screen(SSS_K, SSS_N, sel_K_N);
                             estado = SEL_KN;
                         }else if((main_pointer==cMAIN_SSS) & (sss_pointer==cMERGE)){
+                            black_screen();
                             print_selk_screen(SSS_K);
                             estado = SEL_K;
                         }else if(main_pointer==cMAIN_OBFUS){
                             if(obfuscation_pointer==cOBFUS_SHIFT || obfuscation_pointer==cOBFUS_ADD){
-                                print_nbits_screen(shift_nbits);
-                                estado = SEL_NBITS_SHIFT;
+                                black_screen();
+                                print_obfus_config_screen();
+                                estado = OBFUS_CONFIG;
                             }else{ // cOBFUS_NOT
-                                sel_obfus_screen(obfuscation_pointer);
-                                estado = SEL_OBFUS;
+                                pulsed_bt = transition_to_obfus();
                             }
                         }else if (main_pointer == cMAIN_create) { 
-                            create_seed_screen(seed_pointer);
-                            estado = CREATE_SEED;
+                            pulsed_bt = transition_to_create_seed();
                         }else if (main_pointer == cMAIN_BIP85) {
+                            black_screen();
                             print_child_config_screen();
                             estado = CHILD_CONFIG;
                         }else {
-                            main_screen(main_pointer);
-                            estado = MAIN;
+                            pulsed_bt = transition_to_main();
                         }
 
                         pulsed_bt = NONE;
@@ -4623,45 +4522,6 @@ int main ( void ){
                 }
                 break;
 
-            case SEL_NBITS_SHIFT:
-                switch (pulsed_bt) {
-                    case OK_BT:
-                        pulsed_bt = transition_to_input(selinput_pointer);
-                        break;
-                    case BACK_BT:
-                        black_screen();
-                        if(obfuscation_pointer==cOBFUS_ADD){
-                            sel_add_screen(add_pointer);
-                            estado = SEL_ADD_SUB;
-                        }else{
-                            sel_shift_screen(shift_pointer);
-                            estado = SEL_SHIFT;
-                        }
-
-                        pulsed_bt = NONE;
-                        break;
-                    case UP_BT:
-                        shift_nbits++;
-                        print_nbits_screen(shift_nbits);
-                        pulsed_bt = NONE;
-                        break;
-                    case DOWN_BT:
-                        if (shift_nbits > 1) {
-                            shift_nbits--;
-                        }
-                        print_nbits_screen(shift_nbits);
-                        pulsed_bt = NONE;
-                        break;
-                    case LEFT_BT:
-                        pulsed_bt = NONE;
-                        break;
-                    case RIGTH_BT:
-                        pulsed_bt = NONE;
-                        break;
-                    default:
-                        break;
-                }
-                break;
             case TMR_INPUT:
                 switch (pulsed_bt) {
                     case OK_BT:
@@ -4677,9 +4537,7 @@ int main ( void ){
                         dice_xy_pointer_line_adjust();
                         if (check_dice_count_end()){
                             if (main_pointer==cMAIN_SSS){ // This time was used to fill the coefficients
-                                black_screen();
-                                sel_sd_block_screen_generic(SDblock_pointer);
-                                estado = SEL_SD_BLOCK;
+                                pulsed_bt = transition_to_sd_block(SDblock_pointer);
                             }
                             break;
                         }
@@ -4986,19 +4844,19 @@ int main ( void ){
                                     }
                                     if (main_pointer==cMAIN_OBFUS) {
                                         if (obfuscation_pointer==cOBFUS_SHIFT){
-                                            if (shift_pointer== cLEFT){
-                                                for (int i = 0; i < shift_nbits; i++) {
-                                                    shift_left(data_array_256b,16 + size_pointer*16);
+                                            if (obfus_dir_op == 0){
+                                                for (int i = 0; i < obfus_amount; i++) {
+                                                    shift_left(data_array_256b, 16 + size_pointer*16);
                                                 }
                                             } else {
-                                                for (int i = 0; i < shift_nbits; i++) {
-                                                    shift_right(data_array_256b,16  + size_pointer*16);
+                                                for (int i = 0; i < obfus_amount; i++) {
+                                                    shift_right(data_array_256b, 16 + size_pointer*16);
                                                 }
                                             }
                                         } else if (obfuscation_pointer==cOBFUS_NOT){
                                             not_operator(data_array_256b,16 +size_pointer*16);
                                         } else if (obfuscation_pointer==cOBFUS_ADD){
-                                            addsub_11bit_groups(16 + size_pointer*16, shift_nbits, add_pointer);
+                                            addsub_11bit_groups(16 + size_pointer*16, obfus_amount, obfus_dir_op);
                                         }
                                     } else if ((main_pointer==cMAIN_SSS) & (sss_pointer==cSPLIT)){
                                         sss_split_kofm(data_array_256b /* c0 */,
