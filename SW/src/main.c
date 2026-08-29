@@ -667,6 +667,59 @@ void spi_send(uint8_t data) {
     }
 }
 
+// ============================================================================
+// BITMAP GRAPHICS REPLACEMENT
+// ============================================================================
+const uint16_t bmp_camera[11]      = { 0x0700, 0x0880, 0xF078, 0x8708, 0x8888, 0x9048, 0x9048, 0x8888, 0x8708, 0x8008, 0xFFF8 };
+const uint16_t bmp_arrow_up[6]     = { 0x2000, 0x7000, 0xF800, 0x2000, 0x2000, 0x2000 };
+const uint16_t bmp_arrow_down[6]   = { 0x2000, 0x2000, 0x2000, 0xF800, 0x7000, 0x2000 };
+const uint16_t bmp_arrow_left[5]   = { 0x2000, 0x6000, 0xFC00, 0x6000, 0x2000 };
+const uint16_t bmp_arrow_right[5]  = { 0x1000, 0x1800, 0xFC00, 0x1800, 0x1000 };
+const uint16_t bmp_add_symbol[7]   = { 0x1000, 0x1000, 0x1000, 0xFE00, 0x1000, 0x1000, 0x1000 };
+
+// Generic 1-bit monochrome renderer
+void draw_bitmap(int x, int y, int w, int h, const uint16_t *bitmap, uint16_t color) {
+    for (int j = 0; j < h; j++) {
+        uint16_t row = bitmap[j];
+        for (int i = 0; i < w; i++) {
+            if (row & (0x8000 >> i)) {
+                fillRect(x + i, y + j, 1, 1, color);
+            }
+        }
+    }
+}
+
+void print_up_arrow(int x, int y) {
+    draw_bitmap(x, y - 6, 5, 6, bmp_arrow_up, WHITE);
+}
+
+void print_add_symbol(int x, int y) {
+    draw_bitmap(x, y - 7, 7, 7, bmp_add_symbol, WHITE);
+}
+
+void print_down_arrow(int x, int y) {
+    draw_bitmap(x, y - 6, 5, 6, bmp_arrow_down, WHITE);
+}
+
+void print_left_arrow(int x, int y) {
+    draw_bitmap(x, y - 5, 6, 5, bmp_arrow_left, WHITE);
+}
+
+void print_left_arrow_black(int x, int y) {
+    draw_bitmap(x, y - 5, 6, 5, bmp_arrow_left, BLACK);
+}
+
+void print_rigth_arrow(int x, int y) {
+    draw_bitmap(x, y - 5, 6, 5, bmp_arrow_right, WHITE);
+}
+
+void print_camera(int x, int y, int safe) {
+    uint16_t color = (safe == cSAFE) ? ST7735_GREEN : ST7735_RED;
+    draw_bitmap(x, y - 10, 13, 11, bmp_camera, color);
+}
+// ============================================================================
+
+
 
 void print_cursor_grid(){
     drawFastHLine(60,105,90,WHITE);
@@ -678,49 +731,11 @@ void print_cursor_grid(){
     drawFastVLine(150,105,20,WHITE);
 }
 
-void print_up_arrow(int x,int y){
-    drawFastVLine(x+2,y-6,6,WHITE);
-    drawFastHLine(x+1,y-5,3,WHITE);
-    drawFastHLine(x,y-4,5,WHITE);
-
-}
-
-void print_add_symbol(int x,int y){
-    drawFastVLine(x+3,y-7,7,WHITE);
-    drawFastHLine(x,y-4,7,WHITE);
-}
-
-void print_down_arrow(int x,int y){
-    drawFastVLine(x+2,y-6,6,WHITE);
-    drawFastHLine(x+1,y-2,3,WHITE);
-    drawFastHLine(x,y-3,5,WHITE);
-
-}
 
 void print_minus_symbol(int x,int y){
     drawFastHLine(x,y-3,7,WHITE);
 }
 
-void print_left_arrow(int x,int y){
-    drawFastHLine(x,y-3,6,WHITE);
-    drawFastVLine(x+1,y-4,3,WHITE);
-    drawFastVLine(x+2,y-5,5,WHITE);
-
-}
-
-void print_left_arrow_black(int x,int y){
-    drawFastHLine(x,y-3,6,BLACK);
-    drawFastVLine(x+1,y-4,3,BLACK);
-    drawFastVLine(x+2,y-5,5,BLACK);
-
-}
-
-void print_rigth_arrow(int x,int y){
-    drawFastHLine(x,y-3,6,WHITE);
-    drawFastVLine(x+4,y-4,3,WHITE);
-    drawFastVLine(x+3,y-5,5,WHITE);
-
-}
 void print_ok(){
     drawtext(130,107, OK_MSG, ST7735_WHITE, ST7735_WHITE, 1);
 }
@@ -2276,26 +2291,7 @@ void set_bit(BYTE data_array[36], int bit_index, int value) {
  void   print_logo(){
     drawtext(10,10, "SEEDMATE", ST7735_WHITE, ST7735_BLACK, 3);
  }
- void print_camera(int x,int y, int safe){
-    int color = (safe == cSAFE) ? ST7735_GREEN : ST7735_RED;
-    drawFastHLine(x,y,13,color); // Base
-    drawFastHLine(x,y-8,4,color); // Top left
-    drawFastHLine(x+9,y-8,4,color); // Top right
-    drawFastHLine(x+5,y-10,3,color); // Top center
-    drawFastHLine(x+5,y-7,3,color); // Top lens
-    drawFastHLine(x+5,y-2,3,color); // Bottom lens
-    drawFastVLine(x,y-7,7,color); // Left
-    drawFastVLine(x+12,y-7,7,color); // Right
-    drawFastVLine(x+3,y-5,2,color); // Lens left
-    drawFastVLine(x+9,y-5,2,color); // Lens right
-    drawFastVLine(x+4,y-3,1,color); // Stray pixel
-    drawFastVLine(x+8,y-3,1,color); // Stray pixel
-    drawFastVLine(x+4,y-6,1,color); // Stray pixel
-    drawFastVLine(x+8,y-6,1,color); // Stray pixel
-    drawFastVLine(x+4,y-9,1,color); // Stray pixel
-    drawFastVLine(x+8,y-9,1,color); // Stray pixel
-
-}
+ 
 
 
 void addsub_11bit_groups(size_t size, int amount, int add_sub) {
@@ -3021,22 +3017,7 @@ void sel_sd_block_screen_merge(int sel,int id) {
 #endif
 
 
-/* Evaluates y = S + a*x (GF(256)) for a bitsliced block. */
-static void eval_affine_block(uint8_t *y_out,
-                              const uint8_t *s_in,
-                              const uint8_t *a_in,
-                              size_t blk_len,
-                              uint8_t x_val)
-{
-    uint32_t S[8], A[8], X[8], AX[8];
 
-    bitslice(S, s_in, blk_len);
-    bitslice(A, a_in, blk_len);
-    bitslice_setall(X, x_val);      // Same x value for all lanes
-    gf256_mul(AX, A, X);            // AX = A * X
-    gf256_add(AX, S);               // AX ^= S  => Y = S + A*x
-    unbitslice(y_out, AX, blk_len);
-}
 
 #define POLY_DEGREE_MAX 6
 
@@ -3116,27 +3097,10 @@ bool sss_split_polyN(const uint8_t *c0,
 
 
 
-/* Evaluates a share for any x value. */
-void sss_eval_share(const uint8_t *secret, const uint8_t *a,
-                    size_t len, uint8_t x,
-                    uint8_t *share_out)
-{
-    size_t off = 0;
-    while (off < len) {
-        size_t blk = len - off;
-        if (blk > BS_LANES) blk = BS_LANES;
-        eval_affine_block(share_out + off, secret + off, a + off, blk, x);
-        off += blk;
-    }
-}
 
 
 
-void gen_a_nonzero(uint8_t *a, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        a[i] = 0x01;  // Non-zero constant (can use 0x01, 0xAA, etc.)
-    }
-}
+
 
 
 /* Split (k-of-m) with polynomial degree N=k-1 <= 6
@@ -3226,6 +3190,54 @@ bool check_dice_count_end(){
         return false;
     }
 }
+
+
+
+// ============================================================================
+// State Machine Transition Helpers
+// ============================================================================
+
+// Helper to transition to the MAIN screen
+PULSED_BT_t transition_to_main(void) {
+    black_screen();
+    main_screen(main_pointer);
+    estado = MAIN;
+    return NONE;
+}
+
+// Helper to transition to the SEL_INPUT screen
+PULSED_BT_t transition_to_input(int sel_ptr) {
+    black_screen();
+    sel_input_screen(sel_ptr);
+    estado = SEL_INPUT;
+    return NONE;
+}
+
+// Helper to transition to the SEL_SIZE screen
+PULSED_BT_t transition_to_size(void) {
+    black_screen();
+    print_selsize_screen(size_pointer);
+    estado = SEL_SIZE;
+    return NONE;
+}
+
+
+// Helper to transition to the CREATE_SEED screen
+PULSED_BT_t transition_to_create_seed(void) {
+    black_screen();
+    create_seed_screen(seed_pointer);
+    estado = CREATE_SEED;
+    return NONE;
+}
+
+// Helper to transition to the SEL_OBFUS screen
+PULSED_BT_t transition_to_obfus(void) {
+    black_screen();
+    sel_obfus_screen(obfuscation_pointer);
+    estado = SEL_OBFUS;
+    return NONE;
+}
+
 
 int main ( void ){
     /* Initialize all modules */
@@ -3432,9 +3444,7 @@ int main ( void ){
                             create_seed_screen(seed_pointer);
                             estado = CREATE_SEED;
                         } else if (main_pointer==cMAIN_LOAD ){// Load seed words
-                            black_screen();
-                            sel_input_screen(selinput_pointer);
-                            estado = SEL_INPUT;
+                            pulsed_bt = transition_to_input(selinput_pointer);
                         } else if (main_pointer == cMAIN_BIP85) { // BIP85 child seed
                             black_screen();
                             print_child_config_screen();
@@ -3444,9 +3454,7 @@ int main ( void ){
                             print_xorsel_screen(xor_pointer);
                             estado = SEL_XOR;
                         } else if (main_pointer==cMAIN_OBFUS){// Obfuscation
-                            black_screen();
-                            sel_obfus_screen(obfuscation_pointer);
-                            estado = SEL_OBFUS;
+                            pulsed_bt = transition_to_obfus();
 
                         } else if (main_pointer==cMAIN_SSS){// Shamir
                             black_screen();
@@ -3496,16 +3504,10 @@ int main ( void ){
             case CHILD_CONFIG:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        black_screen();
-                        sel_input_screen(selinput_pointer);
-                        estado = SEL_INPUT;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_input(selinput_pointer);
                         break;
                     case BACK_BT:
-                        black_screen();
-                        main_screen(main_pointer);
-                        estado = MAIN;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_main();
                         break;
                     case UP_BT:
                         if (bip85_cursor == 0) {
@@ -3561,10 +3563,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case BACK_BT:
-                        black_screen();
-                        main_screen(main_pointer);
-                        estado = MAIN;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_main();
                         break;
                     case UP_BT:
                         if (resource_pointer > 0) {
@@ -3605,9 +3604,7 @@ int main ( void ){
                 switch (pulsed_bt) {
                     case OK_BT:
                         if (seed_pointer == cSEED_triple) {
-                            black_screen();
-                            sel_input_screen(selinput_pointer);
-                            estado = SEL_INPUT;
+                            pulsed_bt = transition_to_input(selinput_pointer);
                             size_pointer = cSIZE_24;
                             entropy_bits = cENTROPY_BITS24W;
                         } else if (seed_pointer == cSEED_dice) {
@@ -3615,9 +3612,7 @@ int main ( void ){
                             sel_dice_mode_screen(dice_mode_pointer);
                             estado = SEL_DICE_MODE;
                         } else {
-                            black_screen();
-                            print_selsize_screen(size_pointer);
-                            estado = SEL_SIZE;
+                            pulsed_bt = transition_to_size();
                         }
                         pulsed_bt = NONE;
                         break;
@@ -3688,10 +3683,7 @@ int main ( void ){
             case SEL_HASH_MODE:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        black_screen();
-                        print_selsize_screen(size_pointer);
-                        estado = SEL_SIZE;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_size();                        
                         break;
                     case BACK_BT:
                         black_screen();
@@ -3732,10 +3724,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case BACK_BT:
-                        black_screen();
-                        main_screen(main_pointer);
-                        estado = MAIN;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_main();
                         break;
                     case UP_BT:
                         if (obfuscation_pointer > 0) {
@@ -3894,16 +3883,10 @@ int main ( void ){
             case SEL_XOR:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        black_screen();
-                        sel_input_screen(selinput_pointer);
-                        estado = SEL_INPUT;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_input(selinput_pointer);
                         break;
                     case BACK_BT:
-                        black_screen();
-                        main_screen(main_pointer);
-                        estado = MAIN;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_main();
                         break;
                     case UP_BT:
                         if (xor_pointer > 0) {
@@ -3938,10 +3921,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case BACK_BT:
-                        black_screen();
-                        sel_obfus_screen(obfuscation_pointer);
-                        estado = SEL_OBFUS;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_obfus();
                         break;
                     case UP_BT:
                         if (shift_pointer > 0) {
@@ -3976,10 +3956,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case BACK_BT:
-                        black_screen();
-                        sel_obfus_screen(obfuscation_pointer);
-                        estado = SEL_OBFUS;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_obfus();
                         break;
                     case UP_BT:
                         if (add_pointer > 0) {
@@ -4266,10 +4243,7 @@ int main ( void ){
                         }
 
                     case BACK_BT:
-                        black_screen();
-                        print_selsize_screen(size_pointer);
-                        estado = SEL_SIZE;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_size();
                         break;
                     case UP_BT:
                         if ((SDblock_pointer == 0) & (SD_page >0)){// Page down and point to slot 8
@@ -4363,10 +4337,7 @@ int main ( void ){
                         }
 
                     case BACK_BT:
-                        black_screen();
-                        print_selsize_screen(size_pointer);
-                        estado = SEL_SIZE;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_size();
                         break;
                     case UP_BT:
                         if ((SDblock_pointer == 0) & (SD_page >0)){// Page down and point to slot 8
@@ -4518,10 +4489,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case BACK_BT:
-                        black_screen();
-                        main_screen(main_pointer);
-                        estado = MAIN;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_main();
                         break;
                     case UP_BT:
                         if (sss_pointer > 0) {
@@ -4550,10 +4518,7 @@ int main ( void ){
            case SEL_KN:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        black_screen();
-                        sel_input_screen(selinput_pointer);
-                        estado = SEL_INPUT;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_input(selinput_pointer);
                         break;
                     case BACK_BT:
                         black_screen();
@@ -4592,10 +4557,7 @@ int main ( void ){
            case SEL_K:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        black_screen();
-                        sel_input_screen(selinput_pointer);
-                        estado = SEL_INPUT;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_input(selinput_pointer);
                         break;
                     case BACK_BT:
                         black_screen();
@@ -4664,10 +4626,7 @@ int main ( void ){
             case SEL_NBITS_SHIFT:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        black_screen();
-                        sel_input_screen(selinput_pointer);
-                        estado = SEL_INPUT;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_input(selinput_pointer);
                         break;
                     case BACK_BT:
                         black_screen();
@@ -4880,9 +4839,7 @@ int main ( void ){
                             print_dice_string_keyboard(dice_input_idx, len - 1, target);
                             
                         } else {
-                            black_screen();
-                            print_selsize_screen(size_pointer);
-                            estado = SEL_SIZE;
+                            pulsed_bt = transition_to_size();
                         }
                         pulsed_bt = NONE;
                         break;
@@ -4938,9 +4895,7 @@ int main ( void ){
                             remove_last_card_entropy();
                             print_card_input_screen();
                         } else {
-                            black_screen();
-                            print_selsize_screen(size_pointer);
-                            estado = SEL_SIZE;
+                            pulsed_bt = transition_to_size();
                         }
                         break;
                     case UP_BT:
@@ -5217,10 +5172,7 @@ int main ( void ){
                         pulsed_bt = NONE;
                         break;
                     case BACK_BT:
-                        black_screen();
-                        main_screen(main_pointer);
-                        estado = MAIN;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_main();
                         break;
                     case UP_BT:
                         pulsed_bt = NONE;
@@ -5457,10 +5409,7 @@ int main ( void ){
                 switch (pulsed_bt) {
                     case OK_BT:
                     case BACK_BT:
-                        black_screen();
-                        main_screen(main_pointer);
-                        estado = MAIN;
-                        pulsed_bt = NONE;
+                        pulsed_bt = transition_to_main();
                         break;
                     default:
                         break;
