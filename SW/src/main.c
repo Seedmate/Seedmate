@@ -24,8 +24,8 @@
  *   - Security-sensitive data should be handled carefully at all times
  *
  * Author:      Seedmate
- * Date:        18/8/2026
- * Version:     v1.4                               
+ * Date:        29/8/2026
+ * Version:     v1.5                               
  * License
  * 
  * This project is licensed under the MIT License.
@@ -65,7 +65,8 @@
 #include "definitions.h"                // SYS function prototypes
 #include "SPI.h"                        // SPI functions
 #include "TFT.h"                        // TFT functions
-#include "SHA256.h"
+#include "sha256.h"
+#include "sha512.h"
 #include "words_opt.h"
 #include <string.h>
 #include "SSS/shamir.h"
@@ -75,7 +76,7 @@
 #define SCREEN_HEIGHT 128
 
 
-#define cVersion "v1.4"
+#define cVersion "v1.5"
 
 #define SD_SCK    PORTBbits.RB7
 #define SD_CS     PORTCbits.RC9
@@ -98,7 +99,7 @@
 
 
 
-#define cMAIN_n_opt 7
+#define cMAIN_n_opt 8
 #define cSEED_n_opt 6
 #define cSIZE_n_opt 2
 #define cOBFUS_n_opt 3
@@ -110,7 +111,7 @@
 #define cSELINPUT_n_opt 2
 #define cDICE_MODE_n_opt 2
 #define cHASH_MODE_n_opt 2
-#define cRESOURCE_n_opt 3
+#define cRESOURCE_n_opt 4
 #define cEND_OF_LINE 150
 #define cENTROPY_BITS12W 127//127
 #define cENTROPY_BITS24W 255//255
@@ -119,15 +120,17 @@
 
 #define cMAIN_create 0
 #define cMAIN_LOAD 1
-#define cMAIN_SSS 2
-#define cMAIN_XOR 3
-#define cMAIN_OBFUS 4
-#define cMAIN_ERASESD 5
-#define cMAIN_QR 6 // Resources menu
+#define cMAIN_BIP85 2
+#define cMAIN_SSS 3
+#define cMAIN_XOR 4
+#define cMAIN_OBFUS 5
+#define cMAIN_ERASESD 6
+#define cMAIN_QR 7 // Resources menu
 
 #define cRESOURCE_tutorial 0
 #define cRESOURCE_backup 1
 #define cRESOURCE_dice_test 2
+#define cRESOURCE_wordlist 3
 
 #define cOBFUS_SHIFT 0
 #define cOBFUS_NOT 1
@@ -180,6 +183,10 @@ int sss_pointer = 0;
 int resource_pointer = 0;
 uint8_t  selected_share_id = 1;
 int shares_loaded = 0;
+
+int bip85_size = cSIZE_12;
+int bip85_index = 0;
+int bip85_cursor = 0;
 
 int extract_word_offset = 0;
 int triple_view_state = 0;
@@ -306,6 +313,7 @@ typedef enum
 {
     INIT,
     MAIN,
+    CHILD_CONFIG,
     CREATE_SEED,
     SEL_SIZE,
     SEL_XOR,
@@ -328,7 +336,6 @@ typedef enum
     RESOURCE_MENU,
     RESOURCE_QR_VIEW,
     WORD_LIST_ERROR,
-    END_MODE, // Final
     SEL_SHIFT,
     SEL_NBITS_SHIFT,
     SEL_ADD_SUB,
@@ -340,7 +347,8 @@ typedef enum
     SHOW_TRIPLE_CHKSUM_24,
     SEL_DICE_MODE,
     SEL_HASH_MODE,
-    DICE_STRING_INPUT
+    DICE_STRING_INPUT,
+    END_MODE // Final
 } state_t;
 
 state_t estado = INIT;
@@ -517,6 +525,16 @@ void grid_keyboard_dice_hash(){
     drawtext(67,107, "DEL", ST7735_WHITE, ST7735_WHITE, 1);
 }
 
+void grid_bip85(){
+    print_cursor_grid();
+    print_up_arrow(103,114);
+    print_down_arrow(103,123);
+    print_left_arrow(73,123);
+    print_rigth_arrow(133,123);
+    print_ok();
+    print_back();
+}
+
 void draw_mini_dice(int x, int y, int value) {
     // Draw the background of the dice filled with white
     rectan(x, y, x + 6, y + 6, WHITE);
@@ -590,6 +608,7 @@ void main_screen(int sel) {
     char* opciones[] = {
         "CREATE NEW SEED WORDS",
         "LOAD SEED WORDS",
+        "BIP85 CHILD SEED",
         "SHAMIR SECRET SHARE",
         "SEED WORD XOR",
         "OBFUSCATION",
@@ -609,7 +628,8 @@ void resource_screen(int sel) {
     char* options[] = {
         "TUTORIAL",
         "BACKUP TOOL",
-        "DICE TESTER"
+        "DICE TESTER",
+        "PRINT WORDLIST"
     };
 
     for (int i = 0; i < cRESOURCE_n_opt; i++) {
@@ -624,6 +644,7 @@ void main_screen_fast(int sel) {
     char* opciones[] = {
         "CREATE NEW SEED WORDS",
         "LOAD SEED WORDS",
+        "BIP85 CHILD SEED",
         "SHAMIR SECRET SHARE",
         "SEED WORD XOR",
         "OBFUSCATION",
@@ -1170,6 +1191,24 @@ void sel_hash_mode_screen(int sel){
         drawtext(1, 10 + i * 10, options[i], color, ST7735_BLACK, 1);
     }
     grid_menu2();
+}
+
+void print_child_config_screen(void) {
+    drawtext(1, 10, "Child size:", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(80, 10, "BIP85 index:", ST7735_WHITE, ST7735_BLACK, 1);
+
+    uint16_t size_color = (bip85_cursor == 0) ? ST7735_ORANGE : ST7735_WHITE;
+    uint16_t index_color = (bip85_cursor == 1) ? ST7735_ORANGE : ST7735_WHITE;
+
+    char *size_str = (bip85_size == cSIZE_12) ? "12 words" : "24 words";
+    drawtext(1, 30, size_str, size_color, ST7735_BLACK, 1);
+
+    char index_str[12];
+    u16_to_str((unsigned int)bip85_index, index_str);
+    rectan(80, 30, 159, 38, BLACK); // clear index area
+    drawtext(80, 30, index_str, index_color, ST7735_BLACK, 1);
+
+    grid_bip85();
 }
 
 // Update only roll count
@@ -3088,6 +3127,10 @@ int main ( void ){
                             black_screen();
                             sel_input_screen(selinput_pointer);
                             estado = SEL_INPUT;
+                        } else if (main_pointer == cMAIN_BIP85) { // BIP85 child seed
+                            black_screen();
+                            print_child_config_screen();
+                            estado = CHILD_CONFIG;
                         } else if (main_pointer==cMAIN_XOR){// XOR
                             black_screen();
                             print_xorsel_screen(xor_pointer);
@@ -3142,6 +3185,54 @@ int main ( void ){
                         break;
                 }
                 break;
+            case CHILD_CONFIG:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        black_screen();
+                        sel_input_screen(selinput_pointer);
+                        estado = SEL_INPUT;
+                        pulsed_bt = NONE;
+                        break;
+                    case BACK_BT:
+                        black_screen();
+                        main_screen(main_pointer);
+                        estado = MAIN;
+                        pulsed_bt = NONE;
+                        break;
+                    case UP_BT:
+                        if (bip85_cursor == 0) {
+                            bip85_size = cSIZE_12;
+                        } else {
+                            bip85_index++;
+                        }
+                        print_child_config_screen();
+                        pulsed_bt = NONE;
+                        break;
+                    case DOWN_BT:
+                        if (bip85_cursor == 0) {
+                            bip85_size = cSIZE_24;
+                        } else {
+                            if (bip85_index > 0) {
+                                bip85_index--;
+                            }
+                        }
+                        print_child_config_screen();
+                        pulsed_bt = NONE;
+                        break;
+                    case LEFT_BT:
+                        bip85_cursor = 0;
+                        print_child_config_screen();
+                        pulsed_bt = NONE;
+                        break;
+                    case RIGTH_BT:
+                        bip85_cursor = 1;
+                        print_child_config_screen();
+                        pulsed_bt = NONE;
+                        break;
+                    default:
+                        break;
+                }
+                break;
             case RESOURCE_MENU:
                 switch (pulsed_bt) {
                     case OK_BT:
@@ -3153,6 +3244,8 @@ int main ( void ){
                             draw_qr_code("seedmate.github.io/Seedmate_HTML_backup/");
                         } else if (resource_pointer == cRESOURCE_dice_test) {
                             draw_qr_code("seedmate.github.io/Dice_tester/");
+                        } else if (resource_pointer == cRESOURCE_wordlist) {
+                            draw_qr_code("seedmate.net/Printable%20BIP39%20wordlist.pdf");
                         }
                         print_camera(2, 65, cSAFE);
                         estado = RESOURCE_QR_VIEW;
@@ -3397,7 +3490,7 @@ int main ( void ){
                             pulsed_bt = NONE;
                             break;
 
-                        } else if (main_pointer==cMAIN_LOAD || main_pointer==cMAIN_OBFUS || main_pointer==cMAIN_SSS ){// Check seed or obfuscate/SSS
+                        } else if (main_pointer==cMAIN_LOAD || main_pointer==cMAIN_OBFUS || main_pointer==cMAIN_SSS || main_pointer==cMAIN_BIP85 ){// Check seed or obfuscate/SSS
                             black_screen();
                             estado = WRITE_WORD;
                             word_number=1;
@@ -3447,7 +3540,7 @@ int main ( void ){
                         if (main_pointer==cMAIN_OBFUS) {
                             sel_obfus_screen(obfuscation_pointer);
                             estado = SEL_OBFUS;
-                        } else if (main_pointer==cMAIN_XOR || main_pointer==cMAIN_LOAD || main_pointer==cMAIN_SSS){
+                        } else if (main_pointer==cMAIN_XOR || main_pointer==cMAIN_LOAD || main_pointer==cMAIN_SSS || main_pointer==cMAIN_BIP85){
                             sel_input_screen(selinput_pointer);
                             estado = SEL_INPUT;
                         } else {
@@ -3669,6 +3762,13 @@ int main ( void ){
                                         } else if (obfuscation_pointer==cOBFUS_ADD){
                                             addsub_11bit_groups(16 + size_pointer*16, shift_nbits, add_pointer);
                                         }
+                                    }else if (main_pointer==cMAIN_BIP85) {
+                                        drawtext(70, 20 + 10*SDblock_pointer, "LOAD OK", ST7735_GREEN, ST7735_BLACK, 1);
+                                        black_screen();
+                                        drawtext(5, 50, "BIP85 under construction", ST7735_WHITE, ST7735_BLACK, 1);
+                                        estado = END_MODE;
+                                        pulsed_bt = NONE;
+                                        break;
                                     }
                                     redraw_show_seed_with_offset();
 
@@ -3691,7 +3791,7 @@ int main ( void ){
 
                     case BACK_BT:
                         black_screen();
-                        if (main_pointer==cMAIN_OBFUS || main_pointer==cMAIN_XOR || main_pointer==cMAIN_LOAD || main_pointer==cMAIN_SSS || (main_pointer == cMAIN_create && seed_pointer == cSEED_triple)){
+                        if (main_pointer==cMAIN_OBFUS || main_pointer==cMAIN_XOR || main_pointer==cMAIN_LOAD || main_pointer==cMAIN_SSS || main_pointer==cMAIN_BIP85 || (main_pointer == cMAIN_create && seed_pointer == cSEED_triple)){
                             sel_input_screen(selinput_pointer);
                             estado = SEL_INPUT;
                         }else {
@@ -4071,7 +4171,7 @@ int main ( void ){
                                 size_pointer=cSIZE_24;
                                 entropy_bits = cENTROPY_BITS24W;
                                 print_TMR_screen(size_pointer);
-                            }else{// cMAIN_OBFUS or cMAIN_LOAD
+                            }else{// cMAIN_OBFUS or cMAIN_LOAD or cMAIN_BIP85
                                 sel_sd_block_screen_generic(SDblock_pointer);
                                 estado = SEL_SD_BLOCK;
                             }
@@ -4100,6 +4200,9 @@ int main ( void ){
                         }else if (main_pointer == cMAIN_create) { 
                             create_seed_screen(seed_pointer);
                             estado = CREATE_SEED;
+                        }else if (main_pointer == cMAIN_BIP85) {
+                            print_child_config_screen();
+                            estado = CHILD_CONFIG;
                         }else {
                             main_screen(main_pointer);
                             estado = MAIN;
@@ -4736,6 +4839,12 @@ int main ( void ){
                                                 data_array_256b[i] = data_array_256b[i] ^ xor_merge_word1[i]^ xor_merge_word2[i]^ xor_merge_word3[i];
                                             }
                                         }
+                                    } else if (main_pointer==cMAIN_BIP85) {
+                                        black_screen();
+                                        drawtext(5, 50, "BIP85 under construction", ST7735_WHITE, ST7735_BLACK, 1);
+                                        estado = END_MODE;
+                                        pulsed_bt = NONE;
+                                        break;
                                     }
 
                                     if (main_pointer == cMAIN_create) {
