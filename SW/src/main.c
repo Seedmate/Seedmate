@@ -180,6 +180,21 @@
 #define SHA512_SIZE 64          // SHA512 output size
 #define BLOCK_SIZE 128 // SHA512 block size
 
+// ============================================================================
+// Global Menus (Forces the compiler to store pointers strictly in ROM)
+// ============================================================================
+const char* const menu_create[]   = {"THROW COINS", "ROLL DICE", "RANDOM WORD PICK", "DRAW CARDS", "STOPWATCH TEST ONLY", "TRIPLE MNEMONIC"};
+const char* const menu_dice[]     = {"RAW ENTROPY BITS", "STRING HASH"};
+const char* const menu_hash[]     = {"1-6 mode", "0-5 mode (Keystone)"};
+const char* const menu_size[]     = {"12 WORDS", "24 WORDS"};
+const char* const menu_qr[]       = {"STANDARD", "COMPACT"};
+const char* const menu_xor[]      = {"A XOR B = C", "A XOR B XOR C = D", "A XOR B XOR C XOR D = E"};
+const char* const menu_sss[]      = {"SPLIT", "MERGE"};
+const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD"};
+const char* const menu_resource[] = {"TUTORIAL", "BACKUP TOOL", "DICE TESTER", "PRINT WORDLIST"};
+const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB"}; 
+
+
 int main_pointer = 0;
 int obfuscation_pointer =0;
 int sss_pointer = 0;
@@ -871,6 +886,18 @@ void version_display(){
 
 }
 static bool SD_ready= false;
+
+// ============================================================================
+// Generic Menu Renderer
+// ============================================================================
+void print_generic_menu(const char* const *options, int n_opt, int sel) {
+    for (int i = 0; i < n_opt; i++) {
+        uint16_t color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
+        drawtext(1, 10 + i * 10, (char*)options[i], color, ST7735_BLACK, 1);
+    }
+    grid_menu2();
+}
+
 void main_screen(int sel) {
     char* opciones[] = {
         "CREATE NEW SEED WORDS",
@@ -889,21 +916,6 @@ void main_screen(int sel) {
     }
     if(SD_ready)drawtext(10, 118, "SD OK", ST7735_GREEN, ST7735_BLACK, 1);
     grid_menu1();
-}
-
-void resource_screen(int sel) {
-    char* options[] = {
-        "TUTORIAL",
-        "BACKUP TOOL",
-        "DICE TESTER",
-        "PRINT WORDLIST"
-    };
-
-    for (int i = 0; i < cRESOURCE_n_opt; i++) {
-        uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, 10 + i * 10, options[i], color, ST7735_BLACK, 1);
-    }
-    grid_menu2();
 }
 
 static int last_sel = 0;
@@ -1372,22 +1384,6 @@ void print_triple_checksum(int word_target) {
     grid_TMR(); 
 }
 
-void sel_input_screen(int sel) {
-    char* options[] = {
-        "FROM KEYBOARD",
-        "FROM SD"
-    };
-
-    for (int i = 0; i < cSELINPUT_n_opt; i++) {
-        uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, 10 + i * 10, options[i], color, ST7735_BLACK, 1);
-    }
-    grid_menu2();
-}
-
-
-
-
 void print_diceroll_screen(int sel, int sel2){
 
     // sel: 0 -> 128 bits, 1 -> 256 bits
@@ -1416,57 +1412,14 @@ void print_TMR_screen(int size_TMR){
     grid_TMR();
 }
 
-
-
-
-void create_seed_screen(int sel){
-    char* options[] = {
-        "THROW COINS",
-        "ROLL DICE",
-        "RANDOM WORD PICK",
-        "DRAW CARDS",
-        "STOPWATCH TEST ONLY",
-        "TRIPLE MNEMONIC"
-    };
-    for (int i = 0; i < cSEED_n_opt; i++) {
-        uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, 10 + i * 10, options[i], color, ST7735_BLACK, 1);
-    }
-    grid_menu2();
-}
-
-void sel_dice_mode_screen(int sel){
-    char* options[] = {
-        "RAW ENTROPY BITS",
-        "STRING HASH"
-    };
-    for (int i = 0; i < cDICE_MODE_n_opt; i++) {
-        uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, 10 + i * 10, options[i], color, ST7735_BLACK, 1);
-    }
-    grid_menu2();
-}
-
-void sel_hash_mode_screen(int sel){
-    char* options[] = {
-        "1-6 mode",
-        "0-5 mode (Keystone)"
-    };
-    for (int i = 0; i < cHASH_MODE_n_opt; i++) {
-        uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, 10 + i * 10, options[i], color, ST7735_BLACK, 1);
-    }
-    grid_menu2();
-}
-
 void print_child_config_screen(void) {
-    drawtext(1, 10, "Child size:", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(80, 10, "BIP85 index:", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 10, "CHILD SIZE:", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(80, 10, "BIP85 INDEX:", ST7735_WHITE, ST7735_BLACK, 1);
 
     uint16_t size_color = (bip85_cursor == 0) ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t index_color = (bip85_cursor == 1) ? ST7735_ORANGE : ST7735_WHITE;
 
-    const char *size_str = (bip85_size == cSIZE_12) ? "12 words" : "24 words";
+    const char *size_str = (bip85_size == cSIZE_12) ? "12 WORDS" : "24 WORDS";
     drawtext(10, 30, (char*)size_str, size_color, ST7735_BLACK, 1);
 
     char index_str[12];
@@ -1735,73 +1688,6 @@ int get_next_valid_key(int current_idx, int step, const char *current_word, bool
     
     return best_idx;
 }
-
-
-void sel_obfus_screen(int sel){
-    char* options[] = {
-        "CIRCULAR SHIFT",
-        "NOT OPERATOR",
-        "WORDS ADD/SUB"
-    };
-    for (int i = 0; i < cOBFUS_n_opt; i++) {
-        uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, 10 + i * 10, options[i], color, ST7735_BLACK, 1);
-    }
-    grid_menu2();
-}
-
-void print_selsize_screen(int sel){
-    char* options[] = {
-        "12 WORDS",
-        "24 WORDS"
-    };
-    for (int i = 0; i < cSIZE_n_opt; i++) {
-        uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, 10 + i * 10, options[i], color, ST7735_BLACK, 1);
-    }
-    grid_menu2();
-}
-
-void print_selQR_screen (int sel){
-    char* options[] = {
-        "STANDARD",
-        "COMPACT"
-    };
-    for (int i = 0; i < cQR_n_opt; i++) {
-        uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, 10 + i * 10, options[i], color, ST7735_BLACK, 1);
-    }
-    grid_menu2();
-}
-
-void print_xorsel_screen(int sel){
-    char* options[] = {
-        "A XOR B = C",// 2-xor
-        "A XOR B XOR C = D",// 3-xor
-        "A XOR B XOR C XOR D = E"    // 4-xor
-    };
-    for (int i = 0; i < cXOR_n_opt; i++) {
-        uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, 10 + i * 10, options[i], color, ST7735_BLACK, 1);
-    }
-    grid_menu2();
-}
-
-
-void sel_SSS_screen(int sel){
-    char* options[] = {
-        "SPLIT",
-        "MERGE"
-    };
-    for (int i = 0; i < cSSS_n_opt; i++) {
-        uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, 10 + i * 10, options[i], color, ST7735_BLACK, 1);
-    }
-    grid_menu2();
-}
-
-
-
 
 const char* get_word(int index) {
     if (index < 0 || index >= 2048) {
@@ -3164,7 +3050,7 @@ PULSED_BT_t transition_to_main(void) {
 // Helper to transition to the SEL_INPUT screen
 PULSED_BT_t transition_to_input(int sel_ptr) {
     black_screen();
-    sel_input_screen(sel_ptr);
+    print_generic_menu(menu_input, cSELINPUT_n_opt, sel_ptr);
     estado = SEL_INPUT;
     return NONE;
 }
@@ -3172,7 +3058,7 @@ PULSED_BT_t transition_to_input(int sel_ptr) {
 // Helper to transition to the SEL_SIZE screen
 PULSED_BT_t transition_to_size(void) {
     black_screen();
-    print_selsize_screen(size_pointer);
+    print_generic_menu(menu_size, cSIZE_n_opt, size_pointer);
     estado = SEL_SIZE;
     return NONE;
 }
@@ -3181,7 +3067,7 @@ PULSED_BT_t transition_to_size(void) {
 // Helper to transition to the CREATE_SEED screen
 PULSED_BT_t transition_to_create_seed(void) {
     black_screen();
-    create_seed_screen(seed_pointer);
+    print_generic_menu(menu_create, cSEED_n_opt, seed_pointer);
     estado = CREATE_SEED;
     return NONE;
 }
@@ -3189,7 +3075,7 @@ PULSED_BT_t transition_to_create_seed(void) {
 // Helper to transition to the SEL_OBFUS screen
 PULSED_BT_t transition_to_obfus(void) {
     black_screen();
-    sel_obfus_screen(obfuscation_pointer);
+    print_generic_menu(menu_obfus, cOBFUS_n_opt, obfuscation_pointer);
     estado = SEL_OBFUS;
     return NONE;
 }
@@ -3403,19 +3289,19 @@ int main ( void ){
                             estado = CHILD_CONFIG;
                         } else if (main_pointer==cMAIN_XOR){// XOR
                             black_screen();
-                            print_xorsel_screen(xor_pointer);
+                            print_generic_menu(menu_xor, cXOR_n_opt, xor_pointer);
                             estado = SEL_XOR;
                         } else if (main_pointer==cMAIN_OBFUS){// Obfuscation
                             pulsed_bt = transition_to_obfus();
                         } else if (main_pointer==cMAIN_SSS){// Shamir
                             black_screen();
-                            sel_SSS_screen(sss_pointer);
+                            print_generic_menu(menu_sss, cSSS_n_opt, sss_pointer);
                             estado = SEL_SSS;
                         } else if (main_pointer==cMAIN_ERASESD){// Erase SD
                             pulsed_bt = transition_to_sd_block(SDblock_pointer);
                         } else if (main_pointer==cMAIN_QR){// Resources menu
                             black_screen();
-                            resource_screen(resource_pointer);
+                            print_generic_menu(menu_resource, cRESOURCE_n_opt, resource_pointer);
                             estado = RESOURCE_MENU;
                         }
                         pulsed_bt = NONE;
@@ -3518,14 +3404,14 @@ int main ( void ){
                         if (resource_pointer > 0) {
                             resource_pointer--;
                         }
-                        resource_screen(resource_pointer);
+                        print_generic_menu(menu_resource, cRESOURCE_n_opt, resource_pointer);
                         pulsed_bt = NONE;
                         break;
                     case DOWN_BT:
                         if (resource_pointer < (cRESOURCE_n_opt - 1)) {
                             resource_pointer++;
                         }
-                        resource_screen(resource_pointer);
+                        print_generic_menu(menu_resource, cRESOURCE_n_opt, resource_pointer);
                         pulsed_bt = NONE;
                         break;
                     default:
@@ -3540,7 +3426,7 @@ int main ( void ){
                         break;
                     case BACK_BT:
                         black_screen();
-                        resource_screen(resource_pointer);
+                        print_generic_menu(menu_resource, cRESOURCE_n_opt, resource_pointer);
                         estado = RESOURCE_MENU;
                         pulsed_bt = NONE;
                         break;
@@ -3558,7 +3444,7 @@ int main ( void ){
                             entropy_bits = cENTROPY_BITS24W;
                         } else if (seed_pointer == cSEED_dice) {
                             black_screen();
-                            sel_dice_mode_screen(dice_mode_pointer);
+                            print_generic_menu(menu_dice, cDICE_MODE_n_opt, dice_mode_pointer);
                             estado = SEL_DICE_MODE;
                         } else {
                             pulsed_bt = transition_to_size();
@@ -3572,14 +3458,14 @@ int main ( void ){
                         if (seed_pointer > 0) {
                             seed_pointer--;
                         }
-                        create_seed_screen(seed_pointer);
+                        print_generic_menu(menu_create, cSEED_n_opt, seed_pointer);
                         pulsed_bt = NONE;
                         break;
                     case DOWN_BT:
                         if (seed_pointer < (cSEED_n_opt-1)) {
                             seed_pointer++;
                         }
-                        create_seed_screen(seed_pointer);
+                        print_generic_menu(menu_create, cSEED_n_opt, seed_pointer);
                         pulsed_bt = NONE;
                         break;
                     case LEFT_BT:
@@ -3599,7 +3485,7 @@ int main ( void ){
                             pulsed_bt = transition_to_size();
                         } else { // String hash
                             black_screen();
-                            sel_hash_mode_screen(hash_mode_pointer);
+                            print_generic_menu(menu_hash, cHASH_MODE_n_opt, hash_mode_pointer);
                             estado = SEL_HASH_MODE;
                         }
                         pulsed_bt = NONE;
@@ -3609,12 +3495,12 @@ int main ( void ){
                         break;
                     case UP_BT:
                         if (dice_mode_pointer > 0) dice_mode_pointer--;
-                        sel_dice_mode_screen(dice_mode_pointer);
+                        print_generic_menu(menu_dice, cDICE_MODE_n_opt, dice_mode_pointer);
                         pulsed_bt = NONE;
                         break;
                     case DOWN_BT:
                         if (dice_mode_pointer < (cDICE_MODE_n_opt - 1)) dice_mode_pointer++;
-                        sel_dice_mode_screen(dice_mode_pointer);
+                        print_generic_menu(menu_dice, cDICE_MODE_n_opt, dice_mode_pointer);
                         pulsed_bt = NONE;
                         break;
                     default:
@@ -3629,18 +3515,18 @@ int main ( void ){
                         break;
                     case BACK_BT:
                         black_screen();
-                        sel_dice_mode_screen(dice_mode_pointer);
+                        print_generic_menu(menu_dice, cDICE_MODE_n_opt, dice_mode_pointer);
                         estado = SEL_DICE_MODE;
                         pulsed_bt = NONE;
                         break;
                     case UP_BT:
                         if (hash_mode_pointer > 0) hash_mode_pointer--;
-                        sel_hash_mode_screen(hash_mode_pointer);
+                        print_generic_menu(menu_hash, cHASH_MODE_n_opt, hash_mode_pointer);
                         pulsed_bt = NONE;
                         break;
                     case DOWN_BT:
                         if (hash_mode_pointer < (cHASH_MODE_n_opt - 1)) hash_mode_pointer++;
-                        sel_hash_mode_screen(hash_mode_pointer);
+                        print_generic_menu(menu_hash, cHASH_MODE_n_opt, hash_mode_pointer);
                         pulsed_bt = NONE;
                         break;
                     default:
@@ -3648,10 +3534,10 @@ int main ( void ){
                         break;
                 }
                 break;
-            case SEL_OBFUS:        /////  OBFUS SCREEN   /////////////
+            case SEL_OBFUS:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        if (obfuscation_pointer==cOBFUS_NOT ){ // Negate seed words
+                        if (obfuscation_pointer == cOBFUS_NOT) { // Negate seed words
                             pulsed_bt = transition_to_input(selinput_pointer);
                         } else { // Shift or Add/Sub
                             black_screen();
@@ -3668,19 +3554,17 @@ int main ( void ){
                         if (obfuscation_pointer > 0) {
                             obfuscation_pointer--;
                         }
-                        sel_obfus_screen(obfuscation_pointer);
+                        print_generic_menu(menu_obfus, cOBFUS_n_opt, obfuscation_pointer);
                         pulsed_bt = NONE;
                         break;
                     case DOWN_BT:
                         if (obfuscation_pointer < (cOBFUS_n_opt-1)) {
                             obfuscation_pointer++;
                         }
-                        sel_obfus_screen(obfuscation_pointer);
+                        print_generic_menu(menu_obfus, cOBFUS_n_opt, obfuscation_pointer);
                         pulsed_bt = NONE;
                         break;
                     case LEFT_BT:
-                        pulsed_bt = NONE;
-                        break;
                     case RIGTH_BT:
                         pulsed_bt = NONE;
                         break;
@@ -3819,11 +3703,11 @@ int main ( void ){
                             if (seed_pointer == cSEED_dice) {
                                 if (dice_mode_pointer == 1) { // String Hash back
                                     black_screen();
-                                    sel_hash_mode_screen(hash_mode_pointer);
+                                    print_generic_menu(menu_hash, cHASH_MODE_n_opt, hash_mode_pointer);
                                     estado = SEL_HASH_MODE;
                                 } else { // Raw back
                                     black_screen();
-                                    sel_dice_mode_screen(dice_mode_pointer);
+                                    print_generic_menu(menu_dice, cDICE_MODE_n_opt, dice_mode_pointer);
                                     estado = SEL_DICE_MODE;
                                 }
                             } else {
@@ -3836,14 +3720,14 @@ int main ( void ){
                         if (size_pointer > 0) {
                             size_pointer--;
                         }
-                        print_selsize_screen(size_pointer);
+                        print_generic_menu(menu_size, cSIZE_n_opt, size_pointer);
                         pulsed_bt = NONE;
                         break;
                     case DOWN_BT:
                         if (size_pointer < (cSIZE_n_opt-1)) {
                             size_pointer++;
                         }
-                        print_selsize_screen(size_pointer);
+                        print_generic_menu(menu_size, cSIZE_n_opt, size_pointer);
                         pulsed_bt = NONE;
                         break;
                     case LEFT_BT:
@@ -3868,14 +3752,14 @@ int main ( void ){
                         if (xor_pointer > 0) {
                             xor_pointer--;
                         }
-                        print_xorsel_screen(xor_pointer);
+                        print_generic_menu(menu_xor, cXOR_n_opt, xor_pointer);
                         pulsed_bt = NONE;
                         break;
                     case DOWN_BT:
                         if (xor_pointer < (cXOR_n_opt-1)) {
                             xor_pointer++;
                         }
-                        print_xorsel_screen(xor_pointer);
+                        print_generic_menu(menu_xor, cXOR_n_opt, xor_pointer);
                         pulsed_bt = NONE;
                         break;
                     case LEFT_BT:
@@ -4320,7 +4204,7 @@ int main ( void ){
                     case BACK_BT:
                         if (main_pointer == cMAIN_XOR)   {
                             black_screen();
-                            print_xorsel_screen(xor_pointer);
+                            print_generic_menu(menu_xor, cXOR_n_opt, xor_pointer);
                             estado = SEL_XOR;
                         }else if((main_pointer==cMAIN_SSS) & (sss_pointer==cSPLIT)){
                             black_screen();
@@ -4331,13 +4215,7 @@ int main ( void ){
                             print_selk_screen(SSS_K);
                             estado = SEL_K;
                         }else if(main_pointer==cMAIN_OBFUS){
-                            if(obfuscation_pointer==cOBFUS_SHIFT || obfuscation_pointer==cOBFUS_ADD){
-                                black_screen();
-                                print_obfus_config_screen();
-                                estado = OBFUS_CONFIG;
-                            }else{ // cOBFUS_NOT
-                                pulsed_bt = transition_to_obfus();
-                            }
+                            pulsed_bt = transition_to_obfus();
                         }else if (main_pointer == cMAIN_create) { 
                             pulsed_bt = transition_to_create_seed();
                         }else if (main_pointer == cMAIN_BIP85) {
@@ -4354,14 +4232,14 @@ int main ( void ){
                         if (selinput_pointer > 0) {
                             selinput_pointer--;
                         }
-                        sel_input_screen(selinput_pointer);
+                        print_generic_menu(menu_input, cSELINPUT_n_opt, selinput_pointer);
                         pulsed_bt = NONE;
                         break;
                     case DOWN_BT:
                         if (selinput_pointer < (cSELINPUT_n_opt-1)) {
                             selinput_pointer++;
                         }
-                        sel_input_screen(selinput_pointer);
+                        print_generic_menu(menu_input, cSELINPUT_n_opt, selinput_pointer);
                         pulsed_bt = NONE;
                         break;
                     case LEFT_BT:
@@ -4394,14 +4272,14 @@ int main ( void ){
                         if (sss_pointer > 0) {
                             sss_pointer--;
                         }
-                        sel_SSS_screen(sss_pointer);
+                        print_generic_menu(menu_sss, cSSS_n_opt, sss_pointer);
                         pulsed_bt = NONE;
                         break;
                     case DOWN_BT:
                         if (sss_pointer < (cSSS_n_opt-1)) {
                             sss_pointer++;
                         }
-                        sel_SSS_screen(sss_pointer);
+                        print_generic_menu(menu_sss, cSSS_n_opt, sss_pointer);
                         pulsed_bt = NONE;
                         break;
                     case LEFT_BT:
@@ -4421,7 +4299,7 @@ int main ( void ){
                         break;
                     case BACK_BT:
                         black_screen();
-                        sel_SSS_screen(sss_pointer);
+                        print_generic_menu(menu_sss, cSSS_n_opt, sss_pointer);
                         estado = SEL_SSS;
                         pulsed_bt = NONE;
                         break;
@@ -4460,7 +4338,7 @@ int main ( void ){
                         break;
                     case BACK_BT:
                         black_screen();
-                        sel_SSS_screen(sss_pointer);
+                        print_generic_menu(menu_sss, cSSS_n_opt, sss_pointer);
                         estado = SEL_SSS;
                         pulsed_bt = NONE;
                         break;
