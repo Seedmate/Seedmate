@@ -79,67 +79,64 @@ static const uint64_t K[80] = {
 #define Gamma0( x )       (S(x, 1) ^ S(x, 8) ^ R(x, 7))
 #define Gamma1( x )       (S(x, 19) ^ S(x, 61) ^ R(x, 6))
 
-#define Sha512Round( a, b, c, d, e, f, g, h, i )       \
+/*#define Sha512Round( a, b, c, d, e, f, g, h, i )       \
      t0 = h + Sigma1(e) + Ch(e, f, g) + K[i] + W[i];   \
      t1 = Sigma0(a) + Maj(a, b, c);                    \
      d += t0;                                          \
-     h  = t0 + t1;
+     h  = t0 + t1;*/
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //  TransformFunction
 //
-//  Compress 1024-bits
+//  Compress 1024-bits (Optimized Rolling Buffer)
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-static
-void
-    TransformFunction
-    (
-        Sha512Context*          Context,
-        uint8_t const*          Buffer
-    )
-{
-    uint64_t    S[8];
-    uint64_t    W[80];
-    uint64_t    t0;
-    uint64_t    t1;
-    int         i;
+static void TransformFunction(Sha512Context* Context, uint8_t const* Buffer) {
+    uint64_t W[16]; // Reduced from 80 to 16 to save 512 bytes of RAM!
+    uint64_t t0, t1;
+    uint64_t a, b, c, d, e, f, g, h;
+    int i;
 
-    // Copy state into S
-    for( i=0; i<8; i++ )
-    {
-        S[i] = Context->state[i];
+    // Load state into local variables
+    a = Context->state[0];
+    b = Context->state[1];
+    c = Context->state[2];
+    d = Context->state[3];
+    e = Context->state[4];
+    f = Context->state[5];
+    g = Context->state[6];
+    h = Context->state[7];
+
+    // Compress (Rolling 16-word window)
+    for( i=0; i<80; i++ ) {
+        if (i < 16) {
+            LOAD64H(W[i], Buffer + (8*i));
+        } else {
+            W[i & 15] = Gamma1(W[(i - 2) & 15]) + W[(i - 7) & 15] + Gamma0(W[(i - 15) & 15]) + W[(i - 16) & 15];
+        }
+        
+        t0 = h + Sigma1(e) + Ch(e, f, g) + K[i] + W[i & 15];
+        t1 = Sigma0(a) + Maj(a, b, c);
+        
+        // Shift variables down
+        h = g;
+        g = f;
+        f = e;
+        e = d + t0;
+        d = c;
+        c = b;
+        b = a;
+        a = t0 + t1;
     }
-
-    // Copy the state into 1024-bits into W[0..15]
-    for( i=0; i<16; i++ )
-    {
-        LOAD64H(W[i], Buffer + (8*i));
-    }
-
-    // Fill W[16..79]
-    for( i=16; i<80; i++ )
-    {
-        W[i] = Gamma1(W[i - 2]) + W[i - 7] + Gamma0(W[i - 15]) + W[i - 16];
-    }
-
-    // Compress
-     for( i=0; i<80; i+=8 )
-     {
-         Sha512Round(S[0],S[1],S[2],S[3],S[4],S[5],S[6],S[7],i+0);
-         Sha512Round(S[7],S[0],S[1],S[2],S[3],S[4],S[5],S[6],i+1);
-         Sha512Round(S[6],S[7],S[0],S[1],S[2],S[3],S[4],S[5],i+2);
-         Sha512Round(S[5],S[6],S[7],S[0],S[1],S[2],S[3],S[4],i+3);
-         Sha512Round(S[4],S[5],S[6],S[7],S[0],S[1],S[2],S[3],i+4);
-         Sha512Round(S[3],S[4],S[5],S[6],S[7],S[0],S[1],S[2],i+5);
-         Sha512Round(S[2],S[3],S[4],S[5],S[6],S[7],S[0],S[1],i+6);
-         Sha512Round(S[1],S[2],S[3],S[4],S[5],S[6],S[7],S[0],i+7);
-     }
 
     // Feedback
-    for( i=0; i<8; i++ )
-    {
-        Context->state[i] = Context->state[i] + S[i];
-    }
+    Context->state[0] += a;
+    Context->state[1] += b;
+    Context->state[2] += c;
+    Context->state[3] += d;
+    Context->state[4] += e;
+    Context->state[5] += f;
+    Context->state[6] += g;
+    Context->state[7] += h;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

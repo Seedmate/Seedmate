@@ -175,7 +175,11 @@
 #define  cN_MAX 9 // Max 9 samples
 
 #define INCORRECT_MSG "INCORRECT SET OF WORDS"
+#define LOAD_OK "LOAD OK"
 #define OK_MSG "OK"
+
+#define SHA512_SIZE 64          // SHA512 output size
+#define BLOCK_SIZE 128 // SHA512 block size
 
 int main_pointer = 0;
 int obfuscation_pointer =0;
@@ -275,6 +279,188 @@ void extract_11bit_groups(BYTE *data, size_t size);
 static void get_valid_next_letters(const char *prefix, bool *valid_letters);
 void print_keyboard_with_validation(int index, bool word_found, const char *current_word);
 
+// ============================================================================
+// BIP85 Derivation Engine
+// ============================================================================
+// -------------------- HMAC-SHA512 --------------------
+
+void HmacSha512(const BYTE *key, size_t keyLen,
+                const BYTE *data, size_t dataLen,
+                BYTE *out) {
+    BYTE k_ipad[BLOCK_SIZE];
+    BYTE k_opad[BLOCK_SIZE];
+    SHA512_HASH innerHash;
+    SHA512_HASH outerHash;
+    Sha512Context ctx;
+
+    if (keyLen > BLOCK_SIZE) {
+        Sha512Initialise(&ctx);
+        Sha512Update(&ctx, key, keyLen);
+        Sha512Finalise(&ctx, &innerHash);
+        key = innerHash.bytes;
+        keyLen = SHA512_SIZE;
+    }
+
+    memset(k_ipad, 0x36, BLOCK_SIZE);
+    memset(k_opad, 0x5c, BLOCK_SIZE);
+
+    for (size_t i = 0; i < keyLen; i++) {
+        k_ipad[i] ^= key[i];
+        k_opad[i] ^= key[i];
+    }
+
+    // Inner hash
+    Sha512Initialise(&ctx);
+    Sha512Update(&ctx, k_ipad, BLOCK_SIZE);
+    Sha512Update(&ctx, data, dataLen);
+    Sha512Finalise(&ctx, &innerHash);
+
+    // Outer hash
+    Sha512Initialise(&ctx);
+    Sha512Update(&ctx, k_opad, BLOCK_SIZE);
+    Sha512Update(&ctx, innerHash.bytes, SHA512_SIZE);
+    Sha512Finalise(&ctx, &outerHash);
+
+    memcpy(out, outerHash.bytes, SHA512_SIZE);
+}
+// -------------------- PBKDF2-HMAC-SHA512 --------------------
+void PBKDF2_HMAC_SHA512(const char *password, const char *salt,
+                        uint32_t iterations, BYTE *output, size_t dkLen) {
+    uint32_t blockCount = (dkLen + SHA512_SIZE - 1) / SHA512_SIZE;
+    BYTE U[SHA512_SIZE];
+    BYTE T[SHA512_SIZE];
+    BYTE saltBlock[32]; // <-- FIX: Reduced from 256 to safely fit in stack
+    size_t saltLen = strlen(salt);
+
+    for (uint32_t i = 1; i <= blockCount; i++) {
+        memcpy(saltBlock, salt, saltLen);
+        saltBlock[saltLen + 0] = (i >> 24) & 0xFF;
+        saltBlock[saltLen + 1] = (i >> 16) & 0xFF;
+        saltBlock[saltLen + 2] = (i >> 8) & 0xFF;
+        saltBlock[saltLen + 3] = i & 0xFF;
+
+        HmacSha512((const BYTE *)password, strlen(password),
+                   saltBlock, saltLen + 4, U);
+        memcpy(T, U, SHA512_SIZE);
+
+        for (uint32_t j = 2; j <= iterations; j++) {
+            HmacSha512((const BYTE *)password, strlen(password),
+                       U, SHA512_SIZE, U);
+            for (int k = 0; k < SHA512_SIZE; k++) {
+                T[k] ^= U[k];
+            }
+            
+            // FIX: Keep the system and watchdog happy during the heavy 2048-iteration hash loop
+            if (j % 16 == 0) {
+                SYS_Tasks(); 
+            }
+        }
+
+        size_t offset = (i - 1) * SHA512_SIZE;
+        size_t toCopy = (dkLen - offset < SHA512_SIZE) ? (dkLen - offset) : SHA512_SIZE;
+        memcpy(output + offset, T, toCopy);
+    }
+}
+
+
+static void get_mnemonic_string(char *out_str) {
+    int target_words = (size_pointer == cSIZE_12) ? 12 : 24;
+    int entropy_bytes = (size_pointer == cSIZE_12) ? 16 : 32;
+    
+    // Generate full seed data including the 4/8-bit SHA256 checksum
+    BYTE *c_buf = append_checksum(data_array_256b, entropy_bytes);
+    
+    int pos = 0;
+    out_str[0] = '\0';
+    if (c_buf == NULL) return;
+    
+
+    unsigned int group = 0;
+    int bit_index = 0;
+    int words_extracted = 0;
+    
+    // Size of c_buf is entropy_bytes + 1
+    for (size_t i = 0; i < (entropy_bytes + 1) * 8; i++) {
+        int byte_idx = i / 8;
+        int bit_pos = 7 - (i % 8);
+        int bit = (c_buf[byte_idx] >> bit_pos) & 1;
+
+        group = (group << 1) | bit;
+        bit_index++;
+
+        // Once 11 bits are collected, append the word
+        if (bit_index == 11) {
+            const char *w = get_word(group);
+        if (words_extracted > 0) {
+            out_str[pos++] = ' ';
+        }
+        if (w != NULL) {
+            while (*w != '\0') {
+                out_str[pos++] = *w++;
+            }
+        }
+        out_str[pos] = '\0';
+            words_extracted++;
+            group = 0;
+            bit_index = 0;
+            
+            // Break early to ignore trailing bits in the checksum byte
+            if (words_extracted == target_words) break;
+        }
+    }
+    //free(c_buf);
+}
+
+static void add_256_mod_n(uint8_t *out, const uint8_t *a, const uint8_t *b) {
+    // SECP256K1 curve order (n)
+    const uint8_t n[32] = {
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
+        0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B,
+        0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x41
+    };
+    uint16_t carry = 0;
+    uint8_t res[32];
+    
+    // 256-bit addition
+    for (int i = 31; i >= 0; i--) {
+        carry += a[i] + b[i];
+        res[i] = carry & 0xFF;
+        carry >>= 8;
+    }
+    
+    // Check if result >= n
+    bool over = false;
+    if (carry > 0) {
+        over = true;
+    } else {
+        for (int i = 0; i < 32; i++) {
+            if (res[i] > n[i]) { over = true; break; }
+            if (res[i] < n[i]) { break; }
+        }
+    }
+    
+    // Subtract n if overflowed (Strict portable wrapping)
+    if (over) {
+        int borrow = 0;
+        for (int i = 31; i >= 0; i--) {
+            // Force strict integer wrapping to prevent compiler sign-promotion bugs
+            int diff = (int)res[i] - (int)n[i] - borrow;
+            if (diff < 0) {
+                diff += 256;
+                borrow = 1;
+            } else {
+                borrow = 0;
+            }
+            out[i] = (uint8_t)diff;
+        }
+    } else {
+        for (int i = 0; i < 32; i++) {
+            out[i] = res[i];
+        }
+    }
+}
+
 void draw_hex16(unsigned int x, unsigned int y, uint16_t numero, int N, unsigned int color, unsigned int bg, unsigned int size) {
     char hex_text[5]; // 4 hex digits plus null terminator
 
@@ -283,6 +469,103 @@ void draw_hex16(unsigned int x, unsigned int y, uint16_t numero, int N, unsigned
         drawtext(x + i * (12 * size), y, hex_text, color, bg, size); // Adjust spacing for the current size
     }
 }
+
+
+static void process_bip85_derivation(void) {
+    char mnemonic_str[250]; 
+    get_mnemonic_string(mnemonic_str);
+    
+    // Convert the entire mnemonic string to lowercase per BIP39 standard
+    for (int i = 0; mnemonic_str[i] != '\0'; i++) {
+        if (mnemonic_str[i] >= 'A' && mnemonic_str[i] <= 'Z') {
+            mnemonic_str[i] = mnemonic_str[i] + ('a' - 'A');
+        }
+    }
+    
+    uint8_t seed[64];
+    PBKDF2_HMAC_SHA512(mnemonic_str, "mnemonic", 2048, seed, 64);
+    
+    uint8_t I[64];
+    HmacSha512((uint8_t *)"Bitcoin seed", 12, seed, 64, I);
+    
+    uint8_t k[32];
+    uint8_t c[32];
+    
+    // Initialize k and c from master seed
+    memcpy(k, I, 32);
+    memcpy(c, I + 32, 32);
+    
+    uint32_t path[5] = {
+        0x80000000 | 83696968,
+        0x80000000 | 39,
+        0x80000000 | 0,
+        0x80000000 | ((bip85_size == cSIZE_12) ? 12 : 24),
+        0x80000000 | bip85_index
+    };
+    
+    for (int i = 0; i < 5; i++) {
+        uint8_t data[37];
+        data[0] = 0x00;
+        memcpy(data + 1, k, 32);
+        data[33] = (path[i] >> 24) & 0xFF;
+        data[34] = (path[i] >> 16) & 0xFF;
+        data[35] = (path[i] >> 8) & 0xFF;
+        data[36] = path[i] & 0xFF;
+        
+        HmacSha512(c, 32, data, 37, I);
+        
+        // FIX 1: Proper BIP32 child key addition mod n
+        add_256_mod_n(k, I, k); // k_i = (I_L + k_par) % n
+        memcpy(c, I + 32, 32);  // c_i = I_R
+    }
+    
+    // FIX 2: BIP85 explicitly requires HMAC-SHA512 step here using "bip-entropy-from-k"
+    uint8_t bip85_hmac_out[64];
+    HmacSha512((uint8_t *)"bip-entropy-from-k", 18, k, 32, bip85_hmac_out);
+    
+    /*
+    // --- DIAGNOSTIC OVERLAY ---
+    black_screen();
+    char dbg[6] = {0};
+    strncpy(dbg, mnemonic_str, 6);
+    
+    // 1. Check String Construction
+    drawtext(1, 10, "Mnem: ", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(40, 10, dbg, ST7735_YELLOW, ST7735_BLACK, 1);
+    
+    // 2. Check PBKDF2 Master Seed (First 4 bytes)
+    drawtext(1, 30, "Seed: ", ST7735_WHITE, ST7735_BLACK, 1);
+    draw_hex16(40, 30, (seed[0]<<8)|seed[1], 1, ST7735_YELLOW, ST7735_BLACK, 1);
+    draw_hex16(64, 30, (seed[2]<<8)|seed[3], 1, ST7735_YELLOW, ST7735_BLACK, 1);
+    
+    // 3. Check BIP32 Path Derivation (First 4 bytes of final child private key)
+    drawtext(1, 50, "k_out: ", ST7735_WHITE, ST7735_BLACK, 1);
+    draw_hex16(40, 50, (k[0]<<8)|k[1], 1, ST7735_YELLOW, ST7735_BLACK, 1);
+    draw_hex16(64, 50, (k[2]<<8)|k[3], 1, ST7735_YELLOW, ST7735_BLACK, 1);
+
+    // 4. Check BIP85 Hash (First 4 bytes of raw entropy)
+    drawtext(1, 70, "BIP85: ", ST7735_WHITE, ST7735_BLACK, 1);
+    draw_hex16(40, 70, (bip85_hmac_out[0]<<8)|bip85_hmac_out[1], 1, ST7735_YELLOW, ST7735_BLACK, 1);
+    draw_hex16(64, 70, (bip85_hmac_out[2]<<8)|bip85_hmac_out[3], 1, ST7735_YELLOW, ST7735_BLACK, 1);
+
+    drawtext(1, 100, "PRESS OK TO CONTINUE", ST7735_GREEN, ST7735_BLACK, 1);
+    
+    // Halt state machine until user manually verifies screen
+    while(BT_OK == 1) { SYS_Tasks(); } 
+    while(BT_OK == 0) { SYS_Tasks(); } // Wait for button release
+    // --- END DIAGNOSTIC --- */
+    
+    memset(data_array_256b, 0, 36);
+    int target_bytes = (bip85_size == cSIZE_12) ? 16 : 32;
+    for (int i = 0; i < target_bytes; i++) {
+        data_array_256b[i] = bip85_hmac_out[i];
+    }
+    
+    size_pointer = bip85_size;
+}
+// ============================================================================
+
+
 
 // Writes byte 'val' at linear position 'i' (0..159)
  inline void write_coefficient_byte(unsigned i, uint8_t val){
@@ -345,6 +628,7 @@ typedef enum
     PROCESS_TRIPLE,
     SHOW_TRIPLE_CHKSUM_12,
     SHOW_TRIPLE_CHKSUM_24,
+    PROCESS_BIP85,
     SEL_DICE_MODE,
     SEL_HASH_MODE,
     DICE_STRING_INPUT,
@@ -1200,8 +1484,8 @@ void print_child_config_screen(void) {
     uint16_t size_color = (bip85_cursor == 0) ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t index_color = (bip85_cursor == 1) ? ST7735_ORANGE : ST7735_WHITE;
 
-    char *size_str = (bip85_size == cSIZE_12) ? "12 words" : "24 words";
-    drawtext(1, 30, size_str, size_color, ST7735_BLACK, 1);
+    const char *size_str = (bip85_size == cSIZE_12) ? "12 words" : "24 words";
+    drawtext(1, 30, (char*)size_str, size_color, ST7735_BLACK, 1);
 
     char index_str[12];
     u16_to_str((unsigned int)bip85_index, index_str);
@@ -2237,11 +2521,9 @@ void print_previous_confirmed_word(int current_word_number, char *word_number_te
 static BYTE *append_checksum(BYTE *data_array, int N) {
     BYTE hash[SHA256_BLOCK_SIZE];
     SHA256_CTX ctx;
-    BYTE *checksum_buffer = (BYTE*)malloc((size_t)N + 1u);
-
-    if (!checksum_buffer) {
-        return NULL;
-    }
+    
+    // Statically allocated buffer handles up to 32 bytes of entropy + 1 checksum byte
+    static BYTE checksum_buffer[33]; 
 
     sha256_init(&ctx);
     sha256_update(&ctx, data_array, (size_t)N);
@@ -2269,7 +2551,7 @@ static bool matches_last_word_checksum(BYTE *data_array, char *word_user, int se
     }
 
     matches = check_last_word(checksum_buffer, (size_t)(17 + 16 * sel_size), word_user);
-    free(checksum_buffer);
+    //free(checksum_buffer);
     return matches;
 }
 
@@ -2988,14 +3270,12 @@ int main ( void ){
 
     int lt_idx = 0; // Letter index
 
-    char* word = malloc(32 * sizeof(char));
+    char word[32] = {0};
     char result[32]; // Search result preview
     const char* found = NULL;
     bool found_bool = false;
 
-    if (word != NULL) {
-        word[0] = '\0';
-    }
+    word[0] = '\0';
 
     int word_number = 1; // Tracks the word being entered
     char word_number_text[12];
@@ -3733,13 +4013,13 @@ int main ( void ){
                                             pulsed_bt = NONE;
                                             break;
                                         }
-                                        drawtext(70, 20 + 10*SDblock_pointer, "LOAD OK", ST7735_GREEN, ST7735_BLACK, 1);
+                                        drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
                                         black_screen();
                                         estado = PROCESS_TRIPLE;
                                         pulsed_bt = NONE;
                                         break;
                                     } else if (main_pointer==cMAIN_SSS){
-                                        drawtext(70, 20 + 10*SDblock_pointer, "LOAD OK", ST7735_GREEN, ST7735_BLACK, 1);
+                                        drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
                                         black_screen();
                                         sss_split_kofm(data_array_256b /* c0 */,
                                             coeffs, SSS_K /* k threshold */,
@@ -3749,7 +4029,7 @@ int main ( void ){
                                         for (int i = 0; i < 16 + size_pointer*16; i++) data_array_256b[i]=shares[selected_share_id-1][i];
 
                                     }else if (main_pointer==cMAIN_OBFUS) {
-                                        drawtext(70, 20 + 10*SDblock_pointer, "LOAD OK", ST7735_GREEN, ST7735_BLACK, 1);
+                                        drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
                                         black_screen();
                                         if (obfuscation_pointer==cOBFUS_NOT){
                                             not_operator(data_array_256b,16 + size_pointer*16);
@@ -3763,10 +4043,11 @@ int main ( void ){
                                             addsub_11bit_groups(16 + size_pointer*16, shift_nbits, add_pointer);
                                         }
                                     }else if (main_pointer==cMAIN_BIP85) {
-                                        drawtext(70, 20 + 10*SDblock_pointer, "LOAD OK", ST7735_GREEN, ST7735_BLACK, 1);
+                                        drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
                                         black_screen();
-                                        drawtext(5, 50, "BIP85 under construction", ST7735_WHITE, ST7735_BLACK, 1);
-                                        estado = END_MODE;
+                                        drawtext(20, 50, "COMPUTING CHILD", ST7735_WHITE, ST7735_BLACK, 1);
+                                        drawtext(20, 65, "MNEMONIC...", ST7735_WHITE, ST7735_BLACK, 1);
+                                        estado = PROCESS_BIP85;
                                         pulsed_bt = NONE;
                                         break;
                                     }
@@ -4724,7 +5005,7 @@ int main ( void ){
                            bool valid_letters[26];
                            get_valid_next_letters(word, valid_letters);
                            if (valid_letters[lt_idx]) {
-                               word = add_char(word, lt_idx, 32);
+                               add_char(word, lt_idx, 32);
                                found = refresh_word_input_preview(word, result, sizeof(result), &found_bool);
 
                                lt_idx = get_nearest_valid_key(lt_idx, word, found_bool);
@@ -4841,8 +5122,9 @@ int main ( void ){
                                         }
                                     } else if (main_pointer==cMAIN_BIP85) {
                                         black_screen();
-                                        drawtext(5, 50, "BIP85 under construction", ST7735_WHITE, ST7735_BLACK, 1);
-                                        estado = END_MODE;
+                                        drawtext(20, 50, "COMPUTING CHILD", ST7735_WHITE, ST7735_BLACK, 1);
+                                        drawtext(20, 65, "MNEMONIC...", ST7735_WHITE, ST7735_BLACK, 1);
+                                        estado = PROCESS_BIP85;
                                         pulsed_bt = NONE;
                                         break;
                                     }
@@ -5070,6 +5352,11 @@ int main ( void ){
                     estado = WRITE_WORD;
                     pulsed_bt = NONE;
                 }
+                break;
+            case PROCESS_BIP85:
+                process_bip85_derivation();
+                redraw_show_seed_with_offset();
+                pulsed_bt = NONE;
                 break;
             case PROCESS_TRIPLE: {
                 black_screen();
