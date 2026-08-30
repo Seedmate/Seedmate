@@ -14,6 +14,7 @@ This project includes, vendors, or references third-party components.
 - **Project:** `WjCryptLib`
 - **Upstream:** `https://github.com/WaterJuice/WjCryptLib`
 - **Used for:** SHA256 for checksum calculation
+- **Used for:** SHA512 for BIP85 derivation
 - **License:** `UNLICENSE`
 - **Copyright:** `Public Domain (Author: WaterJuice)`
 
