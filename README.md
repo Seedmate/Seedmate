@@ -9,10 +9,11 @@ Status: Tested and production-ready. However, unexpected bugs may still occur.
 ## Features
 
 - Offline seed handling
-- Entropy capture from multiple input methods
+- Entropy capture from multiple sources and multiple conversion methods
 - BIP39 word-based workflows
-- XOR-based seed operations
-- Shamir Secret Sharing workflows
+- SeedXOR operations
+- Shamir Secret Sharing over BIP39
+- BIP85 derivation
 - QR export
 - SD card storage/export
 - TFT display and button-driven interface
@@ -40,6 +41,7 @@ src/
   SPI.*
   TFT.*
   SHA256.*
+  SHA512.*
   words.h
   SSS/
   SD/
