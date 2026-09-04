@@ -45,7 +45,7 @@ void send_data(unsigned char data)
 void delay_ms(unsigned int milliseconds) {
     volatile unsigned int count;
     while (milliseconds > 0) {
-        count = 1000; // Ajusta este valor según la velocidad de tu procesador
+        count = 3000; // Ajusta este valor según la velocidad de tu procesador
             while (count > 0) {
                 count--;
             }

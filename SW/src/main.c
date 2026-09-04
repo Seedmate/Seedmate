@@ -3103,6 +3103,15 @@ void transition_to_obfus(void) {
     estado = SEL_OBFUS;
 }
 
+bool is_share_id_already_loaded(uint8_t id, uint8_t *indices) {
+    for (int i = 0; i < shares_loaded; i++) {
+        if (indices[i] == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
 
 int main ( void ){
     /* Initialize all modules */
@@ -4012,6 +4021,10 @@ int main ( void ){
                 switch (pulsed_bt) {
                     case OK_BT:
                         {
+                            if (is_share_id_already_loaded(selected_share_id, share_indices)) {
+                                drawtext(70, 20 + 10*SDblock_pointer, "ID REPEATED   ", ST7735_RED, ST7735_BLACK, 1);
+                                break;
+                            }
                             int sd_status = load_and_verify_sd_slot(SDblock_pointer + SD_page * cSDBLOCK_n_opt);
                             if (sd_status == 0) {
                                 // Load size from the first share and validate the rest.
@@ -4027,7 +4040,7 @@ int main ( void ){
                                 }
                                 share_indices[shares_loaded] = selected_share_id;
                                 shares_loaded++;
-                                drawtext(70, 20 + 10*SDblock_pointer,  "SHARE OK", ST7735_GREEN, ST7735_BLACK, 1);
+                                drawtext(70, 20 + 10*SDblock_pointer,  "SHARE OK   ", ST7735_GREEN, ST7735_BLACK, 1);
 
                                 if (shares_loaded >= (SSS_K)) { // We already have K shares
                                     black_screen();
@@ -4276,6 +4289,10 @@ int main ( void ){
            case SEL_SHARE:
                 switch (pulsed_bt) {
                     case OK_BT:
+                        if (is_share_id_already_loaded(selected_share_id, share_indices)) {
+                            drawtext(10, 50, "ID REPEATED", ST7735_RED, ST7735_BLACK, 1);
+                            break; 
+                        }
                         black_screen();
                         estado = WRITE_WORD;
                         word_number=1;
