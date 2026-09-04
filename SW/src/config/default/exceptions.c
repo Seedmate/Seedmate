@@ -54,8 +54,8 @@
 // Section: Forward declaration of the handler functions
 // *****************************************************************************
 // *****************************************************************************
-/* MISRAC 2012 deviation block start */
-/* MISRA C-2012 Rule 21.2 deviated 4 times. Deviation record ID -  H3_MISRAC_2012_R_21_2_DR_4 */
+/* MISRAC 2023 deviation block start */
+/* MISRA C-2023 Rule 21.2 deviated 4 times. Deviation record ID -  H3_MISRAC_2023_R_21_2_DR_4 */
 void _general_exception_handler(void);
 void _bootstrap_exception_handler(void);
 

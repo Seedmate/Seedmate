@@ -69,8 +69,8 @@
 // *****************************************************************************
 // *****************************************************************************
 
-/* MISRAC 2012 deviation block start */
-/* MISRA C-2012 Rule 5.4 deviated: 5  Deviation record ID -  H3_MISRAC_2012_R_5_4_DR_1 */
+/* MISRAC 2023 deviation block start */
+/* MISRA C-2023 Rule 5.4 deviated: 5  Deviation record ID -  H3_MISRAC_2023_R_5_4_DR_1 */
 #define    INT_SOURCE_CORE_TIMER   (_CORE_TIMER_VECTOR)
 
 #define    INT_SOURCE_CORE_SOFTWARE_0   (_CORE_SOFTWARE_0_VECTOR)
@@ -151,7 +151,7 @@
 
 #define    INT_SOURCE_PERFORMANCE_COUNTER   (_PERFORMANCE_COUNTER_VECTOR)
 
-    /* MISRAC 2012 deviation block end */
+    /* MISRAC 2023 deviation block end */
 typedef uint32_t INT_SOURCE;
 
 
