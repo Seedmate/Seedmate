@@ -24,8 +24,8 @@
  *   - Security-sensitive data should be handled carefully at all times
  *
  * Author:      Seedmate
- * Date:        29/8/2026
- * Version:     v1.5                               
+ * Date:        05/09/2026
+ * Version:     v1.6                               
  * License
  * 
  * This project is licensed under the MIT License.
@@ -76,7 +76,7 @@
 #define SCREEN_HEIGHT 128
 
 
-#define cVersion "v1.5"
+#define cVersion "v1.6"
 
 #define SD_SCK    PORTBbits.RB7
 #define SD_CS     PORTCbits.RC9
@@ -99,7 +99,7 @@
 
 
 
-#define cMAIN_n_opt 8
+#define cMAIN_n_opt 9
 #define cSEED_n_opt 6
 #define cSIZE_n_opt 2
 #define cOBFUS_n_opt 4
@@ -111,10 +111,15 @@
 #define cDICE_MODE_n_opt 2
 #define cHASH_MODE_n_opt 2
 #define cRESOURCE_n_opt 4
+#define cSETTINGS_n_opt 1
+#define cSETTINGS_SEEDQR 0
 #define cEND_OF_LINE 150
 #define cENTROPY_BITS12W 127
 #define cENTROPY_BITS24W 255
 #define cCARD_MAX_HISTORY 128
+
+bool seedqr_enabled = false;
+int settings_pointer = 0;
 
 
 #define cMAIN_create 0
@@ -125,6 +130,7 @@
 #define cMAIN_OBFUS 5
 #define cMAIN_ERASESD 6
 #define cMAIN_QR 7 // Resources menu
+#define cMAIN_SETTINGS 8
 
 #define cRESOURCE_tutorial 0
 #define cRESOURCE_backup 1
@@ -184,6 +190,7 @@
 // ============================================================================
 // Global Menus (Forces the compiler to store pointers strictly in ROM)
 // ============================================================================
+const char* const menu_main[]     = {"CREATE NEW SEED WORDS", "LOAD SEED WORDS", "BIP85 CHILD SEED", "SHAMIR SECRET SHARE", "SEED WORD XOR", "OBFUSCATION", "ERASE SD", "RESOURCES", "SETTINGS"};
 const char* const menu_create[]   = {"THROW COINS", "ROLL DICE", "RANDOM WORD PICK", "DRAW CARDS", "STOPWATCH TEST ONLY", "TRIPLE MNEMONIC"};
 const char* const menu_dice[]     = {"RAW ENTROPY BITS", "STRING HASH"};
 const char* const menu_hash[]     = {"1-6 mode", "0-5 mode (Keystone)"};
@@ -625,6 +632,8 @@ typedef enum
     SEL_HASH_MODE,
     DICE_STRING_INPUT,
     OBFUS_QR_VIEW,
+    SEL_SETTINGS,
+    WARNING_SEEDQR,
     END_MODE // Final
 } state_t;
 
@@ -885,7 +894,7 @@ void grid_coins(){              // Heads tails
     drawtext(67,107, "DEL", ST7735_WHITE, ST7735_WHITE, 1);
 }
 
-void grid_TMR(){
+void grid_OK_only(){
     print_cursor_grid();
     print_ok();
 }
@@ -909,48 +918,15 @@ void print_generic_menu(const char* const *options, int n_opt, int sel) {
 }
 
 void main_screen(int sel) {
-    char* opciones[] = {
-        "CREATE NEW SEED WORDS",
-        "LOAD SEED WORDS",
-        "BIP85 CHILD SEED",
-        "SHAMIR SECRET SHARE",
-        "SEED WORD XOR",
-        "OBFUSCATION",
-        "ERASE SD",
-        "RESOURCES"
-    };
-
     for (int i = 0; i < cMAIN_n_opt; i++) {
         uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, 5 + i * 10, opciones[i], color, ST7735_BLACK, 1);
+        drawtext(1, 5 + i * 10, (char*)menu_main[i], color, ST7735_BLACK, 1);
     }
     if(SD_ready)drawtext(10, 118, "SD OK", ST7735_GREEN, ST7735_BLACK, 1);
     grid_menu1();
 }
 
-static int last_sel = 0;
-void main_screen_fast(int sel) {
-    char* opciones[] = {
-        "CREATE NEW SEED WORDS",
-        "LOAD SEED WORDS",
-        "BIP85 CHILD SEED",
-        "SHAMIR SECRET SHARE",
-        "SEED WORD XOR",
-        "OBFUSCATION",
-        "ERASE SD",
-        "RESOURCES"
-    };
 
-    if (last_sel != -1 && last_sel != sel) {
-        // Repaint the previous one in white
-        drawtext(1, 5 + last_sel * 10, opciones[last_sel], ST7735_WHITE, ST7735_BLACK, 1);
-    }
-
-    // Paint the new one in orange
-    drawtext(1, 5 + sel * 10, opciones[sel], ST7735_ORANGE, ST7735_BLACK, 1);
-
-    last_sel = sel;
-}
 int SD_page = 0;
 
 
@@ -1339,7 +1315,7 @@ void print_checksum_screen(void) {
     drawtext(1, y_cursor, "word: ", ST7735_WHITE, ST7735_BLACK, 1);
     drawtext(37, y_cursor, (char*)correct_word, ST7735_GREEN, ST7735_BLACK, 1);
 
-    grid_TMR(); 
+    grid_OK_only(); 
 }
 
 void print_triple_checksum(int word_target) {
@@ -1391,7 +1367,7 @@ void print_triple_checksum(int word_target) {
 
     drawtext(1, y_cursor, "word: ", ST7735_WHITE, ST7735_BLACK, 1);
     drawtext(37, y_cursor, (char*)correct_word, ST7735_GREEN, ST7735_BLACK, 1);
-    grid_TMR(); 
+    grid_OK_only(); 
 }
 
 void print_diceroll_screen(int sel, int sel2){
@@ -1419,7 +1395,7 @@ void print_TMR_screen(int size_TMR){
     drawtext(1,5, "STOP timer to set entropy", ST7735_WHITE, ST7735_BLACK, 1);
     char *text_TMR_SEED = size_TMR ? "000/256 bits" : "000/128 bits";
     drawtext(45,15, text_TMR_SEED, ST7735_WHITE, ST7735_BLACK, 1);
-    grid_TMR();
+    grid_OK_only();
 }
 
 void print_child_config_screen(void) {
@@ -2252,14 +2228,15 @@ void extract_11bit_groups(BYTE *data, size_t size) {
         }
     }
     print_camera(145,20,cNOTSAFE);
+    if (seedqr_enabled) {
+        drawtext(135,80, "SEED", ST7735_ORANGE, ST7735_BLACK, 1);
+        drawtext(145,90, "QR", ST7735_ORANGE, ST7735_BLACK, 1);
 
-    drawtext(135,80, "SEED", ST7735_ORANGE, ST7735_BLACK, 1);
-    drawtext(145,90, "QR", ST7735_ORANGE, ST7735_BLACK, 1);
-
-    print_rigth_arrow(150,105);
-    drawtext(90,117, "QR COMPACT", ST7735_ORANGE, ST7735_BLACK, 1);
-    print_rigth_arrow(150,123);
-
+        print_rigth_arrow(150,105);
+        drawtext(90,117, "QR COMPACT", ST7735_ORANGE, ST7735_BLACK, 1);
+        print_rigth_arrow(150,123);
+    }
+    
     drawtext(7,117, "SAVE TO SD", ST7735_ORANGE, ST7735_BLACK, 1);
     print_left_arrow(0,123);
     if ((main_pointer==cMAIN_SSS) & (sss_pointer==cSPLIT)){
@@ -3114,6 +3091,24 @@ bool is_share_id_already_loaded(uint8_t id, uint8_t *indices) {
     return false;
 }
 
+void print_settings_screen(int sel) {
+    char* text_seedqr = seedqr_enabled ? "SeedQR ON " : "SeedQR OFF";
+    uint16_t color = (sel == cSETTINGS_SEEDQR) ? ST7735_ORANGE : ST7735_WHITE;
+    
+    drawtext(1, 10, text_seedqr, color, ST7735_BLACK, 1);
+    
+    grid_menu2(); // 
+}
+
+void print_seedqr_warning(void) {
+    rectan(0, 0, 159, 127, ST7735_RED); 
+    drawtext(20, 30, "SeedQR = seed phrase", ST7735_WHITE, ST7735_RED, 1);
+    drawtext(50, 45, "DO NOT SCAN", ST7735_WHITE, ST7735_RED, 1);
+    drawtext(50, 60, "WITH PHONE", ST7735_WHITE, ST7735_RED, 1);    
+    grid_OK_only(); 
+    
+}
+
 
 int main ( void ){
     /* Initialize all modules */
@@ -3323,6 +3318,10 @@ int main ( void ){
                             black_screen();
                             print_generic_menu(menu_resource, cRESOURCE_n_opt, resource_pointer);
                             estado = RESOURCE_MENU;
+                        } else if (main_pointer == cMAIN_SETTINGS) {
+                            black_screen();
+                            print_settings_screen(settings_pointer);
+                            estado = SEL_SETTINGS;                        
                         }
                         break;
                     case BACK_BT:
@@ -3332,14 +3331,14 @@ int main ( void ){
                         if (main_pointer > 0) {
                             main_pointer--;
                         }
-                        main_screen_fast(main_pointer);
+                        main_screen(main_pointer); // <--- Actualizado
                         break;
                     case DOWN_BT:
                         spi_send(0x55);
                         if (main_pointer < (cMAIN_n_opt-1)) {
                             main_pointer++;
                         }
-                        main_screen_fast(main_pointer);
+                        main_screen(main_pointer); // <--- Actualizado
                         break;
 
                     case LEFT_BT:
@@ -4786,6 +4785,7 @@ int main ( void ){
             case SHOW_SEED:
                 switch (pulsed_bt) {
                     case OK_BT:
+                        if (!seedqr_enabled) break; //QR disabled
                         white_screen();
                         {
                             BYTE *qr_buf = append_checksum(data_array_256b, 16 + size_pointer*16);
@@ -4826,6 +4826,7 @@ int main ( void ){
                         estado=SEL_SD_BLOCK_WR;
                         break;
                     case RIGTH_BT: // Compact QR
+                        if (!seedqr_enabled) break; //QR disabled
                         white_screen();
                         draw_compactqr_code(16 + size_pointer*16, data_array_256b);
                         print_camera(2,50,cNOTSAFE);
@@ -4989,6 +4990,44 @@ int main ( void ){
                         break;
                 }
                 break;
+            case SEL_SETTINGS:
+            switch (pulsed_bt) {
+                case OK_BT:
+                    if (settings_pointer == cSETTINGS_SEEDQR) {
+                        if (!seedqr_enabled) {
+                            seedqr_enabled = true; // OFF -> ON
+                            print_seedqr_warning();
+                            estado = WARNING_SEEDQR;
+                        } else {
+                            seedqr_enabled = false; // ON -> OFF
+                            black_screen();
+                            print_settings_screen(settings_pointer);
+                        }
+                    }
+                    break;
+                case BACK_BT:
+                    transition_to_main();
+                    break;
+                case UP_BT:
+                    if (settings_pointer > 0) settings_pointer--;
+                    print_settings_screen(settings_pointer);
+                    break;
+                case DOWN_BT:
+                    if (settings_pointer < (cSETTINGS_n_opt-1)) settings_pointer++;
+                    print_settings_screen(settings_pointer);
+                    break;
+                default:
+                    break;
+            }
+            break;
+
+            case WARNING_SEEDQR:
+            if (pulsed_bt == OK_BT) {                
+                black_screen();
+                print_settings_screen(settings_pointer);
+                estado = SEL_SETTINGS;
+            }
+            break;
             case END_MODE:
                 switch (pulsed_bt) {
                     case OK_BT:
