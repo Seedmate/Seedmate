@@ -102,7 +102,7 @@
 #define cMAIN_n_opt 8
 #define cSEED_n_opt 6
 #define cSIZE_n_opt 2
-#define cOBFUS_n_opt 3
+#define cOBFUS_n_opt 4
 #define cXOR_n_opt 3
 #define cSSS_n_opt 2
 #define cQR_n_opt 2
@@ -134,6 +134,7 @@
 #define cOBFUS_SHIFT 0
 #define cOBFUS_NOT 1
 #define cOBFUS_ADD 2
+#define cOBFUS_HOWTO 3
 
 #define cSEED_coin 0
 #define cSEED_dice 1
@@ -192,7 +193,7 @@ const char* const menu_xor[]      = {"A XOR B = C", "A XOR B XOR C = D", "A XOR 
 const char* const menu_sss[]      = {"SPLIT", "MERGE"};
 const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD"};
 const char* const menu_resource[] = {"TUTORIAL", "BACKUP TOOL", "DICE TESTER", "PRINT WORDLIST"};
-const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB"}; 
+const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB","HOW TO"}; 
 
 
 int main_pointer = 0;
@@ -623,6 +624,7 @@ typedef enum
     SEL_DICE_MODE,
     SEL_HASH_MODE,
     DICE_STRING_INPUT,
+    OBFUS_QR_VIEW,
     END_MODE // Final
 } state_t;
 
@@ -3525,7 +3527,14 @@ int main ( void ){
             case SEL_OBFUS:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        if (obfuscation_pointer == cOBFUS_NOT) { // Negate seed words
+                        if (obfuscation_pointer == cOBFUS_HOWTO) {
+                            black_screen();
+                            white_screen();
+                            draw_qr_code("seedmate.net/obfuscation.html"); 
+                            print_camera(2, 65, cSAFE);
+                            print_left_arrow_black(5, 123);
+                            estado = OBFUS_QR_VIEW;
+                        } else if (obfuscation_pointer == cOBFUS_NOT) { // Negate seed words
                             transition_to_input(selinput_pointer);
                         } else { // Shift or Add/Sub
                             black_screen();
@@ -4045,7 +4054,7 @@ int main ( void ){
                                 if (shares_loaded >= (SSS_K)) { // We already have K shares
                                     black_screen();
                                     if (!shamir_interpolate(SSS_result,0,share_indices, shares_input,SSS_K,LEN)){
-                                        drawtext(5,39, "(SSS Error, repeated id?)", ST7735_RED, ST7735_BLACK, 1);
+                                        drawtext(5,39, "Shamir Error", ST7735_RED, ST7735_BLACK, 1);
                                         estado = END_MODE;
                                         break;
                                     }
@@ -4964,6 +4973,17 @@ int main ( void ){
                     case OK_BT:
                         triple_view_state = 0;
                         refresh_triple_view();
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case OBFUS_QR_VIEW:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        break;
+                    case BACK_BT:
+                        transition_to_obfus();
                         break;
                     default:
                         break;
