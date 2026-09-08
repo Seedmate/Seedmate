@@ -33,7 +33,6 @@
       <itemPath>../src/SSS/memzero.h</itemPath>
       <itemPath>../src/words_opt.h</itemPath>
       <itemPath>../src/sha512.h</itemPath>
-      <itemPath>../src/screens.h</itemPath>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
                    displayName="Important Files"
@@ -94,7 +93,6 @@
       <itemPath>../src/SSS/memzero.c</itemPath>
       <itemPath>../src/main.c</itemPath>
       <itemPath>../src/sha512.c</itemPath>
-      <itemPath>../src/screens.c</itemPath>
     </logicalFolder>
   </logicalFolder>
   <sourceRootList>

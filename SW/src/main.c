@@ -67,6 +67,7 @@
 #include "TFT.h"                        // TFT functions
 #include "sha256.h"
 #include "sha512.h"
+//#include "screens.h"
 #include "words_opt.h"
 #include <string.h>
 #include "SSS/shamir.h"
@@ -102,7 +103,7 @@
 #define cMAIN_n_opt 9
 #define cSEED_n_opt 6
 #define cSIZE_n_opt 2
-#define cOBFUS_n_opt 4
+#define cOBFUS_n_opt 5
 #define cXOR_n_opt 3
 #define cSSS_n_opt 2
 #define cQR_n_opt 2
@@ -140,7 +141,8 @@ int settings_pointer = 0;
 #define cOBFUS_SHIFT 0
 #define cOBFUS_NOT 1
 #define cOBFUS_ADD 2
-#define cOBFUS_HOWTO 3
+#define cOBFUS_1WORD_XOR 3
+#define cOBFUS_HOWTO 4
 
 #define cSEED_coin 0
 #define cSEED_dice 1
@@ -200,7 +202,7 @@ const char* const menu_xor[]      = {"A XOR B = C", "A XOR B XOR C = D", "A XOR 
 const char* const menu_sss[]      = {"SPLIT", "MERGE"};
 const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD"};
 const char* const menu_resource[] = {"TUTORIAL", "BACKUP TOOL", "DICE TESTER", "PRINT WORDLIST"};
-const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB","HOW TO"}; 
+const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB","1 WORD XOR","HOW TO"}; 
 
 
 int main_pointer = 0;
@@ -240,6 +242,9 @@ int size_pointer = 0;
 int bit_count_dice = 0;
 int entropy_bits = 0;
 int last_input_len = 0; // Tracks the length of the most recent entropy input
+
+bool capturing_xor_word = false; // Flag to hijack WRITE_WORD behavior
+int obfus_xor_word_idx = 0;
 
 int seed_pointer = 0;
 int card_rank_pointer = 0;
@@ -2322,6 +2327,11 @@ void draw_QRSEED(const unsigned char *data, size_t size) {
 
 
 void print_word_number_top(int word_number, char *word_number_text) {
+    if (capturing_xor_word) {
+        rectan(10, 10, 59, 18, BLACK); // Clear header area
+        drawtext(5, 10, "XOR WORD:", ST7735_WHITE, ST7735_BLACK, 1);
+        return; // Abort standard drawing
+    }
     char suffix;
 
     // Choose the suffix from the current XOR input slot.
@@ -2347,6 +2357,8 @@ void print_word_number_top(int word_number, char *word_number_text) {
 }
 
 void print_previous_confirmed_word(int current_word_number, char *word_number_text) {
+    if (capturing_xor_word) return; // Do not draw previous word on XOR capture
+    
     const char *previous_word;
 
     clear_write_word_previous_display();
@@ -3109,6 +3121,22 @@ void print_seedqr_warning(void) {
     
 }
 
+void apply_1word_xor(int word_idx, int size) {
+    BYTE xor_mask[36] = {0};
+    int total_words = (size == cSIZE_12) ? 12 : 24;
+
+    // Repeat the 11-bit word index across the mask buffer
+    for (int i = 1; i <= total_words + 1; i++) {
+        write_11bit_value(xor_mask, i, word_idx);
+    }
+
+    // Apply bitwise XOR to the main entropy array
+    int total_bytes = 16 + size * 16;
+    for (int i = 0; i < total_bytes; i++) {
+        data_array_256b[i] ^= xor_mask[i];
+    }
+}
+
 
 int main ( void ){
     /* Initialize all modules */
@@ -3294,32 +3322,33 @@ int main ( void ){
             case MAIN:
                 switch (pulsed_bt) {
                     case OK_BT:
+                        black_screen();
                         if (main_pointer==cMAIN_create){// Create new seed
                             transition_to_create_seed();
                         } else if (main_pointer==cMAIN_LOAD ){// Load seed words
                             transition_to_input(selinput_pointer);
                         } else if (main_pointer == cMAIN_BIP85) { // BIP85 child seed
-                            black_screen();
+                            
                             print_child_config_screen();
                             estado = CHILD_CONFIG;
                         } else if (main_pointer==cMAIN_XOR){// XOR
-                            black_screen();
+                            
                             print_generic_menu(menu_xor, cXOR_n_opt, xor_pointer);
                             estado = SEL_XOR;
                         } else if (main_pointer==cMAIN_OBFUS){// Obfuscation
                             transition_to_obfus();
                         } else if (main_pointer==cMAIN_SSS){// Shamir
-                            black_screen();
+                           
                             print_generic_menu(menu_sss, cSSS_n_opt, sss_pointer);
                             estado = SEL_SSS;
                         } else if (main_pointer==cMAIN_ERASESD){// Erase SD
                             transition_to_sd_block(SDblock_pointer);
                         } else if (main_pointer==cMAIN_QR){// Resources menu
-                            black_screen();
+                           
                             print_generic_menu(menu_resource, cRESOURCE_n_opt, resource_pointer);
                             estado = RESOURCE_MENU;
                         } else if (main_pointer == cMAIN_SETTINGS) {
-                            black_screen();
+                           
                             print_settings_screen(settings_pointer);
                             estado = SEL_SETTINGS;                        
                         }
@@ -3535,6 +3564,17 @@ int main ( void ){
                             estado = OBFUS_QR_VIEW;
                         } else if (obfuscation_pointer == cOBFUS_NOT) { // Negate seed words
                             transition_to_input(selinput_pointer);
+                        } else if (obfuscation_pointer == cOBFUS_1WORD_XOR) {
+                            black_screen();
+                            capturing_xor_word = true; // Hijack WRITE_WORD mode
+                            estado = WRITE_WORD;
+                            word_number = 1;
+                            lt_idx = 0;
+                            clear_string(word);
+                            found = refresh_word_input_preview(word, result, sizeof(result), &found_bool);
+                            print_word_number_top(word_number, word_number_text);
+                            print_previous_confirmed_word(word_number, word_number_text);
+                            print_keyboard_with_validation(lt_idx, found_bool, word);
                         } else { // Shift or Add/Sub
                             black_screen();
                             obfus_cursor = 0;
@@ -3800,6 +3840,8 @@ int main ( void ){
                                         }
                                     } else if (obfuscation_pointer==cOBFUS_ADD){
                                         addsub_11bit_groups(16 + size_pointer*16, obfus_amount, obfus_dir_op);
+                                    } else if (obfuscation_pointer == cOBFUS_1WORD_XOR) {
+                                        apply_1word_xor(obfus_xor_word_idx, size_pointer); // Apply 1 Word XOR
                                     }
                                 }else if (main_pointer==cMAIN_BIP85) {
                                     drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
@@ -4583,6 +4625,15 @@ int main ( void ){
                            }
                        } else if(lt_idx==26){
                             if (found != NULL){
+                                if (capturing_xor_word) {
+                                    // Save the word index and move to SD/Keyboard selection
+                                    obfus_xor_word_idx = find_word_index(found);
+                                    capturing_xor_word = false; // Release the hijack
+                                    clear_string(word);
+                                    found_bool = false;
+                                    transition_to_input(selinput_pointer);
+                                    break;
+                                }
                                 // Store the bits
                                 write_11bit_value(data_array_256b, word_number,  find_word_index(found));
                                 clear_string(word);
@@ -4622,6 +4673,8 @@ int main ( void ){
                                             not_operator(data_array_256b,16 +size_pointer*16);
                                         } else if (obfuscation_pointer==cOBFUS_ADD){
                                             addsub_11bit_groups(16 + size_pointer*16, obfus_amount, obfus_dir_op);
+                                        } else if (obfuscation_pointer == cOBFUS_1WORD_XOR) {
+                                            apply_1word_xor(obfus_xor_word_idx, size_pointer); // Apply 1 Word XOR
                                         }
                                     } else if ((main_pointer==cMAIN_SSS) & (sss_pointer==cSPLIT)){
                                         sss_split_kofm(data_array_256b /* c0 */,
@@ -4714,7 +4767,12 @@ int main ( void ){
                         }
                         break;
                     case BACK_BT:
-                        if ((strlen(word) == 0) & (word_number > 1)) { // Go back one word
+                        if (capturing_xor_word && (strlen(word) == 0)) {
+                            // Abort and return to obfuscation menu
+                            capturing_xor_word = false; 
+                            transition_to_obfus();
+                            break;
+                        } else if ((strlen(word) == 0) & (word_number > 1)) { // Go back one word
                             const char *saved_word;
                             word_number-=1;
                             clear_string(word);
