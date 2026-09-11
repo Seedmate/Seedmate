@@ -24,8 +24,8 @@
  *   - Security-sensitive data should be handled carefully at all times
  *
  * Author:      Seedmate
- * Date:        05/09/2026
- * Version:     v1.6                               
+ * Date:        11/09/2026
+ * Version:     v1.6.1                               
  * License
  * 
  * This project is licensed under the MIT License.
@@ -77,7 +77,7 @@
 #define SCREEN_HEIGHT 128
 
 
-#define cVersion "v1.6"
+#define cVersion "v1.6.1"
 
 #define SD_SCK    PORTBbits.RB7
 #define SD_CS     PORTCbits.RC9
@@ -1897,29 +1897,130 @@ static const char *search_unique_prefix(const char *prefix, char *result, size_t
         return result;
 }
 
-void draw_qr_code(const char *text) {
-    // Generate standard QR (no Micro QR)
+void draw_seedqr(const char *text) {
     size_t length = strlen(text);
-    // QR buffer for version 3 (29x29)
-    uint8_t qrcodeData[qrcode_getBufferSize(3)];
+    int version;
+    int ecc_level;
+    
+    // 12-word SeedQR = 48 numeric characters.
+    // Version 2 at Q quality (25% recovery) supports EXACTLY up to 48 numbers.
+    if (length <= 48) {
+        version = 2;
+        ecc_level = ECC_QUARTILE; 
+    } 
+    // 24-word SeedQR = 96 numeric characters.
+    // We keep it at Version 3 at M quality (supports up to 101 numbers).
+    else if (length <= 101) {
+        version = 3;
+        ecc_level = ECC_MEDIUM;   
+    } else {
+        // Safety check: abort if the text is longer than supported.
+        return; 
+    }
+
+    // Dynamically allocate buffer based on the chosen version
+    uint8_t qrcodeData[qrcode_getBufferSize(version)];
     QRCode qrcode;
 
-    // Initialize the QR code with ECC_LOW correction.
-    if (length>39){
-        qrcode_initText(&qrcode, qrcodeData, 3, ECC_LOW, text);
-    }else{
-        qrcode_initText(&qrcode, qrcodeData, 2, ECC_LOW, text);
-    }
+    // Initialize the QR code with the dynamically chosen version and ECC level
+    qrcode_initText(&qrcode, qrcodeData, version, ecc_level, text);
+
     int qr_size = qrcode.size;
     int img_size = qr_size * QR_SCALE;
-    // Center on screen
+    
+    // Center the QR code on the screen
     int x_offset = (SCREEN_WIDTH - img_size) / 2;
     int y_offset = (SCREEN_HEIGHT - img_size) / 2;
 
+    // 1. Draw the white background and the required 4-module "Quiet Zone"
+    int margin = 4 * QR_SCALE; 
+    fillRect(
+        x_offset - margin, 
+        y_offset - margin, 
+        img_size + (2 * margin), 
+        img_size + (2 * margin), 
+        ST7735_WHITE
+    );
+
+    // 2. Iterate and draw ONLY the black modules for maximum SPI performance
     for (int y = 0; y < qr_size; y++) {
         for (int x = 0; x < qr_size; x++) {
-            int pixel = qrcode_getModule(&qrcode, x, y) ? 1 : 0;
-            fillRect(x_offset + x * QR_SCALE, y_offset + y * QR_SCALE, QR_SCALE, QR_SCALE, pixel ? ST7735_BLACK : ST7735_WHITE);
+            if (qrcode_getModule(&qrcode, x, y)) {
+                fillRect(
+                    x_offset + (x * QR_SCALE), 
+                    y_offset + (y * QR_SCALE), 
+                    QR_SCALE, 
+                    QR_SCALE, 
+                    ST7735_BLACK
+                );
+            }
+        }
+    }
+}
+
+void draw_url_qr(const char *text) {
+    size_t length = strlen(text);
+    int version;
+    int ecc_level;
+
+    // Screen size limits us to a maximum of Version 3 (29x29 modules).
+    // Version 4 (33x33) and higher do not fit on the screen.
+    
+    if (length <= 26) {
+        // Fits easily in Version 2 with good error correction
+        version = 2; // 25x25 modules
+        ecc_level = ECC_MEDIUM;
+    } else if (length <= 42) {
+        // Fits in Version 3 with good error correction
+        version = 3; // 29x29 modules
+        ecc_level = ECC_MEDIUM;
+    } else if (length <= 53) {
+        // Drop to ECC_LOW to squeeze up to 53 characters into Version 3
+        version = 3; // 29x29 modules
+        ecc_level = ECC_LOW;
+    } else {
+        // MAX LIMIT REACHED.
+        // A string > 53 characters requires Version 4, which does not fit on screen.
+        // Safety check: abort drawing to prevent visual glitches or memory issues.
+        return; 
+    }
+
+    // Dynamically allocate buffer based on the required version
+    uint8_t qrcodeData[qrcode_getBufferSize(version)];
+    QRCode qrcode;
+
+    // Initialize the QR code with the dynamically selected version and ECC level
+    qrcode_initText(&qrcode, qrcodeData, version, ecc_level, text);
+
+    int qr_size = qrcode.size;
+    int img_size = qr_size * QR_SCALE;
+    
+    // Center the QR code on the screen
+    int x_offset = (SCREEN_WIDTH - img_size) / 2;
+    int y_offset = (SCREEN_HEIGHT - img_size) / 2;
+
+    // 1. Draw the white background and the required 4-module "Quiet Zone"
+    int margin = 4 * QR_SCALE; 
+    fillRect(
+        x_offset - margin, 
+        y_offset - margin, 
+        img_size + (2 * margin), 
+        img_size + (2 * margin), 
+        ST7735_WHITE
+    );
+
+    // 2. Iterate and draw ONLY the black modules for maximum SPI performance
+    for (int y = 0; y < qr_size; y++) {
+        for (int x = 0; x < qr_size; x++) {
+            if (qrcode_getModule(&qrcode, x, y)) {
+                fillRect(
+                    x_offset + (x * QR_SCALE), 
+                    y_offset + (y * QR_SCALE), 
+                    QR_SCALE, 
+                    QR_SCALE, 
+                    ST7735_BLACK
+                );
+            }
         }
     }
 }
@@ -2316,7 +2417,7 @@ void draw_QRSEED(const unsigned char *data, size_t size) {
 
     }
 
-    draw_qr_code(text_buf);
+    draw_seedqr(text_buf);
     print_camera(2,50,cNOTSAFE);
     print_camera(2,80,cNOTSAFE);
     print_camera(145,50,cNOTSAFE);
@@ -3165,7 +3266,7 @@ int main ( void ){
     drawtext(23,87, "=QR Safe for phone", ST7735_GREEN, ST7735_BLACK, 1);
     print_camera(5,110,cNOTSAFE);
     drawtext(23,102, "=QR NOT Safe for phone", ST7735_RED, ST7735_BLACK, 1);
-    drawtext(10,119, "(Press any button)", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5,119, "(Press any button)", ST7735_WHITE, ST7735_BLACK, 1);
     version_display();
 
     PULSED_BT_t pulsed_bt = NONE;
@@ -3422,13 +3523,13 @@ int main ( void ){
                         black_screen();
                         white_screen();
                         if (resource_pointer == cRESOURCE_tutorial) {
-                            draw_qr_code("youtu.be/8vy5LIxT1ls");
+                            draw_url_qr("youtu.be/8vy5LIxT1ls");
                         } else if (resource_pointer == cRESOURCE_backup) {
-                            draw_qr_code("seedmate.github.io/Seedmate_HTML_backup/");
+                            draw_url_qr("seedmate.github.io/Seedmate_HTML_backup/");
                         } else if (resource_pointer == cRESOURCE_dice_test) {
-                            draw_qr_code("seedmate.github.io/Dice_tester/");
+                            draw_url_qr("seedmate.github.io/Dice_tester/");
                         } else if (resource_pointer == cRESOURCE_wordlist) {
-                            draw_qr_code("seedmate.net/Printable%20BIP39%20wordlist.pdf");
+                            draw_url_qr("seedmate.net/Printable%20BIP39%20wordlist.pdf");                            
                         }
                         print_camera(2, 65, cSAFE);
                         estado = RESOURCE_QR_VIEW;
@@ -3558,7 +3659,7 @@ int main ( void ){
                         if (obfuscation_pointer == cOBFUS_HOWTO) {
                             black_screen();
                             white_screen();
-                            draw_qr_code("seedmate.net/obfuscation.html"); 
+                            draw_url_qr("seedmate.net/obfuscation.html"); 
                             print_camera(2, 65, cSAFE);
                             print_left_arrow_black(5, 123);
                             estado = OBFUS_QR_VIEW;
