@@ -83,7 +83,8 @@ This project is intended to be built with Microchip tools.
 4. Flash the generated firmware to the target board. A Microchip programmer tool is required:
 https://www.microchip.com/en-us/development-tool/pg164130
 
-
+## Programming instructions / firmware update
+See https://www.seedmate.net/fw_update.html
 
 
 ## Usage notes
