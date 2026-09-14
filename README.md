@@ -84,7 +84,7 @@ This project is intended to be built with Microchip tools.
 https://www.microchip.com/en-us/development-tool/pg164130
 
 ## Programming instructions / firmware update
-See https://www.seedmate.net/fw_update.html
+See https://www.seedmate.net/FW_update.html
 
 
 ## Usage notes
