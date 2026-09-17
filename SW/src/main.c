@@ -24,8 +24,8 @@
  *   - Security-sensitive data should be handled carefully at all times
  *
  * Author:      Seedmate
- * Date:        11/09/2026
- * Version:     v1.6.1                               
+ * Date:        16/09/2026
+ * Version:     v1.6.2                               
  * License
  * 
  * This project is licensed under the MIT License.
@@ -77,7 +77,7 @@
 #define SCREEN_HEIGHT 128
 
 
-#define cVersion "v1.6.1"
+#define cVersion "v1.6.2"
 
 #define SD_SCK    PORTBbits.RB7
 #define SD_CS     PORTCbits.RC9
@@ -99,8 +99,7 @@
 #define BT6       PORTBbits.RB6   // Button 6
 
 
-
-#define cMAIN_n_opt 9
+#define cMAIN_n_opt 10
 #define cSEED_n_opt 6
 #define cSIZE_n_opt 2
 #define cOBFUS_n_opt 5
@@ -129,9 +128,10 @@ int settings_pointer = 0;
 #define cMAIN_SSS 3
 #define cMAIN_XOR 4
 #define cMAIN_OBFUS 5
-#define cMAIN_ERASESD 6
-#define cMAIN_QR 7 // Resources menu
-#define cMAIN_SETTINGS 8
+#define cMAIN_MNEM2CARD 6
+#define cMAIN_ERASESD 7
+#define cMAIN_QR 8 // Resources menu
+#define cMAIN_SETTINGS 9
 
 #define cRESOURCE_tutorial 0
 #define cRESOURCE_backup 1
@@ -192,7 +192,7 @@ int settings_pointer = 0;
 // ============================================================================
 // Global Menus (Forces the compiler to store pointers strictly in ROM)
 // ============================================================================
-const char* const menu_main[]     = {"CREATE NEW SEED WORDS", "LOAD SEED WORDS", "BIP85 CHILD SEED", "SHAMIR SECRET SHARE", "SEED WORD XOR", "OBFUSCATION", "ERASE SD", "RESOURCES", "SETTINGS"};
+const char* const menu_main[]     = {"CREATE NEW SEED WORDS", "LOAD SEED WORDS", "BIP85 CHILD SEED", "SHAMIR SECRET SHARE", "SEED WORD XOR", "OBFUSCATION", "MNEMONIC TO CARDS", "ERASE SD", "RESOURCES", "SETTINGS"};
 const char* const menu_create[]   = {"THROW COINS", "ROLL DICE", "RANDOM WORD PICK", "DRAW CARDS", "STOPWATCH TEST ONLY", "TRIPLE MNEMONIC"};
 const char* const menu_dice[]     = {"RAW ENTROPY BITS", "STRING HASH"};
 const char* const menu_hash[]     = {"1-6 mode", "0-5 mode (Keystone)"};
@@ -234,6 +234,8 @@ int dice_mode_pointer = 0;
 int hash_mode_pointer = 0;
 
 #define char_hash_limit 501
+#define c12_rolls 50
+#define c24_rolls 99
 char dice_string_buf[char_hash_limit] = {0};
 int dice_input_idx = 0; // 0-5 for '1'-'6', 6 for DONE
 
@@ -313,6 +315,13 @@ void extract_11bit_groups(BYTE *data, size_t size);
 // Prototypes for smart keyboard prediction
 static void get_valid_next_letters(const char *prefix, bool *valid_letters);
 void print_keyboard_with_validation(int index, bool word_found, const char *current_word);
+
+// Mnemonic to Cards Globals
+uint8_t card_sequence[132];
+int card_sequence_len = 0;
+int card_decks_needed = 0;
+int card_view_page = 0;
+
 
 // ============================================================================
 // BIP85 Derivation Engine
@@ -639,6 +648,7 @@ typedef enum
     OBFUS_QR_VIEW,
     SEL_SETTINGS,
     WARNING_SEEDQR,
+    SHOW_CARD_ENCODING,
     END_MODE // Final
 } state_t;
 
@@ -3238,6 +3248,142 @@ void apply_1word_xor(int word_idx, int size) {
     }
 }
 
+// ============================================================================
+// Mnemonic to Card Decoder 
+// ============================================================================
+static unsigned int read_bits(const BYTE* buf, int bit_offset, int n) {
+    unsigned int val = 0;
+    for(int i = 0; i < n; i++) {
+        int byte_idx = (bit_offset + i) / 8;
+        int bit_pos = 7 - ((bit_offset + i) % 8);
+        int b = (buf[byte_idx] >> bit_pos) & 1;
+        val = (val << 1) | b;
+    }
+    return val;
+}
+
+void calculate_card_encoding(void) {
+    int total_bits = (size_pointer == cSIZE_12) ? 128 : 256;
+        
+    uint8_t card_usage[52] = {0};
+    card_sequence_len = 0;
+    int bit_offset = 0;
+    
+    // Loop until we reach exactly total_bits
+    while (bit_offset < total_bits) {
+        int best_len = 0;
+        int best_card = -1;
+        int min_usage = 255;
+        
+        // Calculate remaining bits to avoid leaving exactly 1 or 3 bits (unfillable gaps)
+        int rem = total_bits - bit_offset;
+        
+        // Check 5-bit availability (indices 0..31)
+        if (rem >= 5 && (rem - 5 != 1) && (rem - 5 != 3)) {
+            unsigned int val5 = read_bits(data_array_256b, bit_offset, 5);
+            if (card_usage[val5] < min_usage) {
+                min_usage = card_usage[val5];
+                best_card = val5;
+                best_len = 5;
+            }
+        }
+        
+        // Check 4-bit availability (indices 32..47)
+        if (rem >= 4 && (rem - 4 != 1) && (rem - 4 != 3)) {
+            unsigned int val4 = read_bits(data_array_256b, bit_offset, 4);
+            int idx = 32 + val4;
+            if (card_usage[idx] < min_usage) {
+                min_usage = card_usage[idx];
+                best_card = idx;
+                best_len = 4;
+            } else if (card_usage[idx] == min_usage && best_len < 4) {
+                best_card = idx;
+                best_len = 4;
+            }
+        }
+        
+        // Check 2-bit availability (indices 48..51)
+        if (rem >= 2 && (rem - 2 != 1) && (rem - 2 != 3)) {
+            unsigned int val2 = read_bits(data_array_256b, bit_offset, 2);
+            int idx = 48 + val2;
+            if (card_usage[idx] < min_usage) {
+                min_usage = card_usage[idx];
+                best_card = idx;
+                best_len = 2;
+            } else if (card_usage[idx] == min_usage && best_len < 2) {
+                best_card = idx;
+                best_len = 2;
+            }
+        }
+        
+        // Safety break to prevent infinite loops in case of unexpected states
+        if (best_len == 0) break; 
+        
+        // Save the chosen card and update tracking variables
+        card_usage[best_card]++;
+        card_sequence[card_sequence_len++] = best_card;
+        bit_offset += best_len;
+    }
+    
+    // Evaluate total max frequency to determine how many physical decks are needed
+    card_decks_needed = 0;
+    for(int i = 0; i < 52; i++) {
+        if (card_usage[i] > card_decks_needed) {
+            card_decks_needed = card_usage[i];
+        }
+    }
+    card_view_page = 0;
+}
+
+void print_card_encoding_screen(void) {
+    black_screen();
+    drawtext(1, 2, "MNEMONIC TO CARDS", ST7735_ORANGE, ST7735_BLACK, 1);
+    
+    char decks_str[30];
+    strcpy(decks_str, "DECKS NEEDED: ");
+    char num[4];
+    u16_to_str((unsigned int)card_decks_needed, num);
+    strcat(decks_str, num);
+    drawtext(1, 12, decks_str, ST7735_GREEN, ST7735_BLACK, 1);
+    
+    int cards_per_page = 32; // 8 per line, 4 lines 
+    int start_idx = card_view_page * cards_per_page;
+    
+    int x = 5;
+    int y = 28;
+    
+    for (int i = start_idx; i < card_sequence_len && i < start_idx + cards_per_page; i++) {
+        int card_idx = card_sequence[i];
+        char card_str[3];
+        
+        char rank = card_rank_chars[card_idx % 13];
+        if (rank >= 'a' && rank <= 'z') rank -= 32; // uppercase
+        
+        char suit = card_suit_chars[card_idx / 13];
+        if (suit >= 'a' && suit <= 'z') suit -= 32; // uppercase
+        
+        card_str[0] = rank;
+        card_str[1] = suit;
+        card_str[2] = '\0';
+        
+        uint16_t color = ST7735_WHITE;
+        if ((card_idx / 13) == 1 || (card_idx / 13) == 2) color = ST7735_RED; // Diamonds/Hearts 
+        
+        drawtext(x, y, card_str, color, ST7735_BLACK, 1);
+        x += 20;
+        if (x > 145) {
+            x = 5;
+            y += 18;
+        }
+    }
+    
+    if (card_view_page > 0) print_up_arrow(72, 123);
+    if (start_idx + cards_per_page < card_sequence_len) print_down_arrow(80, 123);
+    
+    print_left_arrow(5, 123);
+}
+// ============================================================================
+
 
 int main ( void ){
     /* Initialize all modules */
@@ -3438,6 +3584,8 @@ int main ( void ){
                             estado = SEL_XOR;
                         } else if (main_pointer==cMAIN_OBFUS){// Obfuscation
                             transition_to_obfus();
+                        } else if (main_pointer==cMAIN_MNEM2CARD){// Convert to Cards
+                            transition_to_input(selinput_pointer);
                         } else if (main_pointer==cMAIN_SSS){// Shamir
                            
                             print_generic_menu(menu_sss, cSSS_n_opt, sss_pointer);
@@ -3780,7 +3928,7 @@ int main ( void ){
                             estado = SEL_SHARE;
                             break;
 
-                        } else if (main_pointer==cMAIN_LOAD || main_pointer==cMAIN_OBFUS || main_pointer==cMAIN_SSS || main_pointer==cMAIN_BIP85 ){// Check seed or obfuscate/SSS
+                        } else if (main_pointer==cMAIN_LOAD || main_pointer==cMAIN_OBFUS || main_pointer==cMAIN_SSS || main_pointer==cMAIN_BIP85 || main_pointer==cMAIN_MNEM2CARD){// Check seed or obfuscate/SSS
                             black_screen();
                             estado = WRITE_WORD;
                             word_number=1;
@@ -3794,7 +3942,7 @@ int main ( void ){
                             dice_string_buf[0] = '\0';
                             dice_input_idx = 0;
                             estado = DICE_STRING_INPUT;
-                            int target = (size_pointer == cSIZE_12) ? 50 : 100;
+                            int target = (size_pointer == cSIZE_12) ? c12_rolls : c24_rolls;
                             init_dice_string_input_screen(dice_input_idx, dice_string_buf, target);
                         } else if (seed_pointer==cSEED_dice || seed_pointer==cSEED_coin){// Roll dice or coins
                             black_screen();
@@ -3827,7 +3975,7 @@ int main ( void ){
                     case BACK_BT:
                         if (main_pointer==cMAIN_OBFUS) {
                             transition_to_obfus();
-                        } else if (main_pointer==cMAIN_XOR || main_pointer==cMAIN_LOAD || main_pointer==cMAIN_SSS || main_pointer==cMAIN_BIP85){
+                        } else if (main_pointer==cMAIN_XOR || main_pointer==cMAIN_LOAD || main_pointer==cMAIN_SSS || main_pointer==cMAIN_BIP85 || main_pointer==cMAIN_MNEM2CARD){
                             transition_to_input(selinput_pointer);
                         } else {
                             if (seed_pointer == cSEED_dice) {
@@ -3951,6 +4099,13 @@ int main ( void ){
                                     drawtext(30, 45, "MNEMONIC...", ST7735_WHITE, ST7735_BLACK, 1);
                                     estado = PROCESS_BIP85;
                                     break;
+                                }else if (main_pointer==cMAIN_MNEM2CARD) {
+                                    drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
+                                    black_screen();
+                                    calculate_card_encoding();
+                                    estado = SHOW_CARD_ENCODING;
+                                    print_card_encoding_screen();
+                                    break;
                                 }
                                 redraw_show_seed_with_offset();
                             } else if (sd_status == 2) {
@@ -3966,7 +4121,7 @@ int main ( void ){
                         }
 
                     case BACK_BT:
-                        if (main_pointer==cMAIN_OBFUS || main_pointer==cMAIN_XOR || main_pointer==cMAIN_LOAD || main_pointer==cMAIN_SSS || main_pointer==cMAIN_BIP85 || (main_pointer == cMAIN_create && seed_pointer == cSEED_triple)){
+                        if (main_pointer==cMAIN_OBFUS || main_pointer==cMAIN_XOR || main_pointer==cMAIN_LOAD || main_pointer==cMAIN_SSS || main_pointer==cMAIN_BIP85 || main_pointer==cMAIN_MNEM2CARD || (main_pointer == cMAIN_create && seed_pointer == cSEED_triple)){
                             transition_to_input(selinput_pointer);
                         }else {
                             transition_to_main();
@@ -4291,7 +4446,7 @@ int main ( void ){
                                 size_pointer=cSIZE_24;
                                 entropy_bits = cENTROPY_BITS24W;
                                 print_TMR_screen(size_pointer);
-                            }else{// cMAIN_OBFUS or cMAIN_LOAD or cMAIN_BIP85
+                            }else{// cMAIN_OBFUS or cMAIN_LOAD or cMAIN_BIP85 or cMAIN_MNEM2CARD
                                 transition_to_sd_block(SDblock_pointer);
                             }
                         }
@@ -4552,7 +4707,7 @@ int main ( void ){
             case DICE_STRING_INPUT:
                 switch (pulsed_bt) {
                     case OK_BT: {
-                        int target = (size_pointer == cSIZE_12) ? 50 : 100;
+                        int target = (size_pointer == cSIZE_12) ? c12_rolls : c24_rolls;
                         int len = strlen(dice_string_buf);
                         
                         if (dice_input_idx < 6) {
@@ -4599,7 +4754,7 @@ int main ( void ){
                         break;
                     }
                     case BACK_BT: {
-                        int target = (size_pointer == cSIZE_12) ? 50 : 100;
+                        int target = (size_pointer == cSIZE_12) ? c12_rolls : c24_rolls;
                         int len = strlen(dice_string_buf);
                         
                         if (len > 0) {
@@ -4622,7 +4777,7 @@ int main ( void ){
                         break;
                     }
                     case LEFT_BT: {
-                        int target = (size_pointer == cSIZE_12) ? 50 : 100;
+                        int target = (size_pointer == cSIZE_12) ? c12_rolls : c24_rolls;
                         int len = strlen(dice_string_buf);
                         if (dice_input_idx > 0) {
                             dice_input_idx--;
@@ -4633,7 +4788,7 @@ int main ( void ){
                         break;
                     }
                     case RIGTH_BT: {
-                        int target = (size_pointer == cSIZE_12) ? 50 : 100;
+                        int target = (size_pointer == cSIZE_12) ? c12_rolls : c24_rolls;
                         int len = strlen(dice_string_buf);
                         int max_idx = (len >= target) ? 6 : 5;
                         if (dice_input_idx < max_idx) {
@@ -4759,6 +4914,14 @@ int main ( void ){
                                             break;
                                         }
                                     }
+                                    
+                                    if (main_pointer == cMAIN_MNEM2CARD) {
+                                        calculate_card_encoding();
+                                        estado = SHOW_CARD_ENCODING;
+                                        print_card_encoding_screen();
+                                        break;
+                                    }
+                                    
                                     if (main_pointer==cMAIN_OBFUS) {
                                         if (obfuscation_pointer==cOBFUS_SHIFT){
                                             if (obfus_dir_op == 0){
@@ -5014,6 +5177,28 @@ int main ( void ){
                         redraw_show_seed_with_offset();
                         break;
                     case RIGTH_BT:
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case SHOW_CARD_ENCODING:
+                switch (pulsed_bt) {
+                    case UP_BT:
+                        if (card_view_page > 0) {
+                            card_view_page--;
+                            print_card_encoding_screen();
+                        }
+                        break;
+                    case DOWN_BT:
+                        if ((card_view_page + 1) * 32 < card_sequence_len) {
+                            card_view_page++;
+                            print_card_encoding_screen();
+                        }
+                        break;
+                    case BACK_BT:
+                    case LEFT_BT:
+                        transition_to_input(selinput_pointer);
                         break;
                     default:
                         break;
