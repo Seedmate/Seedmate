@@ -24,8 +24,8 @@
  *   - Security-sensitive data should be handled carefully at all times
  *
  * Author:      Seedmate
- * Date:        16/09/2026
- * Version:     v1.6.2                               
+ * Date:        17/09/2026
+ * Version:     v1.7                               
  * License
  * 
  * This project is licensed under the MIT License.
@@ -77,7 +77,7 @@
 #define SCREEN_HEIGHT 128
 
 
-#define cVersion "v1.6.2"
+#define cVersion "v1.7"
 
 #define SD_SCK    PORTBbits.RB7
 #define SD_CS     PORTCbits.RC9
@@ -110,7 +110,7 @@
 #define cSELINPUT_n_opt 2
 #define cDICE_MODE_n_opt 2
 #define cHASH_MODE_n_opt 2
-#define cRESOURCE_n_opt 4
+#define cRESOURCE_n_opt 5
 #define cSETTINGS_n_opt 1
 #define cSETTINGS_SEEDQR 0
 #define cEND_OF_LINE 150
@@ -137,6 +137,7 @@ int settings_pointer = 0;
 #define cRESOURCE_backup 1
 #define cRESOURCE_dice_test 2
 #define cRESOURCE_wordlist 3
+#define cRESOURCE_BINlist 4
 
 #define cOBFUS_SHIFT 0
 #define cOBFUS_NOT 1
@@ -201,7 +202,7 @@ const char* const menu_qr[]       = {"STANDARD", "COMPACT"};
 const char* const menu_xor[]      = {"A XOR B = C", "A XOR B XOR C = D", "A XOR B XOR C XOR D = E"};
 const char* const menu_sss[]      = {"SPLIT", "MERGE"};
 const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD"};
-const char* const menu_resource[] = {"TUTORIAL", "BACKUP TOOL", "DICE TESTER", "PRINT WORDLIST"};
+const char* const menu_resource[] = {"TUTORIAL", "BACKUP TOOL", "DICE TESTER", "PRINT WORDLIST", "BINARY WORDLIST"};
 const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB","1 WORD XOR","HOW TO"}; 
 
 
@@ -3247,91 +3248,140 @@ void apply_1word_xor(int word_idx, int size) {
         data_array_256b[i] ^= xor_mask[i];
     }
 }
+// You can tweak this value. 
+// BEAM_WIDTH 12 uses ~4.5 KB of RAM. 
+// BEAM_WIDTH 8 uses ~3.0 KB of RAM.
+#define BEAM_WIDTH 8
 
-// ============================================================================
-// Mnemonic to Card Decoder 
-// ============================================================================
-static unsigned int read_bits(const BYTE* buf, int bit_offset, int n) {
-    unsigned int val = 0;
-    for(int i = 0; i < n; i++) {
-        int byte_idx = (bit_offset + i) / 8;
-        int bit_pos = 7 - ((bit_offset + i) % 8);
-        int b = (buf[byte_idx] >> bit_pos) & 1;
-        val = (val << 1) | b;
+// Highly compact state structure to fit inside PIC RAM limits
+typedef struct {
+    uint16_t bit_offset;
+    uint16_t score;
+    uint8_t  usage[52];
+    uint8_t  seq[130];
+    uint8_t  seq_len;
+    uint8_t  max_usage;
+} BeamState;
+
+// Define the two state buffers globally or statically to avoid Stack Overflow
+static BeamState current_beams[BEAM_WIDTH];
+static BeamState next_beams[BEAM_WIDTH];
+// --- HELPER: READ BITS FROM ARRAY ---
+
+unsigned int read_bits(uint8_t *array, int offset, int len) {
+    unsigned int result = 0;
+    for (int i = 0; i < len; i++) {
+        int bit_idx = offset + i;
+        int byte_idx = bit_idx / 8;
+        int bit_in_byte = 7 - (bit_idx % 8); // MSB first
+        int bit = (array[byte_idx] >> bit_in_byte) & 1;
+        result = (result << 1) | bit;
     }
-    return val;
+    return result;
 }
 
+// --- HELPER: GET CARD VALUE ---
+static int get_card(int offset, int len) {
+    if (len == 5) return read_bits(data_array_256b, offset, 5);
+    if (len == 4) return 32 + read_bits(data_array_256b, offset, 4);
+    return 48 + read_bits(data_array_256b, offset, 2);
+}
+
+// --- MAIN FUNCTION: BEAM SEARCH ENCODING ---
 void calculate_card_encoding(void) {
     int total_bits = (size_pointer == cSIZE_12) ? 128 : 256;
-        
-    uint8_t card_usage[52] = {0};
-    card_sequence_len = 0;
-    int bit_offset = 0;
     
-    // Loop until we reach exactly total_bits
-    while (bit_offset < total_bits) {
-        int best_len = 0;
-        int best_card = -1;
-        int min_usage = 255;
+    // Initialize the root state
+    memset(&current_beams[0], 0, sizeof(BeamState));
+    int num_current_beams = 1;
+    
+    bool all_paths_done = false;
+
+    while (!all_paths_done) {
+        all_paths_done = true;
+        int max_inserted = 0; // Tracks how many candidates we have in next_beams
         
-        // Calculate remaining bits to avoid leaving exactly 1 or 3 bits (unfillable gaps)
-        int rem = total_bits - bit_offset;
-        
-        // Check 5-bit availability (indices 0..31)
-        if (rem >= 5 && (rem - 5 != 1) && (rem - 5 != 3)) {
-            unsigned int val5 = read_bits(data_array_256b, bit_offset, 5);
-            if (card_usage[val5] < min_usage) {
-                min_usage = card_usage[val5];
-                best_card = val5;
-                best_len = 5;
+        for (int i = 0; i < num_current_beams; i++) {
+            BeamState *curr = &current_beams[i];
+            
+            // If this specific path has already reached the target, 
+            // just pass it forward to the next generation without expanding.
+            if (curr->bit_offset >= total_bits) {
+                // Top-N Insertion logic for finished paths
+                if (max_inserted < BEAM_WIDTH || curr->score < next_beams[BEAM_WIDTH - 1].score) {
+                    int pos = (max_inserted < BEAM_WIDTH) ? max_inserted++ : (BEAM_WIDTH - 1);
+                    while (pos > 0 && curr->score < next_beams[pos - 1].score) {
+                        next_beams[pos] = next_beams[pos - 1];
+                        pos--;
+                    }
+                    next_beams[pos] = *curr;
+                }
+                continue;
+            }
+            
+            // If at least one path is still growing, we are not done
+            all_paths_done = false; 
+            int rem = total_bits - curr->bit_offset;
+            int lengths[] = {5, 4, 2};
+            
+            // Branch out this path into 3 new possible futures
+            for (int j = 0; j < 3; j++) {
+                int len = lengths[j];
+                
+                if (rem >= len && (rem - len != 1) && (rem - len != 3)) {
+                    // Create a candidate state based on the current path
+                    BeamState cand = *curr;
+                    
+                    int card = get_card(cand.bit_offset, len);
+                    cand.usage[card]++;
+                    
+                    if (cand.usage[card] > cand.max_usage) {
+                        cand.max_usage = cand.usage[card];
+                    }
+                    
+                    cand.seq[cand.seq_len++] = card;
+                    cand.bit_offset += len;
+                    
+                    // Unified Heuristic Score:
+                    // Primary metric: Deck usage (shifted by 8 to make it dominant)
+                    // Secondary metric: Sequence length (rewards paths that use 5-bit jumps)
+                    cand.score = ((uint16_t)cand.max_usage << 8) + cand.seq_len;
+                    
+                    // TOP-N INSERTION: Keep only the absolute best BEAM_WIDTH paths
+                    if (max_inserted < BEAM_WIDTH || cand.score < next_beams[BEAM_WIDTH - 1].score) {
+                        int pos = (max_inserted < BEAM_WIDTH) ? max_inserted++ : (BEAM_WIDTH - 1);
+                        
+                        // Shift worse candidates down
+                        while (pos > 0 && cand.score < next_beams[pos - 1].score) {
+                            next_beams[pos] = next_beams[pos - 1];
+                            pos--;
+                        }
+                        // Insert new candidate in its sorted position
+                        next_beams[pos] = cand;
+                    }
+                }
             }
         }
         
-        // Check 4-bit availability (indices 32..47)
-        if (rem >= 4 && (rem - 4 != 1) && (rem - 4 != 3)) {
-            unsigned int val4 = read_bits(data_array_256b, bit_offset, 4);
-            int idx = 32 + val4;
-            if (card_usage[idx] < min_usage) {
-                min_usage = card_usage[idx];
-                best_card = idx;
-                best_len = 4;
-            } else if (card_usage[idx] == min_usage && best_len < 4) {
-                best_card = idx;
-                best_len = 4;
-            }
+        if (all_paths_done) break;
+        
+        // Prepare current_beams for the next depth level
+        num_current_beams = max_inserted;
+        for (int i = 0; i < num_current_beams; i++) {
+            current_beams[i] = next_beams[i];
         }
-        
-        // Check 2-bit availability (indices 48..51)
-        if (rem >= 2 && (rem - 2 != 1) && (rem - 2 != 3)) {
-            unsigned int val2 = read_bits(data_array_256b, bit_offset, 2);
-            int idx = 48 + val2;
-            if (card_usage[idx] < min_usage) {
-                min_usage = card_usage[idx];
-                best_card = idx;
-                best_len = 2;
-            } else if (card_usage[idx] == min_usage && best_len < 2) {
-                best_card = idx;
-                best_len = 2;
-            }
-        }
-        
-        // Safety break to prevent infinite loops in case of unexpected states
-        if (best_len == 0) break; 
-        
-        // Save the chosen card and update tracking variables
-        card_usage[best_card]++;
-        card_sequence[card_sequence_len++] = best_card;
-        bit_offset += best_len;
     }
     
-    // Evaluate total max frequency to determine how many physical decks are needed
-    card_decks_needed = 0;
-    for(int i = 0; i < 52; i++) {
-        if (card_usage[i] > card_decks_needed) {
-            card_decks_needed = card_usage[i];
-        }
+    // The very best path will naturally sit at index 0
+    BeamState *best_path = &current_beams[0];
+    
+    // Copy the winning path back to the global device variables
+    card_sequence_len = best_path->seq_len;
+    for (int i = 0; i < card_sequence_len; i++) {
+        card_sequence[i] = best_path->seq[i];
     }
+    
+    card_decks_needed = best_path->max_usage;
     card_view_page = 0;
 }
 
@@ -3677,7 +3727,9 @@ int main ( void ){
                         } else if (resource_pointer == cRESOURCE_dice_test) {
                             draw_url_qr("seedmate.github.io/Dice_tester/");
                         } else if (resource_pointer == cRESOURCE_wordlist) {
-                            draw_url_qr("seedmate.net/Printable%20BIP39%20wordlist.pdf");                            
+                            draw_url_qr("seedmate.net/Printable%20BIP39%20wordlist.pdf");   
+                        } else if (resource_pointer == cRESOURCE_BINlist) {
+                            draw_url_qr("https://www.seedmate.net/Binary_BIP39_wordlist.pdf"); 
                         }
                         print_camera(2, 65, cSAFE);
                         estado = RESOURCE_QR_VIEW;
