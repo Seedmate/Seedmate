@@ -90,7 +90,6 @@ See https://www.seedmate.net/FW_update.html
 ## Usage notes
 
 
-
 - This device is designed to work offline 
 
 - Do not use phones, cloud notes, or networked systems to store sensitive seed material.
@@ -98,6 +97,8 @@ See https://www.seedmate.net/FW_update.html
 - Review the full workflow yourself before trusting it with real funds.
 
 - Treat QR and SD export paths as sensitive.
+
+- See Security Risks & Guidelines https://www.seedmate.net/security.html
 
 
 
