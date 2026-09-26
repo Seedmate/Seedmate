@@ -77,27 +77,49 @@
 #define SCREEN_HEIGHT 128
 
 
-#define cVersion "v1.7"
+#if defined(v1) 
+    #define cVersion "v1.7"
 
-#define SD_SCK    PORTBbits.RB7
-#define SD_CS     PORTCbits.RC9
-#define SD_MISO   PORTAbits.RA4
-#define SD_MOSI   PORTAbits.RA3
+    #define SD_SCK    PORTBbits.RB7
+    #define SD_CS     PORTCbits.RC9
+    #define SD_MISO   PORTAbits.RA4
+    #define SD_MOSI   PORTAbits.RA3
 
-// Pin mapping
-#define LED       PORTAbits.RA2   // CPU activity led
+    // Pin mapping
+    #define LED       PORTAbits.RA2   // CPU activity led
 
-// LCD
-#define LED_LCD   PORTBbits.RB10  // TFT backlight control
+    // LCD
+    #define LED_LCD   PORTBbits.RB10  // TFT backlight control
 
-// Buttons
-#define BT1       PORTBbits.RB2   // Button 1
-#define BT2       PORTBbits.RB12  // Button 2
-#define BT_OK     PORTBbits.RB13  // Button 3
-#define BT4       PORTBbits.RB3   // Button 4
-#define BT5       PORTBbits.RB11  // Button 5
-#define BT6       PORTBbits.RB6   // Button 6
+    // Buttons
+    #define BT1       PORTBbits.RB2   // Button 1
+    #define BT2       PORTBbits.RB12  // Button 2
+    #define BT_OK     PORTBbits.RB13  // Button 3
+    #define BT4       PORTBbits.RB3   // Button 4
+    #define BT5       PORTBbits.RB11  // Button 5
+    #define BT6       PORTBbits.RB6   // Button 6
+#endif
 
+#if defined(v2) 
+    #define cVersion "v1.7+"
+
+    //SD
+    #define SD_CS     PORTBbits.RB5
+
+    // Pin mapping
+    #define LED       PORTAbits.RA2   // CPU activity led
+
+    // LCD
+    #define LED_LCD   PORTBbits.RB10  // TFT backlight control
+
+    // Buttons
+    #define BT1       PORTBbits.RB2   // Button 1
+    #define BT2       PORTCbits.RC0  // Button 2
+    #define BT_OK     PORTCbits.RC1  // Button 3
+    #define BT4       PORTBbits.RB3   // Button 4
+    #define BT5       PORTCbits.RC2  // Button 5
+    #define BT6       PORTAbits.RA4   // Button 6
+#endif
 
 #define cMAIN_n_opt 10
 #define cSEED_n_opt 6
@@ -669,12 +691,21 @@ typedef enum
 
 
 void spi_send(uint8_t data) {
+#if defined(v2)
+    // --- V2: Hardware SPI3 ---
+    SPI3BUF = data;                  // 1. Write output buffer
+    while (!SPI3STATbits.SPIRBF);    // 2. Wait TX ends
+    (void)SPI3BUF;                   // 3. Fake read to avoid overflow of the RX buffer
+
+#else
+    // --- V1: Bit-banging  ---
     for (int i = 0; i < 8; i++) {
         if (data & 0x80) SD_MOSI = 1; else SD_MOSI = 0; // MOSI
         SD_SCK = 1; // SCK HIGH
         data <<= 1;
         SD_SCK = 0; // SCK LOW
     }
+#endif
 }
 
 // ============================================================================
@@ -2645,6 +2676,14 @@ void sd_send_cmd(uint8_t cmd, uint32_t arg, uint8_t crc) {
 }
 
 uint8_t spi_recv(void) {
+#if defined(v2)
+    // --- V2: Hardware SPI3 ---
+    SPI3BUF = 0xFF;                  // Send a dummy byte to generate the clock pulses (SCK)
+    while (!SPI3STATbits.SPIRBF);    // Wait until the receive buffer is full
+    return SPI3BUF;                  // Read and return the incoming data from the SD card
+
+#else
+    // --- V1: Original Bit-banging ---
     uint8_t data = 0;
 
     for (int i = 0; i < 8; i++) {
@@ -2655,6 +2694,7 @@ uint8_t spi_recv(void) {
     }
 
     return data;
+#endif
 }
 
 uint8_t sd_get_response(void) {
