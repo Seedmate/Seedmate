@@ -162,6 +162,12 @@ void SYS_Initialize ( void* data )
 
 	GPIO_Initialize();
 
+	UART2_Initialize();
+
+	SPI3_Initialize();
+
+	SPI1_Initialize();
+
 
     EVIC_Initialize();
 

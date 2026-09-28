@@ -48,9 +48,12 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include "peripheral/uart/plib_uart2.h"
+#include "peripheral/spi/spi_master/plib_spi3_master.h"
 #include "peripheral/clk/plib_clk.h"
 #include "peripheral/gpio/plib_gpio.h"
 #include "peripheral/evic/plib_evic.h"
+#include "peripheral/spi/spi_master/plib_spi1_master.h"
 
 // DOM-IGNORE-BEGIN
 #ifdef __cplusplus  // Provide C++ Compatibility
@@ -67,7 +70,7 @@ extern "C" {
 #define DEVICE_SERIES        "PIC32MM"
 
 /* CPU clock frequency */
-#define CPU_CLOCK_FREQUENCY 8000000U
+#define CPU_CLOCK_FREQUENCY 24000000U
 
 // *****************************************************************************
 // *****************************************************************************

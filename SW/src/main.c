@@ -2720,6 +2720,7 @@ uint8_t sd_get_response(void) {
 static bool sd_is_sdhc = false;
 
 bool sd_init(void) {
+    SPI3BRG = 0x00FF;     // SLOW speed for initialization (sd_init)
     // 74+ clocks with CS held high
     SD_CS = 1;
     for (int i = 0; i < 10; i++) spi_send(0xFF); // 80 clocks
@@ -2808,6 +2809,12 @@ bool sd_init(void) {
             return false;
         }
     }
+    
+    #if defined(v2)
+        // Switch SPI3 back to high speed for data transfers
+        SPI3BRG = 1; 
+
+    #endif
 
     return true;
 }
@@ -3522,20 +3529,113 @@ int main ( void ){
 
     // Initialize the SD card only once at startup.
     SD_ready = sd_init();
-    // Initialize the SD card only once at startup.
-    SD_ready = sd_init();
 
-    #if defined(v2)
-        if (SD_ready) {
-            // Switch SPI3 back to high speed for data transfers
-            SPI3BRG = 1; 
+
+
+    tmr1_init();
+
+
+// ==========================================
+    // --- PIN MAPPING & ANALOG CONFIGURATION ---
+    // ==========================================
+    
+    // 1. Disable analog mode on RA1 so it can be used as digital TX
+    ANSELAbits.ANSA1 = 0; 
+    
+    // 2. Set Pin Directions (TRIS: 0 = Output, 1 = Input)
+    TRISAbits.TRISA1 = 0; // Force RA1 (TX) as OUTPUT
+    TRISAbits.TRISA9 = 1; // Force RA9 (RX) as INPUT
+
+    // 3. Unlock Peripheral Pin Select (PPS) registers
+    SYSKEY = 0xAA996655;
+    SYSKEY = 0x556699AA;
+    RPCONbits.IOLOCK = 0; // <-- CRITICAL: Disable IOLOCK before writing
+    
+    // 4. Map UART2 TX to RA1 (RP2) 
+    RPOR0bits.RP2R = 4; 
+    
+    // 5. Map UART2 RX to RA9 (RP24)
+    RPINR9bits.U2RXR = 24; 
+    
+    // 6. Lock Peripheral Pin Select (PPS) registers
+    RPCONbits.IOLOCK = 1; // <-- CRITICAL: Re-enable IOLOCK
+    SYSKEY = 0x00000000;
+
+    // ==========================================
+    // --- UART2 FRAME CONFIGURATION ---
+    // ==========================================
+    U2MODE = 0x0000; // Clear register first
+
+    // 1. Data bits and Parity (PDSEL)
+    // 0 = 8-bit data, no parity
+    U2MODEbits.PDSEL = 0; 
+
+    // 2. Stop bits (STSEL)
+    // 0 = 1 Stop bit
+    U2MODEbits.STSEL = 0; 
+
+    // 3. Flow Control (UEN)
+    // 0 = TX and RX pins are enabled and used; CTS and RTS pins are controlled by port latches (Flow control disabled)
+    U2MODEbits.UEN = 0;
+
+    // 4. Baud rate
+    U2BRG = 155; // 9600 bps at 24 MHz (Change to 51 if your clock is 8 MHz)
+
+    // 5. Enable module and pins
+    U2STAbits.UTXEN = 1; // Enable TX
+    U2STAbits.URXEN = 1; // Enable RX
+    U2MODEbits.ON = 1;   // Turn on UART2
+
+    //SENSOR TRANSMISSION TEST ---
+
+    uint8_t sensor_cmd[] = {0x7E, 0x00, 0x08, 0x01, 0x00, 0x02, 0x01, 0xAB, 0xCD};
+
+
+
+    for (int i = 0; i < sizeof(sensor_cmd); i++) {
+
+        while (U2STAbits.UTXBF); 
+
+        U2TXREG = sensor_cmd[i]; 
+
+    } 
+
+
+
+    // --- QUICK SENSOR RECEPTION TEST ---
+    uint8_t rx_buffer[16];      
+    int rx_index = 0;
+    uint32_t timeout = 2000000; 
+
+    while (timeout > 0 && rx_index < sizeof(rx_buffer)) {
+        if (U2STAbits.URXDA) {               
+            rx_buffer[rx_index++] = U2RXREG; 
+            timeout = 2000000;               
         }
-    #endif
+        timeout--;
+    }
 
-    tmr1_init();
-    tmr1_init();
+    char rx_str[50] = {0}; 
+    int str_pos = 0;
+    const char hex_chars[] = "0123456789ABCDEF";
 
+    if (rx_index > 0) {
+        for (int i = 0; i < rx_index; i++) {
+            if (str_pos < 46) { 
+                rx_str[str_pos++] = hex_chars[(rx_buffer[i] >> 4) & 0x0F];
+                rx_str[str_pos++] = hex_chars[rx_buffer[i] & 0x0F];
+                rx_str[str_pos++] = ' '; 
+            }
+        }
+        rx_str[str_pos] = '\0';
+        
+        drawtext(1, 60, "UART RX DATA:", ST7735_YELLOW, ST7735_BLACK, 1);
+        drawtext(1, 75, rx_str, ST7735_GREEN, ST7735_BLACK, 1);
+    } else {
+        drawtext(1, 60, "UART RX TIMEOUT!", ST7735_RED, ST7735_BLACK, 1);
+    }
 
+ 
 
     int BT1_ST= 1;
     int BT2_ST= 1;

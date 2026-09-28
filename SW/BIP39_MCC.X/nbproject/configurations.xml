@@ -35,6 +35,17 @@
             <logicalFolder name="gpio" displayName="gpio" projectFiles="true">
               <itemPath>../src/config/v2/peripheral/gpio/plib_gpio.h</itemPath>
             </logicalFolder>
+            <logicalFolder name="spi" displayName="spi" projectFiles="true">
+              <logicalFolder name="spi_master" displayName="spi_master" projectFiles="true">
+                <itemPath>../src/config/v2/peripheral/spi/spi_master/plib_spi_master_common.h</itemPath>
+                <itemPath>../src/config/v2/peripheral/spi/spi_master/plib_spi3_master.h</itemPath>
+                <itemPath>../src/config/v2/peripheral/spi/spi_master/plib_spi1_master.h</itemPath>
+              </logicalFolder>
+            </logicalFolder>
+            <logicalFolder name="uart" displayName="uart" projectFiles="true">
+              <itemPath>../src/config/v2/peripheral/uart/plib_uart_common.h</itemPath>
+              <itemPath>../src/config/v2/peripheral/uart/plib_uart2.h</itemPath>
+            </logicalFolder>
           </logicalFolder>
           <itemPath>../src/config/v2/toolchain_specifics.h</itemPath>
           <itemPath>../src/config/v2/definitions.h</itemPath>
@@ -60,7 +71,10 @@
       </logicalFolder>
       <logicalFolder name="Seedmate_v2" displayName="Seedmate_v2" projectFiles="true">
         <logicalFolder name="components" displayName="components" projectFiles="true">
+          <itemPath>Seedmate_v2/components/uart2.yml</itemPath>
           <itemPath>Seedmate_v2/components/core.yml</itemPath>
+          <itemPath>Seedmate_v2/components/spi3.yml</itemPath>
+          <itemPath>Seedmate_v2/components/spi1.yml</itemPath>
         </logicalFolder>
         <itemPath>Seedmate_v2/mcc-config.mc4</itemPath>
       </logicalFolder>
@@ -115,6 +129,15 @@
             </logicalFolder>
             <logicalFolder name="gpio" displayName="gpio" projectFiles="true">
               <itemPath>../src/config/v2/peripheral/gpio/plib_gpio.c</itemPath>
+            </logicalFolder>
+            <logicalFolder name="spi" displayName="spi" projectFiles="true">
+              <logicalFolder name="spi_master" displayName="spi_master" projectFiles="true">
+                <itemPath>../src/config/v2/peripheral/spi/spi_master/plib_spi3_master.c</itemPath>
+                <itemPath>../src/config/v2/peripheral/spi/spi_master/plib_spi1_master.c</itemPath>
+              </logicalFolder>
+            </logicalFolder>
+            <logicalFolder name="uart" displayName="uart" projectFiles="true">
+              <itemPath>../src/config/v2/peripheral/uart/plib_uart2.c</itemPath>
             </logicalFolder>
           </logicalFolder>
           <logicalFolder name="stdio" displayName="stdio" projectFiles="true">
@@ -1448,6 +1471,7 @@
       <C32>
         <property key="additional-warnings" value="true"/>
         <property key="addresss-attribute-use" value="false"/>
+        <property key="appendMe" value=""/>
         <property key="cast-align" value="false"/>
         <property key="code-model" value="default"/>
         <property key="const-model" value="default"/>
@@ -1525,6 +1549,7 @@
         <property key="additional-options-use-response-files" value="false"/>
         <property key="additional-options-write-sla" value="false"/>
         <property key="allocate-dinit" value="false"/>
+        <property key="appendMe" value=""/>
         <property key="code-dinit" value="false"/>
         <property key="ebase-addr" value=""/>
         <property key="enable-check-sections" value="false"/>
@@ -1570,6 +1595,7 @@
       <C32CPP>
         <property key="additional-warnings" value="false"/>
         <property key="addresss-attribute-use" value="false"/>
+        <property key="appendMe" value=""/>
         <property key="check-new" value="false"/>
         <property key="eh-specs" value="true"/>
         <property key="enable-app-io" value="false"/>
