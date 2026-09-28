@@ -5,7 +5,13 @@
 #include "SPI.h"    
 
 //#define SCK       PORTBbits.RB8   //SCL
-#define A0_LCD    PORTBbits.RB5   //A0 LCD
+#if defined(v1) 
+    #define A0_LCD    PORTBbits.RB5   //A0 LCD    
+#endif
+
+#if defined(v2) 
+    #define A0_LCD    PORTCbits.RC3   //A0 LCD    
+#endif
 
 //prototypes
 //unsigned char SPI(unsigned char val);

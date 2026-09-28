@@ -36,7 +36,6 @@
               <itemPath>../src/config/v2/peripheral/gpio/plib_gpio.h</itemPath>
             </logicalFolder>
           </logicalFolder>
-          <itemPath>../src/config/v2/device.h</itemPath>
           <itemPath>../src/config/v2/toolchain_specifics.h</itemPath>
           <itemPath>../src/config/v2/definitions.h</itemPath>
           <itemPath>../src/config/v2/interrupts.h</itemPath>
@@ -61,7 +60,6 @@
       </logicalFolder>
       <logicalFolder name="Seedmate_v2" displayName="Seedmate_v2" projectFiles="true">
         <logicalFolder name="components" displayName="components" projectFiles="true">
-          <itemPath>Seedmate_v2/components/dfp.yml</itemPath>
           <itemPath>Seedmate_v2/components/core.yml</itemPath>
         </logicalFolder>
         <itemPath>Seedmate_v2/mcc-config.mc4</itemPath>
@@ -135,6 +133,7 @@
       <itemPath>../src/SSS/memzero.c</itemPath>
       <itemPath>../src/main.c</itemPath>
       <itemPath>../src/sha512.c</itemPath>
+      <itemPath>../src/EFF_short.c</itemPath>
     </logicalFolder>
   </logicalFolder>
   <sourceRootList>
@@ -183,6 +182,46 @@
         <makeCustomizationEnableLongLines>false</makeCustomizationEnableLongLines>
         <makeCustomizationNormalizeHexFile>false</makeCustomizationNormalizeHexFile>
       </makeCustomizationType>
+      <item path="../src/config/v2/definitions.h" ex="true" overriding="false">
+      </item>
+      <item path="../src/config/v2/exceptions.c" ex="true" overriding="false">
+      </item>
+      <item path="../src/config/v2/initialization.c" ex="true" overriding="false">
+      </item>
+      <item path="../src/config/v2/interrupts.c" ex="true" overriding="false">
+      </item>
+      <item path="../src/config/v2/interrupts.h" ex="true" overriding="false">
+      </item>
+      <item path="../src/config/v2/peripheral/clk/plib_clk.c"
+            ex="true"
+            overriding="false">
+      </item>
+      <item path="../src/config/v2/peripheral/clk/plib_clk.h"
+            ex="true"
+            overriding="false">
+      </item>
+      <item path="../src/config/v2/peripheral/evic/plib_evic.c"
+            ex="true"
+            overriding="false">
+      </item>
+      <item path="../src/config/v2/peripheral/evic/plib_evic.h"
+            ex="true"
+            overriding="false">
+      </item>
+      <item path="../src/config/v2/peripheral/gpio/plib_gpio.c"
+            ex="true"
+            overriding="false">
+      </item>
+      <item path="../src/config/v2/peripheral/gpio/plib_gpio.h"
+            ex="true"
+            overriding="false">
+      </item>
+      <item path="../src/config/v2/stdio/xc32_monitor.c" ex="true" overriding="false">
+      </item>
+      <item path="../src/config/v2/toolchain_specifics.h"
+            ex="true"
+            overriding="false">
+      </item>
       <C32>
         <property key="additional-warnings" value="true"/>
         <property key="addresss-attribute-use" value="false"/>
@@ -1356,6 +1395,56 @@
         <makeCustomizationEnableLongLines>false</makeCustomizationEnableLongLines>
         <makeCustomizationNormalizeHexFile>false</makeCustomizationNormalizeHexFile>
       </makeCustomizationType>
+      <item path="../src/config/default/definitions.h" ex="true" overriding="false">
+      </item>
+      <item path="../src/config/default/device.h" ex="true" overriding="false">
+      </item>
+      <item path="../src/config/default/exceptions.c" ex="true" overriding="false">
+      </item>
+      <item path="../src/config/default/initialization.c"
+            ex="true"
+            overriding="false">
+      </item>
+      <item path="../src/config/default/interrupts.c" ex="true" overriding="false">
+      </item>
+      <item path="../src/config/default/interrupts.h" ex="true" overriding="false">
+      </item>
+      <item path="../src/config/default/p32MM0064GPL028.ld"
+            ex="true"
+            overriding="false">
+      </item>
+      <item path="../src/config/default/peripheral/clk/plib_clk.c"
+            ex="true"
+            overriding="false">
+      </item>
+      <item path="../src/config/default/peripheral/clk/plib_clk.h"
+            ex="true"
+            overriding="false">
+      </item>
+      <item path="../src/config/default/peripheral/evic/plib_evic.c"
+            ex="true"
+            overriding="false">
+      </item>
+      <item path="../src/config/default/peripheral/evic/plib_evic.h"
+            ex="true"
+            overriding="false">
+      </item>
+      <item path="../src/config/default/peripheral/gpio/plib_gpio.c"
+            ex="true"
+            overriding="false">
+      </item>
+      <item path="../src/config/default/peripheral/gpio/plib_gpio.h"
+            ex="true"
+            overriding="false">
+      </item>
+      <item path="../src/config/default/stdio/xc32_monitor.c"
+            ex="true"
+            overriding="false">
+      </item>
+      <item path="../src/config/default/toolchain_specifics.h"
+            ex="true"
+            overriding="false">
+      </item>
       <C32>
         <property key="additional-warnings" value="true"/>
         <property key="addresss-attribute-use" value="false"/>
@@ -1372,8 +1461,7 @@
         <property key="enable-unroll-loops" value="false"/>
         <property key="exclude-floating-point" value="false"/>
         <property key="expand-pragma-config" value="false"/>
-        <property key="extra-include-directories"
-                  value="../src;../src/config/default;../src/config/v2"/>
+        <property key="extra-include-directories" value="../src;../src/config/v2"/>
         <property key="generate-16-bit-code" value="false"/>
         <property key="generate-micro-compressed-code" value="false"/>
         <property key="isolate-each-function" value="true"/>

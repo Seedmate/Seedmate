@@ -92,15 +92,15 @@
 #define BT2_GetLatch()          ((LATC >> 0) & 0x1)
 #define BT2_PIN                  GPIO_PIN_RC0
 
-/*** Macros for BT_OK pin ***/
-#define BT_OK_Set()               (LATCSET = (1<<1))
-#define BT_OK_Clear()             (LATCCLR = (1<<1))
-#define BT_OK_Toggle()            (LATCINV= (1<<1))
-#define BT_OK_OutputEnable()      (TRISCCLR = (1<<1))
-#define BT_OK_InputEnable()       (TRISCSET = (1<<1))
-#define BT_OK_Get()               ((PORTC >> 1) & 0x1)
-#define BT_OK_GetLatch()          ((LATC >> 1) & 0x1)
-#define BT_OK_PIN                  GPIO_PIN_RC1
+/*** Macros for BT3 pin ***/
+#define BT3_Set()               (LATCSET = (1<<1))
+#define BT3_Clear()             (LATCCLR = (1<<1))
+#define BT3_Toggle()            (LATCINV= (1<<1))
+#define BT3_OutputEnable()      (TRISCCLR = (1<<1))
+#define BT3_InputEnable()       (TRISCSET = (1<<1))
+#define BT3_Get()               ((PORTC >> 1) & 0x1)
+#define BT3_GetLatch()          ((LATC >> 1) & 0x1)
+#define BT3_PIN                  GPIO_PIN_RC1
 
 /*** Macros for BT5 pin ***/
 #define BT5_Set()               (LATCSET = (1<<2))
@@ -122,15 +122,15 @@
 #define LED_GetLatch()          ((LATA >> 2) & 0x1)
 #define LED_PIN                  GPIO_PIN_RA2
 
-/*** Macros for RST_LCD pin ***/
-#define RST_LCD_Set()               (LATBSET = (1<<4))
-#define RST_LCD_Clear()             (LATBCLR = (1<<4))
-#define RST_LCD_Toggle()            (LATBINV= (1<<4))
-#define RST_LCD_OutputEnable()      (TRISBCLR = (1<<4))
-#define RST_LCD_InputEnable()       (TRISBSET = (1<<4))
-#define RST_LCD_Get()               ((PORTB >> 4) & 0x1)
-#define RST_LCD_GetLatch()          ((LATB >> 4) & 0x1)
-#define RST_LCD_PIN                  GPIO_PIN_RB4
+/*** Macros for R_LCD pin ***/
+#define R_LCD_Set()               (LATBSET = (1<<4))
+#define R_LCD_Clear()             (LATBCLR = (1<<4))
+#define R_LCD_Toggle()            (LATBINV= (1<<4))
+#define R_LCD_OutputEnable()      (TRISBCLR = (1<<4))
+#define R_LCD_InputEnable()       (TRISBSET = (1<<4))
+#define R_LCD_Get()               ((PORTB >> 4) & 0x1)
+#define R_LCD_GetLatch()          ((LATB >> 4) & 0x1)
+#define R_LCD_PIN                  GPIO_PIN_RB4
 
 /*** Macros for BT6 pin ***/
 #define BT6_Set()               (LATASET = (1<<4))

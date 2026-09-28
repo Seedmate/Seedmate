@@ -3,15 +3,15 @@
   <executable name="dist/v2/production/BIP39_MCC.X.production.elf">                 
     <memory name="program">                 
       <units>bytes</units>                 
-      <length>68592</length>                 
-      <used>64651</used>                     
-      <free>3941</free>                     
+      <length>263312</length>                 
+      <used>65255</used>                     
+      <free>198057</free>                     
     </memory>                              
     <memory name="data">              
       <units>bytes</units>                 
-      <length>8192</length>                 
+      <length>32768</length>                 
       <used>5086</used>                     
-      <free>3106</free>                     
+      <free>27682</free>                     
     </memory>                              
   </executable>                            
 </project>                                 

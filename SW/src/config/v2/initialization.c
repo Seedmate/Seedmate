@@ -62,7 +62,7 @@
 
 /*** FICD ***/
 #pragma config JTAGEN =     OFF
-#pragma config ICS =     PGx2
+#pragma config ICS =     PGx1
 
 /*** FPOR ***/
 #pragma config BOREN =    BOR3
@@ -85,7 +85,7 @@
 #pragma config IESO =       ON
 #pragma config POSCMOD =    OFF
 #pragma config OSCIOFNC =   OFF
-#pragma config SOSCSEL =     OFF
+#pragma config SOSCSEL =    ON//ojo solo funciona asi
 #pragma config FCKSM =      CSECME
 
 /*** FSEC ***/
@@ -165,6 +165,8 @@ void SYS_Initialize ( void* data )
 
     EVIC_Initialize();
 
+	/* Enable global interrupts */
+    (void)__builtin_enable_interrupts();
 
 
 

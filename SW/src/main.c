@@ -3482,9 +3482,22 @@ int main ( void ){
     LED_LCD =1;
     A0_LCD=0;
     LED = 0;
-    SPI1CON= 0x10000120;
-    SPI1CON= 0x10008120;
-    SPI1BRG= 1;
+    #if defined(v2)
+        // --- SPI1 Configuration (TFT LCD) ---
+        SPI1CON = 0x10000120; // Off, Master Mode, 8-bit
+        SPI1CON = 0x10008120; // On (ON = 1)
+        SPI1BRG = 1;          // Fast speed for the display
+
+        // --- SPI3 Configuration (SD Card) ---
+        SPI3CON = 0x10000120; // Off, Master Mode, 8-bit
+        SPI3CON = 0x10008120; // On (ON = 1)
+        SPI3BRG = 0x00FF;     // SLOW speed for initialization (sd_init)
+    #else
+        // --- Old board (v1) ---
+        SPI1CON = 0x10000120;
+        SPI1CON = 0x10008120;
+        SPI1BRG = 1;
+    #endif
     LED_LCD =1;
     SD_CS =1;
 
@@ -3509,6 +3522,17 @@ int main ( void ){
 
     // Initialize the SD card only once at startup.
     SD_ready = sd_init();
+    // Initialize the SD card only once at startup.
+    SD_ready = sd_init();
+
+    #if defined(v2)
+        if (SD_ready) {
+            // Switch SPI3 back to high speed for data transfers
+            SPI3BRG = 1; 
+        }
+    #endif
+
+    tmr1_init();
     tmr1_init();
 
 

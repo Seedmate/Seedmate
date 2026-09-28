@@ -91,12 +91,12 @@ void CLK_Initialize( void )
     
     /* Peripheral Module Disable Configuration */
     PMD1 = 0x101001U;
-    PMD2 = 0xf000007U;
-    PMD3 = 0x1ff00U;
-    PMD4 = 0x7U;
-    PMD5 = 0x1070707U;
-    PMD6 = 0x1U;
-    PMD7 = 0x0U;
+    PMD2 = 0x3000003U;
+    PMD3 = 0x700U;
+    PMD4 = 0x1U;
+    PMD5 = 0x203U;
+    PMD6 = 0x101U;
+    PMD7 = 0x8U;
 
     /* Even though SPLL is selected in FNOSC, Harmony generates #pragma code as FRCDIV, not as SPLL, in "initilization.c".
     * Switching to SPLL is done here after appropriate setting of SPLLCON register.
@@ -117,6 +117,20 @@ void CLK_Initialize( void )
         status = CLKSTATbits.SPLLRDY;
         status |= CLKSTATbits.SPDIVRDY;
     }
+
+    /* Set up Reference Clock 1 */
+    /* REFO1CON register */
+    /* ROSEL =  SYSCLK */
+    /* DIVSWEN = 1 */
+    /* RODIV = 1 */
+    REFO1CON = 0x10200;
+
+    /* REFO1TRIM register */
+    /* ROTRIM = 0 */
+    REFO1TRIM = 0x0;
+
+    /* Enable oscillator (ON bit) */
+    REFO1CONSET = 0x00008000;
 
   
 
