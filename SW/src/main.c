@@ -1939,6 +1939,14 @@ static const char *search_unique_prefix(const char *prefix, char *result, size_t
         return result;
 }
 
+
+void black_screen(){
+    rectan(0,0,159,127,BLACK);
+}
+void white_screen(){
+    rectan(0,0,159,127,WHITE);
+}
+
 void draw_seedqr(const char *text) {
     size_t length = strlen(text);
     int version;
@@ -2097,6 +2105,55 @@ void draw_compactqr_code(int size, unsigned char *data){
 }
 
 
+#if defined(v2) 
+void draw_xpub_qr(const char *text) {
+    white_screen();
+    // Version 6 has 41x41 modules. 
+    // We use a local scale of 2 to fit the 160x128 screen bounds.
+    int local_scale = 2; 
+
+    // Dynamic buffer allocation for Version 6
+    uint8_t qrcodeData[qrcode_getBufferSize(6)];
+    QRCode qrcode;
+
+    // Initialize the QR code: Version 6, ECC_LOW (Level L)
+    qrcode_initText(&qrcode, qrcodeData, 6, ECC_LOW, text);
+
+    int qr_size = qrcode.size;
+    int img_size = qr_size * local_scale;
+    
+    // Center the QR code on the screen
+    int x_offset = (SCREEN_WIDTH - img_size) / 2;
+    int y_offset = (SCREEN_HEIGHT - img_size) / 2;
+
+    // 1. Draw the white background and the required 4-module "Quiet Zone"
+    int margin = 8 * local_scale; 
+    fillRect(
+        x_offset - margin, 
+        y_offset - margin, 
+        img_size + (2 * margin), 
+        img_size + (2 * margin), 
+        ST7735_WHITE
+    );
+
+    // 2. Iterate and draw ONLY the black modules to maximize SPI performance
+    for (int y = 0; y < qr_size; y++) {
+        for (int x = 0; x < qr_size; x++) {
+            if (qrcode_getModule(&qrcode, x, y)) {
+                fillRect(
+                    x_offset + (x * local_scale), 
+                    y_offset + (y * local_scale), 
+                    local_scale, 
+                    local_scale, 
+                    ST7735_BLACK
+                );
+            }
+        }
+    }
+}
+
+#endif
+
 
 bool check_last_word(BYTE *data, size_t size, char* word_user) {
     int bit_index = 0;
@@ -2131,12 +2188,7 @@ bool check_last_word(BYTE *data, size_t size, char* word_user) {
 }
 
 
-void black_screen(){
-    rectan(0,0,159,127,BLACK);
-}
-void white_screen(){
-    rectan(0,0,159,127,WHITE);
-}
+
 
 void redraw_show_seed_with_offset(void) {
     black_screen();
@@ -2720,7 +2772,9 @@ uint8_t sd_get_response(void) {
 static bool sd_is_sdhc = false;
 
 bool sd_init(void) {
-    SPI3BRG = 0x00FF;     // SLOW speed for initialization (sd_init)
+    #if defined(v2) 
+        SPI3BRG = 0x0004;     // SLOW speed for initialization (sd_init)
+    #endif
     // 74+ clocks with CS held high
     SD_CS = 1;
     for (int i = 0; i < 10; i++) spi_send(0xFF); // 80 clocks
@@ -3498,7 +3552,7 @@ int main ( void ){
         // --- SPI3 Configuration (SD Card) ---
         SPI3CON = 0x10000120; // Off, Master Mode, 8-bit
         SPI3CON = 0x10008120; // On (ON = 1)
-        SPI3BRG = 0x00FF;     // SLOW speed for initialization (sd_init)
+        SPI3BRG = 0x0004;     // SLOW speed for initialization (sd_init)
     #else
         // --- Old board (v1) ---
         SPI1CON = 0x10000120;
@@ -3535,32 +3589,7 @@ int main ( void ){
     tmr1_init();
 
 
-// ==========================================
-    // --- PIN MAPPING & ANALOG CONFIGURATION ---
-    // ==========================================
-    
-    // 1. Disable analog mode on RA1 so it can be used as digital TX
-    ANSELAbits.ANSA1 = 0; 
-    
-    // 2. Set Pin Directions (TRIS: 0 = Output, 1 = Input)
-    TRISAbits.TRISA1 = 0; // Force RA1 (TX) as OUTPUT
-    TRISAbits.TRISA9 = 1; // Force RA9 (RX) as INPUT
-
-    // 3. Unlock Peripheral Pin Select (PPS) registers
-    SYSKEY = 0xAA996655;
-    SYSKEY = 0x556699AA;
-    RPCONbits.IOLOCK = 0; // <-- CRITICAL: Disable IOLOCK before writing
-    
-    // 4. Map UART2 TX to RA1 (RP2) 
-    RPOR0bits.RP2R = 4; 
-    
-    // 5. Map UART2 RX to RA9 (RP24)
-    RPINR9bits.U2RXR = 24; 
-    
-    // 6. Lock Peripheral Pin Select (PPS) registers
-    RPCONbits.IOLOCK = 1; // <-- CRITICAL: Re-enable IOLOCK
-    SYSKEY = 0x00000000;
-
+    #if defined(v2)
     // ==========================================
     // --- UART2 FRAME CONFIGURATION ---
     // ==========================================
@@ -3601,40 +3630,58 @@ int main ( void ){
     } 
 
 
-
+    
     // --- QUICK SENSOR RECEPTION TEST ---
-    uint8_t rx_buffer[16];      
+    black_screen();
+    uint8_t rx_buffer[64];      // Increased buffer to 64 bytes to hold more data
     int rx_index = 0;
-    uint32_t timeout = 2000000; 
+    uint32_t timeout = 4000000; // Increased timeout for longer frames
 
+    // Wait for response bytes
     while (timeout > 0 && rx_index < sizeof(rx_buffer)) {
         if (U2STAbits.URXDA) {               
             rx_buffer[rx_index++] = U2RXREG; 
-            timeout = 2000000;               
+            timeout = 4000000; // Reset timeout to catch the rest of the frame              
         }
         timeout--;
     }
 
-    char rx_str[50] = {0}; 
-    int str_pos = 0;
-    const char hex_chars[] = "0123456789ABCDEF";
-
     if (rx_index > 0) {
+        // Moved title up to Y = 10 to leave room for more lines
+        drawtext(1, 10, "UART RX DATA:", ST7735_YELLOW, ST7735_BLACK, 1);
+        
+        char line_str[30] = {0}; 
+        int str_pos = 0;
+        int y_pos = 25;          // Starting Y coordinate moved to 25
+        const char hex_chars[] = "0123456789ABCDEF";
+
         for (int i = 0; i < rx_index; i++) {
-            if (str_pos < 46) { 
-                rx_str[str_pos++] = hex_chars[(rx_buffer[i] >> 4) & 0x0F];
-                rx_str[str_pos++] = hex_chars[rx_buffer[i] & 0x0F];
-                rx_str[str_pos++] = ' '; 
+            // Format current byte to hex
+            line_str[str_pos++] = hex_chars[(rx_buffer[i] >> 4) & 0x0F];
+            line_str[str_pos++] = hex_chars[rx_buffer[i] & 0x0F];
+            line_str[str_pos++] = ' '; 
+
+            // If we have 8 bytes in the buffer, or it's the very last byte received
+            if ((i + 1) % 8 == 0 || i == (rx_index - 1)) {
+                line_str[str_pos] = '\0'; // Null-terminate the string
+                
+                // Draw the current line and advance the Y coordinate for the next one
+                drawtext(1, y_pos, line_str, ST7735_GREEN, ST7735_BLACK, 1);
+                y_pos += 12; // Move down 12 pixels for the next line (adjust if it overlaps)
+                
+                str_pos = 0; // Reset string position for the next line
             }
         }
-        rx_str[str_pos] = '\0';
-        
-        drawtext(1, 60, "UART RX DATA:", ST7735_YELLOW, ST7735_BLACK, 1);
-        drawtext(1, 75, rx_str, ST7735_GREEN, ST7735_BLACK, 1);
     } else {
-        drawtext(1, 60, "UART RX TIMEOUT!", ST7735_RED, ST7735_BLACK, 1);
+        // Also moved the timeout message up
+        drawtext(1, 10, "UART RX TIMEOUT!", ST7735_RED, ST7735_BLACK, 1);
     }
-
+    
+    //test QR XPUB
+    black_screen();
+    draw_xpub_qr("[89aa9c70/84h/0h/0h]xpub6C1WhE68AB95vTj1iM3Bpsu6jwuuKN8D2Z3mGaKNE8xxMHS2ehyN65V6md1KzaDREgcuRDs7AmfvNKFZ6sSykKyxHZDFFWXqVkKL8iss6SD");
+    delay_ms(3000);
+    #endif
  
 
     int BT1_ST= 1;
