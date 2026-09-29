@@ -129,7 +129,11 @@
 #define cSSS_n_opt 2
 #define cQR_n_opt 2
 #define cSDBLOCK_n_opt 8
-#define cSELINPUT_n_opt 2
+#if defined(v2)
+    #define cSELINPUT_n_opt 3
+#else
+    #define cSELINPUT_n_opt 2
+#endif
 #define cDICE_MODE_n_opt 2
 #define cHASH_MODE_n_opt 2
 #define cRESOURCE_n_opt 5
@@ -180,6 +184,9 @@ int settings_pointer = 0;
 
 #define cKEYBOARD 0
 #define cFROMSD 1
+#if defined(v2)
+    #define cQRSCAN 2
+#endif
 #define cSD_CHECKSUM_ADDR 64
 #define cSD_SIZE_ADDR 65
 #define cSD_XOR_ADDR 66 // Key storage offset
@@ -223,9 +230,14 @@ const char* const menu_size[]     = {"12 WORDS", "24 WORDS"};
 const char* const menu_qr[]       = {"STANDARD", "COMPACT"};
 const char* const menu_xor[]      = {"A XOR B = C", "A XOR B XOR C = D", "A XOR B XOR C XOR D = E"};
 const char* const menu_sss[]      = {"SPLIT", "MERGE"};
-const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD"};
 const char* const menu_resource[] = {"TUTORIAL", "BACKUP TOOL", "DICE TESTER", "PRINT WORDLIST", "BINARY WORDLIST"};
 const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB","1 WORD XOR","HOW TO"}; 
+
+#if defined(v2)
+const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD", "QR SCAN"};
+#else
+const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD"};
+#endif
 
 
 int main_pointer = 0;
@@ -338,6 +350,8 @@ void extract_11bit_groups(BYTE *data, size_t size);
 // Prototypes for smart keyboard prediction
 static void get_valid_next_letters(const char *prefix, bool *valid_letters);
 void print_keyboard_with_validation(int index, bool word_found, const char *current_word);
+
+int find_word_index(const char *word);
 
 // Mnemonic to Cards Globals
 uint8_t card_sequence[132];
@@ -672,6 +686,9 @@ typedef enum
     SEL_SETTINGS,
     WARNING_SEEDQR,
     SHOW_CARD_ENCODING,
+    #if defined(v2)
+        QR_SCANNING,
+    #endif
     END_MODE // Final
 } state_t;
 
@@ -688,6 +705,113 @@ typedef enum
     LEFT_BT,
     RIGTH_BT,
 } PULSED_BT_t;
+
+// ============================================================================
+// QR Parsing & Validation Logic
+// ============================================================================
+#if defined(v2)
+bool validate_and_load_qr(uint8_t *buffer, int length) {
+    
+    // --- FIX FOR ISSUE 2: Remove trailing whitespace/newlines ---
+    while (length > 0 && (buffer[length - 1] == '\r' || 
+                          buffer[length - 1] == '\n' || 
+                          buffer[length - 1] == ' '  || 
+                          buffer[length - 1] == '\0')) {
+        length--;
+    }
+    
+    buffer[length] = '\0';
+    
+    // --- FIX FOR ISSUE 1: Proper 16/32 byte Compact SeedQR handling ---
+    if (length == 16 || length == 32) {
+        size_pointer = (length == 16) ? cSIZE_12 : cSIZE_24;
+        
+        for (int i = 0; i < 36; i++) {
+            data_array_256b[i] = 0;
+        }
+        
+        for (int i = 0; i < length; i++) {
+            data_array_256b[i] = buffer[i];
+        }
+        
+        return true;
+    }
+    
+    // 2. Check if standard SeedQR (48 or 96 numeric digits)
+    bool is_numeric = true;
+    for (int i = 0; i < length; i++) {
+        if (buffer[i] < '0' || buffer[i] > '9') { 
+            is_numeric = false; 
+            break; 
+        }
+    }
+    
+    if (is_numeric && (length == 48 || length == 96)) {
+        int words = length / 4;
+        size_pointer = (words == 12) ? cSIZE_12 : cSIZE_24;
+        for (int i = 0; i < 36; i++) data_array_256b[i] = 0;
+        
+        int last_val = 0; // Fix: Track the last word index
+        
+        for (int w = 0; w < words; w++) {
+            int val = (buffer[w*4]-'0')*1000 + (buffer[w*4+1]-'0')*100 + (buffer[w*4+2]-'0')*10 + (buffer[w*4+3]-'0');
+            if (val > 2047) return false;
+            
+            write_11bit_value(data_array_256b, w+1, val);
+            
+            if (w == words - 1) {
+                last_val = val;
+            }
+        }
+        
+        // Fix: Use the tracked value instead of calling read_11bit_value
+        const char *last_word = get_word(last_val); 
+        return matches_last_word_checksum(data_array_256b, (char *)last_word, size_pointer);
+    }
+    
+    // 3. Check pure text sequence (Space/Newline separated)
+    int word_count = 0;
+    int last_val = 0; // Fix: Track the last word index
+    for (int i = 0; i < 36; i++) data_array_256b[i] = 0;
+    
+    char tmp_word[16];
+    int char_idx = 0;
+    for (int i = 0; i <= length; i++) {
+        if (buffer[i] == ' ' || buffer[i] == '\r' || buffer[i] == '\n' || buffer[i] == '\0') {
+            if (char_idx > 0) {
+                tmp_word[char_idx] = '\0';
+                int idx = find_word_index(tmp_word);
+                if (idx == -1) return false; // Not in BIP39 dictionary
+                word_count++;
+                if (word_count > 24) return false;
+                
+                write_11bit_value(data_array_256b, word_count, idx);
+                last_val = idx; // Fix: Save the index
+                
+                char_idx = 0;
+            }
+        } else {
+            if (char_idx < 15) {
+                char c = buffer[i];
+                if (c >= 'A' && c <= 'Z') c = c + ('a' - 'A'); // lowercase
+                tmp_word[char_idx++] = c;
+            } else {
+                return false; // Word is suspiciously long
+            }
+        }
+    }
+    
+    if (word_count == 12 || word_count == 24) {
+        size_pointer = (word_count == 12) ? cSIZE_12 : cSIZE_24;
+        
+        // Fix: Use the tracked value instead of calling read_11bit_value
+        const char *last_word = get_word(last_val); 
+        return matches_last_word_checksum(data_array_256b, (char *)last_word, size_pointer);
+    }
+    
+    return false;
+}
+#endif
 
 
 void spi_send(uint8_t data) {
@@ -3615,72 +3739,10 @@ int main ( void ){
     U2STAbits.URXEN = 1; // Enable RX
     U2MODEbits.ON = 1;   // Turn on UART2
 
-    //SENSOR TRANSMISSION TEST ---
-
-    uint8_t sensor_cmd[] = {0x7E, 0x00, 0x08, 0x01, 0x00, 0x02, 0x01, 0xAB, 0xCD};
-
-
-
-    for (int i = 0; i < sizeof(sensor_cmd); i++) {
-
-        while (U2STAbits.UTXBF); 
-
-        U2TXREG = sensor_cmd[i]; 
-
-    } 
-
-
-    
-    // --- QUICK SENSOR RECEPTION TEST ---
-    black_screen();
-    uint8_t rx_buffer[64];      // Increased buffer to 64 bytes to hold more data
-    int rx_index = 0;
-    uint32_t timeout = 4000000; // Increased timeout for longer frames
-
-    // Wait for response bytes
-    while (timeout > 0 && rx_index < sizeof(rx_buffer)) {
-        if (U2STAbits.URXDA) {               
-            rx_buffer[rx_index++] = U2RXREG; 
-            timeout = 4000000; // Reset timeout to catch the rest of the frame              
-        }
-        timeout--;
-    }
-
-    if (rx_index > 0) {
-        // Moved title up to Y = 10 to leave room for more lines
-        drawtext(1, 10, "UART RX DATA:", ST7735_YELLOW, ST7735_BLACK, 1);
-        
-        char line_str[30] = {0}; 
-        int str_pos = 0;
-        int y_pos = 25;          // Starting Y coordinate moved to 25
-        const char hex_chars[] = "0123456789ABCDEF";
-
-        for (int i = 0; i < rx_index; i++) {
-            // Format current byte to hex
-            line_str[str_pos++] = hex_chars[(rx_buffer[i] >> 4) & 0x0F];
-            line_str[str_pos++] = hex_chars[rx_buffer[i] & 0x0F];
-            line_str[str_pos++] = ' '; 
-
-            // If we have 8 bytes in the buffer, or it's the very last byte received
-            if ((i + 1) % 8 == 0 || i == (rx_index - 1)) {
-                line_str[str_pos] = '\0'; // Null-terminate the string
-                
-                // Draw the current line and advance the Y coordinate for the next one
-                drawtext(1, y_pos, line_str, ST7735_GREEN, ST7735_BLACK, 1);
-                y_pos += 12; // Move down 12 pixels for the next line (adjust if it overlaps)
-                
-                str_pos = 0; // Reset string position for the next line
-            }
-        }
-    } else {
-        // Also moved the timeout message up
-        drawtext(1, 10, "UART RX TIMEOUT!", ST7735_RED, ST7735_BLACK, 1);
-    }
-    
     //test QR XPUB
-    black_screen();
-    draw_xpub_qr("[89aa9c70/84h/0h/0h]xpub6C1WhE68AB95vTj1iM3Bpsu6jwuuKN8D2Z3mGaKNE8xxMHS2ehyN65V6md1KzaDREgcuRDs7AmfvNKFZ6sSykKyxHZDFFWXqVkKL8iss6SD");
-    delay_ms(3000);
+    //black_screen();
+    //draw_xpub_qr("[89aa9c70/84h/0h/0h]xpub6C1WhE68AB95vTj1iM3Bpsu6jwuuKN8D2Z3mGaKNE8xxMHS2ehyN65V6md1KzaDREgcuRDs7AmfvNKFZ6sSykKyxHZDFFWXqVkKL8iss6SD");
+    //delay_ms(3000);
     #endif
  
 
@@ -4691,6 +4753,14 @@ int main ( void ){
                             } else {
                                 transition_to_size();
                             }
+#if defined(v2)
+                        } else if (selinput_pointer==cQRSCAN) {
+                            black_screen();
+                            drawtext(10, 10, "READY TO SCAN", ST7735_YELLOW, ST7735_BLACK, 1);
+                            //drawtext(10, 60, "BACK TO CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
+                            estado = QR_SCANNING;
+                        
+#endif                            
                         } else { // cFROMSD
                             black_screen();
                             if (seed_pointer == cSEED_triple && main_pointer == cMAIN_create) {
@@ -4713,6 +4783,7 @@ int main ( void ){
                                 transition_to_sd_block(SDblock_pointer);
                             }
                         }
+
                         break;
                     case BACK_BT:
                         if (main_pointer == cMAIN_XOR)   {
@@ -5635,6 +5706,141 @@ int main ( void ){
                 estado = SEL_SETTINGS;
             }
             break;
+#if defined(v2)
+            case QR_SCANNING:
+                switch (pulsed_bt) {
+                    case OK_BT: {
+                        // 1. Clear hardware errors and flush the UART buffer before triggering
+                        if (U2STAbits.OERR) {
+                            U2STAbits.OERR = 0; 
+                        }
+                        while (U2STAbits.URXDA) {
+                            (void)U2RXREG; 
+                        }
+
+                        // 2. Send the trigger command to the scanner
+                        uint8_t trigger_cmd[] = {0x7E, 0x00, 0x08, 0x01, 0x00, 0x02, 0x01, 0xAB, 0xCD};
+                        for (int i = 0; i < sizeof(trigger_cmd); i++) {
+                            while (U2STAbits.UTXBF); 
+                            U2TXREG = trigger_cmd[i]; 
+                        }
+                        
+                        drawtext(10, 30, "SCANNING...    ", ST7735_GREEN, ST7735_BLACK, 1);
+                        
+                        uint8_t rx_buf[2048];
+                        int rx_len = 0;
+                        uint32_t timeout = 100000;
+
+                        // 3. Wait for the response
+                        while (timeout > 0 && rx_len < sizeof(rx_buf) - 1) {
+                            if (U2STAbits.URXDA) {               
+                                rx_buf[rx_len++] = U2RXREG; 
+                                
+                                if (rx_len > 16) {
+                                    timeout = 100000; // Time to stop waiting after qr code has already been detected
+                                } else {
+                                    timeout = 8500000; //Time to detect a QR code
+                                }
+                            }
+                            timeout--;
+                        }
+
+                        bool success = false;
+                        //char str_buf[8]; 
+
+
+                        // Draw Total RX Length
+                        //drawtext(0, 0, "RX LEN:", ST7735_WHITE, ST7735_BLACK, 1);
+                        //u16_to_str((unsigned int)rx_len, str_buf);
+                        //drawtext(45, 0, str_buf, ST7735_WHITE, ST7735_BLACK, 1);
+
+                        // 4. Analyze data if we received anything
+                        if (rx_len > 0) {
+                            uint8_t scan_resp[] = {0x02, 0x00, 0x00, 0x01, 0x00, 0x33, 0x31};
+                            int data_start = 0;
+
+                            // Check for the module's start echo
+                            if (rx_len >= 7 && memcmp(rx_buf, scan_resp, 7) == 0) {
+                                data_start = 7;
+                            } 
+
+                            int payload_len = rx_len - data_start;
+
+                            // Draw Payload Length
+                            //drawtext(0, 10, "PAY LEN:", ST7735_WHITE, ST7735_BLACK, 1);
+                            //u16_to_str((unsigned int)payload_len, str_buf);
+                            //drawtext(50, 10, str_buf, ST7735_WHITE, ST7735_BLACK, 1);
+
+                            // Draw ONLY the header/echo
+                            //drawtext(0, 20, "HDR:", ST7735_YELLOW, ST7735_BLACK, 1);
+                            //int cur_x = 25;
+                            //for (int i = 0; i < data_start; i++) {
+                            //    u16_to_hex4((uint16_t)rx_buf[i], str_buf);
+                                // Skip the first two '00' chars from u16_to_hex4 output
+                            //    drawtext(cur_x, 20, &str_buf[2], ST7735_YELLOW, ST7735_BLACK, 1);
+                            //    cur_x += 14; 
+                            //}
+
+                            if (payload_len > 0) {
+                                //drawtext(0, 30, "PAY:", ST7735_CYAN, ST7735_BLACK, 1);
+
+                                //cur_x = 25;
+                                //int cur_y = 30;
+
+                                // Loop through ALL payload bytes and print them with screen wrapping
+                                //for (int i = 0; i < payload_len; i++) {
+                                //    u16_to_hex4((uint16_t)rx_buf[data_start + i], str_buf);
+                                    // Skip the first two '00' chars
+                                //    drawtext(cur_x, cur_y, &str_buf[2], ST7735_CYAN, ST7735_BLACK, 1);
+
+                                //    cur_x += 14; 
+
+                                    // Screen wrap logic for 160px screen width
+                                //    if (cur_x > 140) { 
+                                //        cur_x = 25;
+                                //        cur_y += 10;
+                                //    }
+                                //}
+
+                                // Move Y cursor down after payload printing is done
+                                //cur_y += 12;
+
+                                // Execute validation
+                                bool valid_res = validate_and_load_qr(&rx_buf[data_start], payload_len);
+
+                                // Print validation result
+                                //drawtext(0, cur_y, "VAL RES:", ST7735_WHITE, ST7735_BLACK, 1);
+                                if (valid_res) {
+                                    drawtext(10, 40, "OK!", ST7735_GREEN, ST7735_BLACK, 1);
+                                    delay_ms(500); 
+                                    redraw_show_seed_with_offset();
+                                    success = true;
+                                } else {
+                                    drawtext(10, 40, "NO SEED or BAD CHECKSUM", ST7735_RED, ST7735_BLACK, 1);
+                                }
+                            } else {
+                                drawtext(10, 40, "NO QR DETECTED", ST7735_RED, ST7735_BLACK, 1);
+                            }
+                        } else {
+                            drawtext(10, 40, "NO RESPONSE FROM SENSOR", ST7735_RED, ST7735_BLACK, 1);
+                        }
+
+                        // 5. Keep the debug info on screen for 5 seconds before clearing
+                        if (!success) {
+                            delay_ms(1000); 
+                            black_screen();
+                            drawtext(10, 10, "READY TO SCAN", ST7735_YELLOW, ST7735_BLACK, 1);
+                        }
+                        break;
+                    }
+                    case BACK_BT:
+                        transition_to_input(selinput_pointer);
+                        break;
+                    default:
+                        break;
+                }
+                break;
+#endif    
             case END_MODE:
                 switch (pulsed_bt) {
                     case OK_BT:
