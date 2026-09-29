@@ -137,8 +137,15 @@
 #define cDICE_MODE_n_opt 2
 #define cHASH_MODE_n_opt 2
 #define cRESOURCE_n_opt 5
-#define cSETTINGS_n_opt 1
+#if defined(v2)
+    #define cSETTINGS_n_opt 2
+#else
+    #define cSETTINGS_n_opt 1
+#endif
 #define cSETTINGS_SEEDQR 0
+#if defined(v2)
+    #define cSETTINGS_MCU_SERIAL 1
+#endif
 #define cEND_OF_LINE 150
 #define cENTROPY_BITS12W 127
 #define cENTROPY_BITS24W 255
@@ -688,6 +695,7 @@ typedef enum
     SHOW_CARD_ENCODING,
     #if defined(v2)
         QR_SCANNING,
+        SHOW_MCU_SERIAL,
     #endif
     END_MODE // Final
 } state_t;
@@ -3442,11 +3450,16 @@ bool is_share_id_already_loaded(uint8_t id, uint8_t *indices) {
 
 void print_settings_screen(int sel) {
     char* text_seedqr = seedqr_enabled ? "SeedQR ON " : "SeedQR OFF";
-    uint16_t color = (sel == cSETTINGS_SEEDQR) ? ST7735_ORANGE : ST7735_WHITE;
+    uint16_t color_seedqr = (sel == cSETTINGS_SEEDQR) ? ST7735_ORANGE : ST7735_WHITE;
     
-    drawtext(1, 10, text_seedqr, color, ST7735_BLACK, 1);
+    drawtext(1, 10, text_seedqr, color_seedqr, ST7735_BLACK, 1);
+
+#if defined(v2)
+    uint16_t color_serial = (sel == cSETTINGS_MCU_SERIAL) ? ST7735_ORANGE : ST7735_WHITE;
+    drawtext(1, 20, "MCU SERIAL NUMBER", color_serial, ST7735_BLACK, 1);
+#endif
     
-    grid_menu2(); // 
+    grid_menu2(); 
 }
 
 void print_seedqr_warning(void) {
@@ -3457,6 +3470,32 @@ void print_seedqr_warning(void) {
     grid_OK_only(); 
     
 }
+
+#if defined(v2)
+void print_mcu_serial_screen(void) {
+    char hex_buf[5];
+    uint16_t parts[4];
+    int x_pos = 20;
+
+    black_screen();
+    drawtext(10, 30, "MCU SERIAL NUMBER:", ST7735_ORANGE, ST7735_BLACK, 1);
+    
+    // El PIC32MM usa UDID1 a UDID4. Extraemos 64 bits usando UDID2 y UDID1.
+    parts[0] = (uint16_t)((UDID2 >> 16) & 0xFFFF);
+    parts[1] = (uint16_t)(UDID2 & 0xFFFF);
+    parts[2] = (uint16_t)((UDID1 >> 16) & 0xFFFF);
+    parts[3] = (uint16_t)(UDID1 & 0xFFFF);
+    
+    // Dibuja los fragmentos consecutivamente
+    for (int i = 0; i < 4; i++) {
+        u16_to_hex4(parts[i], hex_buf);
+        drawtext(x_pos, 60, hex_buf, ST7735_CYAN, ST7735_BLACK, 1);
+        x_pos += 26; // Avanza el cursor (4 caracteres * 6px + 2px espacio)
+    }
+    
+    grid_OK_only();
+}
+#endif
 
 void apply_1word_xor(int word_idx, int size) {
     BYTE xor_mask[36] = {0};
@@ -5669,20 +5708,26 @@ int main ( void ){
                 }
                 break;
             case SEL_SETTINGS:
-            switch (pulsed_bt) {
-                case OK_BT:
-                    if (settings_pointer == cSETTINGS_SEEDQR) {
-                        if (!seedqr_enabled) {
-                            seedqr_enabled = true; // OFF -> ON
-                            print_seedqr_warning();
-                            estado = WARNING_SEEDQR;
-                        } else {
-                            seedqr_enabled = false; // ON -> OFF
-                            black_screen();
-                            print_settings_screen(settings_pointer);
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        if (settings_pointer == cSETTINGS_SEEDQR) {
+                            if (!seedqr_enabled) {
+                                seedqr_enabled = true; // OFF -> ON
+                                print_seedqr_warning();
+                                estado = WARNING_SEEDQR;
+                            } else {
+                                seedqr_enabled = false; // ON -> OFF
+                                black_screen();
+                                print_settings_screen(settings_pointer);
+                            }
                         }
+#if defined(v2)
+                    else if (settings_pointer == cSETTINGS_MCU_SERIAL) {
+                        print_mcu_serial_screen();
+                        estado = SHOW_MCU_SERIAL;
                     }
-                    break;
+#endif
+                    break;      
                 case BACK_BT:
                     transition_to_main();
                     break;
@@ -5707,6 +5752,13 @@ int main ( void ){
             }
             break;
 #if defined(v2)
+            case SHOW_MCU_SERIAL:
+                if (pulsed_bt == OK_BT || pulsed_bt == BACK_BT) {
+                    black_screen();
+                    print_settings_screen(settings_pointer);
+                    estado = SEL_SETTINGS;
+                }
+                break;
             case QR_SCANNING:
                 switch (pulsed_bt) {
                     case OK_BT: {
