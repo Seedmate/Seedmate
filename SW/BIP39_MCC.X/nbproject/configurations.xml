@@ -52,6 +52,14 @@
           <itemPath>../src/config/v2/interrupts.h</itemPath>
         </logicalFolder>
       </logicalFolder>
+      <logicalFolder name="f1" displayName="crypto" projectFiles="true">
+        <itemPath>../../../SW_address_compila/SW/src/crypto/ripemd160.h</itemPath>
+        <itemPath>../src/crypto/bignum.h</itemPath>
+        <itemPath>../src/crypto/bip32.h</itemPath>
+        <itemPath>../src/crypto/secp256k1.h</itemPath>
+        <itemPath>../src/crypto/segwit_addr.h</itemPath>
+        <itemPath>../src/crypto/ecdsa.h</itemPath>
+      </logicalFolder>
       <itemPath>../src/SPI.h</itemPath>
       <itemPath>../src/TFT.h</itemPath>
       <itemPath>../src/sha256.h</itemPath>
@@ -148,6 +156,14 @@
           <itemPath>../src/config/v2/exceptions.c</itemPath>
         </logicalFolder>
       </logicalFolder>
+      <logicalFolder name="f1" displayName="crypto" projectFiles="true">
+        <itemPath>../../../SW_address_compila/SW/src/crypto/ripemd160.c</itemPath>
+        <itemPath>../src/crypto/bignum.c</itemPath>
+        <itemPath>../src/crypto/bip32.c</itemPath>
+        <itemPath>../src/crypto/secp256k1.c</itemPath>
+        <itemPath>../src/crypto/segwit_addr.c</itemPath>
+        <itemPath>../src/crypto/ecdsa.c</itemPath>
+      </logicalFolder>
       <itemPath>../src/TFT.c</itemPath>
       <itemPath>../src/SPI.c</itemPath>
       <itemPath>../src/sha256.c</itemPath>
@@ -161,6 +177,7 @@
   </logicalFolder>
   <sourceRootList>
     <Elem>../src</Elem>
+    <Elem>../../../SW_address_compila/SW/src/crypto</Elem>
   </sourceRootList>
   <projectmakefile>Makefile</projectmakefile>
   <confs>
@@ -205,6 +222,14 @@
         <makeCustomizationEnableLongLines>false</makeCustomizationEnableLongLines>
         <makeCustomizationNormalizeHexFile>false</makeCustomizationNormalizeHexFile>
       </makeCustomizationType>
+      <item path="../../../SW_address_compila/SW/src/crypto/ripemd160.c"
+            ex="true"
+            overriding="false">
+      </item>
+      <item path="../../../SW_address_compila/SW/src/crypto/ripemd160.h"
+            ex="true"
+            overriding="false">
+      </item>
       <item path="../src/config/v2/definitions.h" ex="true" overriding="false">
         <C32>
         </C32>
@@ -396,34 +421,146 @@
       <item path="../src/config/v2/peripheral/spi/spi_master/plib_spi1_master.c"
             ex="true"
             overriding="false">
+        <C32>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
       </item>
       <item path="../src/config/v2/peripheral/spi/spi_master/plib_spi1_master.h"
             ex="true"
             overriding="false">
+        <C32>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
       </item>
       <item path="../src/config/v2/peripheral/spi/spi_master/plib_spi3_master.c"
             ex="true"
             overriding="false">
+        <C32>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
       </item>
       <item path="../src/config/v2/peripheral/spi/spi_master/plib_spi3_master.h"
             ex="true"
             overriding="false">
+        <C32>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
       </item>
       <item path="../src/config/v2/peripheral/spi/spi_master/plib_spi_master_common.h"
             ex="true"
             overriding="false">
+        <C32>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
       </item>
       <item path="../src/config/v2/peripheral/uart/plib_uart2.c"
             ex="true"
             overriding="false">
+        <C32>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
       </item>
       <item path="../src/config/v2/peripheral/uart/plib_uart2.h"
             ex="true"
             overriding="false">
+        <C32>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
       </item>
       <item path="../src/config/v2/peripheral/uart/plib_uart_common.h"
             ex="true"
             overriding="false">
+        <C32>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
       </item>
       <item path="../src/config/v2/stdio/xc32_monitor.c" ex="true" overriding="false">
         <C32>
@@ -1908,7 +2045,8 @@
         <property key="enable-unroll-loops" value="false"/>
         <property key="exclude-floating-point" value="false"/>
         <property key="expand-pragma-config" value="false"/>
-        <property key="extra-include-directories" value="../src;../src/config/v2"/>
+        <property key="extra-include-directories"
+                  value="../src;../src/config/v2;..\src\SSS"/>
         <property key="generate-16-bit-code" value="false"/>
         <property key="generate-micro-compressed-code" value="false"/>
         <property key="isolate-each-function" value="true"/>
@@ -1927,7 +2065,7 @@
         <property key="place-data-into-section" value="true"/>
         <property key="post-instruction-scheduling" value="default"/>
         <property key="pre-instruction-scheduling" value="default"/>
-        <property key="preprocessor-macros" value="v2"/>
+        <property key="preprocessor-macros" value="v2;NDEBUG"/>
         <property key="scalar-model" value="default"/>
         <property key="strict-ansi" value="false"/>
         <property key="support-ansi" value="false"/>
