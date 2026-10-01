@@ -24,8 +24,8 @@
  *   - Security-sensitive data should be handled carefully at all times
  *
  * Author:      Seedmate
- * Date:        17/09/2026
- * Version:     v1.7                               
+ * Date:        01/10/2026
+ * Version:     v1.8                               
  * License
  * 
  * This project is licensed under the MIT License.
@@ -72,6 +72,7 @@
 #include <string.h>
 #include "SSS/shamir.h"
 #include "QRCode-master/src/qrcode.h"
+
 #define QR_SCALE 4 // Size of each module in pixels
 #define SCREEN_WIDTH 160
 #define SCREEN_HEIGHT 128
@@ -103,6 +104,19 @@
 #if defined(v2) 
     #define cVersion "v1.7+"
 
+    #include "crypto/ripemd160.h"
+    #include "crypto/bignum.h"
+    #include "crypto/bip32.h"
+    #include "crypto/secp256k1.h"       
+    #include "crypto/segwit_addr.h"     
+    
+    typedef struct {
+        char address[90];
+        char fingerprint[9]; 
+        char xpub[112];
+        char zpub[112];
+    } BitcoinBip84Result;
+
     //SD
     #define SD_CS     PORTBbits.RB5
 
@@ -129,6 +143,7 @@
 #define cSSS_n_opt 2
 #define cQR_n_opt 2
 #define cSDBLOCK_n_opt 8
+#define cERASE_n_opt 2
 #if defined(v2)
     #define cSELINPUT_n_opt 3
 #else
@@ -171,6 +186,15 @@ int settings_pointer = 0;
 #define cRESOURCE_dice_test 2
 #define cRESOURCE_wordlist 3
 #define cRESOURCE_BINlist 4
+
+#if defined(v2)
+#define cBIP84_RECEIVE 0
+#define cBIP84_CHANGE 1
+#define cBIP84_SEEDQR 2
+#define cBIP84_FINGERPRINT 3
+#define cBIP84_XPUB 4
+#define cBIP84_n_opt 5
+#endif
 
 #define cOBFUS_SHIFT 0
 #define cOBFUS_NOT 1
@@ -239,6 +263,11 @@ const char* const menu_xor[]      = {"A XOR B = C", "A XOR B XOR C = D", "A XOR 
 const char* const menu_sss[]      = {"SPLIT", "MERGE"};
 const char* const menu_resource[] = {"TUTORIAL", "BACKUP TOOL", "DICE TESTER", "PRINT WORDLIST", "BINARY WORDLIST"};
 const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB","1 WORD XOR","HOW TO"}; 
+const char* const menu_erase[]    = {"ERASE SECTOR", "WIPE ALL CARD"};
+
+#if defined(v2)
+const char* const menu_bip84[]    = {"RECEIVE ADDRESS", "CHANGE ADDRESS", "SEEDQR", "FINGERPRINT", "XPUB"};
+#endif
 
 #if defined(v2)
 const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD", "QR SCAN"};
@@ -246,7 +275,7 @@ const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD", "QR SCAN"};
 const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD"};
 #endif
 
-
+int erase_pointer = 0;
 int main_pointer = 0;
 int obfuscation_pointer =0;
 int sss_pointer = 0;
@@ -257,6 +286,18 @@ int shares_loaded = 0;
 int bip85_size = cSIZE_12;
 int bip85_index = 0;
 int bip85_cursor = 0;
+
+#if defined(v2)
+int bip84_menu_pointer = 0;
+uint32_t bip84_address_index = 0;
+int bip84_extended_key_page = 0;
+bool bip84_qr_return_to_menu = false;
+
+bool bip84_account_cached = false;
+HDNode bip84_account_node;
+uint32_t bip84_master_fingerprint = 0;
+uint32_t bip84_account_parent_fingerprint = 0;
+#endif
 
 // XOR Globals moved from main()
 int xor_pointer = 0;
@@ -696,7 +737,11 @@ typedef enum
     #if defined(v2)
         QR_SCANNING,
         SHOW_MCU_SERIAL,
+        SHOW_SEED_MENU,
+        SHOW_BIP84_INFO,
     #endif
+    SEL_ERASE_MODE,
+    PROCESS_WIPE_SD,
     END_MODE // Final
 } state_t;
 
@@ -711,7 +756,7 @@ typedef enum
     UP_BT,
     DOWN_BT,
     LEFT_BT,
-    RIGTH_BT,
+    RIGHT_BT,
 } PULSED_BT_t;
 
 // ============================================================================
@@ -1157,6 +1202,186 @@ static size_t u16_to_str_pad(unsigned int n, char *buf, unsigned int width) {
     buf[j] = '\0';
     return (size_t)j;
 }
+
+#if defined(v2)
+static void draw_bip84_wrapped_text(const char *text, int x, int y,
+                                    int line_length, int line_count)
+{
+    char line[32];
+    size_t text_length = strlen(text);
+    size_t offset = 0;
+
+    for (int line_index = 0; line_index < line_count && offset < text_length; line_index++) {
+        size_t remaining = text_length - offset;
+        size_t copy_length = (remaining < (size_t)line_length) ? remaining : (size_t)line_length;
+
+        memcpy(line, &text[offset], copy_length);
+        line[copy_length] = '\0';
+        drawtext(x, y + (line_index * 9), line, ST7735_WHITE, ST7735_BLACK, 1);
+        offset += copy_length;
+    }
+}
+
+// Curve definition for the seed
+#ifndef SECP256K1_NAME
+#define SECP256K1_NAME "secp256k1"
+#endif
+
+// 1. Native Fingerprint calculation using your local sha256 and ripemd160
+static uint32_t hdnode_fingerprint(HDNode *node) {
+    uint8_t sha256_pub[32];
+    uint8_t hash160[20];
+    SHA256_CTX ctx; // Fixed: Using your original context name
+    
+    hdnode_fill_public_key(node);
+    
+    sha256_init(&ctx);
+    sha256_update(&ctx, node->public_key, 33);
+    sha256_final(&ctx, sha256_pub);
+    
+    ripemd160(sha256_pub, 32, hash160);
+    
+    return ((uint32_t)hash160[0] << 24) | (hash160[1] << 16) | (hash160[2] << 8) | hash160[3];
+}
+
+// 2. Temporary placeholder to avoid Base58 dependencies
+static void hdnode_serialize_public(const HDNode *node, uint32_t fingerprint, uint32_t version, char *str, size_t strsize) {
+    // True extended key serialization requires Base58Check encoding.
+    // For now, return a safe dummy string so you can test the SegWit address compilation.
+    strncpy(str, "REQUIRES BASE58 ADAPTATION", strsize);
+    str[strsize - 1] = '\0';
+}
+
+static bool get_current_bip84_result(uint32_t chain, uint32_t address_index, BitcoinBip84Result *result)
+{
+    // 1. LAZY EVALUATION & CACHING: Compute account node only if not cached
+    if (!bip84_account_cached) {
+        // Show a loading message since PBKDF2 will take a few seconds
+        drawtext(1, 50, "CALCULATING KEYS...", ST7735_YELLOW, ST7735_BLACK, 1);
+
+        char mnemonic_str[250];
+        get_mnemonic_string(mnemonic_str);
+
+        // Convert the entire mnemonic string to lowercase per BIP39 standard
+        for (int i = 0; mnemonic_str[i] != '\0'; i++) {
+            if (mnemonic_str[i] >= 'A' && mnemonic_str[i] <= 'Z') {
+                mnemonic_str[i] = mnemonic_str[i] + ('a' - 'A');
+            }
+        }
+
+        // Generate the master seed
+        uint8_t seed[64];
+        PBKDF2_HMAC_SHA512(mnemonic_str, "mnemonic", 2048, seed, 64);
+
+        HDNode root;
+        if (!hdnode_from_seed(seed, 64, SECP256K1_NAME, &root)) return false;
+
+        // Store Master Fingerprint
+        bip84_master_fingerprint = hdnode_fingerprint(&root);
+
+        // Derive path m/84'/0'
+        bip84_account_node = root;
+        if (!hdnode_private_ckd(&bip84_account_node, 84 | 0x80000000)) return false; 
+        if (!hdnode_private_ckd(&bip84_account_node, 0  | 0x80000000)) return false; 
+
+        // Store parent fingerprint for account-level xpub/zpub
+        bip84_account_parent_fingerprint = hdnode_fingerprint(&bip84_account_node);
+
+        // Derive Account path: m/84'/0'/0'
+        if (!hdnode_private_ckd(&bip84_account_node, 0  | 0x80000000)) return false; 
+        
+        // Mark as successfully cached
+        bip84_account_cached = true;
+        
+        // Clear the loading message area
+        rectan(0, 50, 159, 60, BLACK);
+    }
+
+    // 2. FILL RESULT FROM CACHE
+    u16_to_hex4((bip84_master_fingerprint >> 16) & 0xFFFF, result->fingerprint);
+    u16_to_hex4(bip84_master_fingerprint & 0xFFFF, result->fingerprint + 4);
+
+    // Clone the cached account node so we don't mutate the global variable
+    HDNode node = bip84_account_node;
+
+    // Serialize account-level Extended Public Keys (XPUB and ZPUB)
+    hdnode_serialize_public(&node, bip84_account_parent_fingerprint, 0x0488B21E, result->xpub, sizeof(result->xpub));
+    hdnode_serialize_public(&node, bip84_account_parent_fingerprint, 0x04B24746, result->zpub, sizeof(result->zpub));
+
+    // 3. FAST DERIVATION: Derive only the external/internal chain and the final index
+    if (!hdnode_private_ckd(&node, chain)) return false;         // 0 = Receive, 1 = Change
+    if (!hdnode_private_ckd(&node, address_index)) return false; // Address Index
+
+    hdnode_fill_public_key(&node);
+
+    // 4. HASHING & ENCODING
+    uint8_t sha256_pub[32];
+    uint8_t hash160[20];
+    
+    SHA256_CTX ctx;
+    sha256_init(&ctx);
+    sha256_update(&ctx, node.public_key, 33);
+    sha256_final(&ctx, sha256_pub);
+    
+    ripemd160(sha256_pub, 32, hash160);
+
+    // Encode as a Native SegWit Bech32 address ("bc1q...")
+    if (!segwit_addr_encode(result->address, "bc", 0, hash160, 20)) return false;
+
+    return true;
+}
+static void print_bip84_menu(void)
+{
+    black_screen();
+    print_generic_menu(menu_bip84, cBIP84_n_opt, bip84_menu_pointer);
+    estado = SHOW_SEED_MENU;
+}
+
+static void print_bip84_info_screen(void)
+{
+    BitcoinBip84Result result;
+    const char *title;
+    const char *value;
+    char index_text[12];
+
+    black_screen();
+
+    if (bip84_menu_pointer == cBIP84_RECEIVE ||
+        bip84_menu_pointer == cBIP84_CHANGE) {
+        uint32_t chain = (bip84_menu_pointer == cBIP84_RECEIVE) ? 0u : 1u;
+        bool derived = get_current_bip84_result(chain, bip84_address_index, &result);
+        title = (chain == 0u) ? "RECEIVE ADDRESS" : "CHANGE ADDRESS";
+        drawtext(1, 5, (char *)title, ST7735_ORANGE, ST7735_BLACK, 1);
+        drawtext(1, 15, "INDEX:", ST7735_WHITE, ST7735_BLACK, 1);
+        u16_to_str((unsigned int)bip84_address_index, index_text);
+        drawtext(45, 15, index_text, ST7735_CYAN, ST7735_BLACK, 1);
+        if (derived) {
+            draw_bip84_wrapped_text(result.address, 1, 30, 25, 6);
+        } else {
+            drawtext(1, 30, "DERIVATION ERROR", ST7735_RED, ST7735_BLACK, 1);
+        }
+    } else if (bip84_menu_pointer == cBIP84_FINGERPRINT) {
+        if (get_current_bip84_result(0, 0, &result)) {
+            drawtext(1, 5, "MASTER FINGERPRINT", ST7735_ORANGE, ST7735_BLACK, 1);
+            drawtext(1, 30, result.fingerprint, ST7735_CYAN, ST7735_BLACK, 2);
+        } else {
+            drawtext(1, 5, "FINGERPRINT ERROR", ST7735_RED, ST7735_BLACK, 1);
+        }
+    } else {
+        if (get_current_bip84_result(0, 0, &result)) {
+            value = (bip84_extended_key_page == 0) ? result.xpub : result.zpub;
+            title = (bip84_extended_key_page == 0) ? "XPUB" : "ZPUB";
+            drawtext(1, 5, (char *)title, ST7735_ORANGE, ST7735_BLACK, 1);
+            draw_bip84_wrapped_text(value, 1, 18, 25, 7);
+        } else {
+            drawtext(1, 5, "KEY DERIVATION ERROR", ST7735_RED, ST7735_BLACK, 1);
+        }
+    }
+
+    grid_menu2();
+    estado = SHOW_BIP84_INFO;
+}
+#endif
 
 
 
@@ -3480,17 +3705,17 @@ void print_mcu_serial_screen(void) {
     black_screen();
     drawtext(10, 30, "MCU SERIAL NUMBER:", ST7735_ORANGE, ST7735_BLACK, 1);
     
-    // El PIC32MM usa UDID1 a UDID4. Extraemos 64 bits usando UDID2 y UDID1.
+    // The PIC32MM uses UDID1 to UDID4. We extract 64 bits using UDID2 and UDID1.
     parts[0] = (uint16_t)((UDID2 >> 16) & 0xFFFF);
     parts[1] = (uint16_t)(UDID2 & 0xFFFF);
     parts[2] = (uint16_t)((UDID1 >> 16) & 0xFFFF);
     parts[3] = (uint16_t)(UDID1 & 0xFFFF);
     
-    // Dibuja los fragmentos consecutivamente
+    // Draw the chunks consecutively
     for (int i = 0; i < 4; i++) {
         u16_to_hex4(parts[i], hex_buf);
         drawtext(x_pos, 60, hex_buf, ST7735_CYAN, ST7735_BLACK, 1);
-        x_pos += 26; // Avanza el cursor (4 caracteres * 6px + 2px espacio)
+        x_pos += 26; // Advance cursor (4 chars * 6px + 2px spacing)
     }
     
     grid_OK_only();
@@ -3753,6 +3978,35 @@ int main ( void ){
 
 
     #if defined(v2)
+    /*// --- RIPEMD160 TEST ---
+    const uint8_t test_msg[] = "hello";
+    
+    // Expected strict mathematical result for "hello"
+    //uint8_t expected_hash[20] = {
+    //    0x10, 0x8f, 0x07, 0xb8, 0x38, 0x24, 0x12, 0x61, 0x2c, 0x04,
+    //    0x8d, 0x07, 0xd1, 0x3f, 0x81, 0x41, 0x18, 0x44, 0x5a, 0xcd
+    //};
+    uint8_t test_hash[20];
+
+    // Execute the algorithm
+    ripemd160(test_msg, 5, test_hash);
+
+    // Verify if the MCU calculated exactly the same hash
+    //if (memcmp(test_hash, expected_hash, 20) == 0) {
+    //    drawtext(10, 50, "RIPEMD160 OK!", ST7735_GREEN, ST7735_BLACK, 2);
+    //} else {
+    //    drawtext(10, 50, "RIPEMD FAIL!", ST7735_RED, ST7735_BLACK, 2);
+    //}
+    
+    // Wait 3 seconds to read the screen before loading the main menu
+    //delay_ms(3000); 
+    //black_screen();
+    // --- END TEST ---*/
+    
+    
+    
+    
+    
     // ==========================================
     // --- UART2 FRAME CONFIGURATION ---
     // ==========================================
@@ -3885,7 +4139,7 @@ int main ( void ){
             LED = 0;
             if (BT6 ==0) {
                 BT6_ST=0;
-                pulsed_bt = RIGTH_BT;
+                pulsed_bt = RIGHT_BT;
                 }
         } else {
             if (BT_OK ==1){
@@ -3920,7 +4174,7 @@ int main ( void ){
                     case UP_BT:
                     case DOWN_BT:
                     case LEFT_BT:
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         transition_to_main();
                         break;
                     default:
@@ -3953,7 +4207,8 @@ int main ( void ){
                             print_generic_menu(menu_sss, cSSS_n_opt, sss_pointer);
                             estado = SEL_SSS;
                         } else if (main_pointer==cMAIN_ERASESD){// Erase SD
-                            transition_to_sd_block(SDblock_pointer);
+                            print_generic_menu(menu_erase, cERASE_n_opt, erase_pointer);
+                            estado = SEL_ERASE_MODE;
                         } else if (main_pointer==cMAIN_QR){// Resources menu
                            
                             print_generic_menu(menu_resource, cRESOURCE_n_opt, resource_pointer);
@@ -3983,7 +4238,7 @@ int main ( void ){
 
                     case LEFT_BT:
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         break;
                     default:
                         break;
@@ -4019,7 +4274,7 @@ int main ( void ){
                         bip85_cursor = 0;
                         print_child_config_screen();
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         bip85_cursor = 1;
                         print_child_config_screen();
                         break;
@@ -4111,7 +4366,7 @@ int main ( void ){
                         break;
                     case LEFT_BT:
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         break;
                     default:
                         break;
@@ -4211,7 +4466,7 @@ int main ( void ){
                         print_generic_menu(menu_obfus, cOBFUS_n_opt, obfuscation_pointer);
                         break;
                     case LEFT_BT:
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         break;
                     default:
                         break;
@@ -4229,7 +4484,7 @@ int main ( void ){
                         obfus_cursor = 0;
                         print_obfus_config_screen();
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         obfus_cursor = 1;
                         print_obfus_config_screen();
                         break;
@@ -4255,6 +4510,85 @@ int main ( void ){
                         break;
                 }
                 break;
+            case SEL_ERASE_MODE:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        if (erase_pointer == 0) { // ERASE SECTOR
+                            transition_to_sd_block(SDblock_pointer);
+                        } else { // WIPE ALL CARD
+                            black_screen();
+                            drawtext(10, 30, "WIPING ENTIRE SD...", ST7735_RED, ST7735_BLACK, 1);
+                            drawtext(10, 50, "PLEASE WAIT", ST7735_WHITE, ST7735_BLACK, 1);
+                            estado = PROCESS_WIPE_SD;
+                        }
+                        break;
+                    case BACK_BT:
+                        transition_to_main();
+                        break;
+                    case UP_BT:
+                        if (erase_pointer > 0) erase_pointer--;
+                        print_generic_menu(menu_erase, cERASE_n_opt, erase_pointer);
+                        break;
+                    case DOWN_BT:
+                        if (erase_pointer < (cERASE_n_opt - 1)) erase_pointer++;
+                        print_generic_menu(menu_erase, cERASE_n_opt, erase_pointer);
+                        break;
+                    default:
+                        break;
+                }
+                break;
+
+            case PROCESS_WIPE_SD: {
+                uint32_t current_sector = 0;
+                uint8_t zero_buf[512] = {0};
+                
+                // Ensure card is ready before blind loop
+                if (!SD_ready) SD_ready = sd_init();
+                
+                while(1) {
+                    SYS_Tasks(); // Keep MCU watchdog/tasks happy during the long wipe
+
+                    // Blink LED while wiping (toggle every 256 sectors to avoid slowing down)
+                    if ((current_sector % 256) == 0) {
+                        LED = 1 - LED; 
+                    }
+
+                    // sd_write_block returns false if we hit the end of the SD capacity or an error
+                    if (!sd_write_block(current_sector, zero_buf)) {
+                        LED = 0; // Ensure LED is turned off when finished
+                        drawtext(10, 90, "WIPE FINISHED/ERROR", ST7735_GREEN, ST7735_BLACK, 1);
+                        break; 
+                    }
+                    
+                    current_sector++;
+
+                    // Update UI every 1000 sectors
+                    if ((current_sector % 1000) == 0) {
+                        char progress_txt[32] = "Erased: ";
+                        char mb_str[10];
+                        
+                        // 1 Sector = 512 bytes. 2048 sectors = 1MB.
+                        uint32_t mb_erased = (current_sector / 2048); 
+                        
+                        // Using u16_to_str format matching the rest of the file
+                        size_t len = u16_to_str((unsigned int)mb_erased, mb_str);
+                        int pos = 8; 
+                        for(size_t i = 0; i < len; i++) progress_txt[pos++] = mb_str[i];
+                        progress_txt[pos++] = ' ';
+                        progress_txt[pos++] = 'M';
+                        progress_txt[pos++] = 'B';
+                        progress_txt[pos++] = ' ';
+                        progress_txt[pos++] = ' ';
+                        progress_txt[pos] = '\0';
+                        
+                        drawtext(10, 70, progress_txt, ST7735_CYAN, ST7735_BLACK, 1);
+                    }
+                }
+                
+                grid_OK_only(); // Render OK button map at the bottom
+                estado = END_MODE; // Wait for OK button to return to the main menu
+                break;
+            }         
             case SEL_SIZE:        /////  SCREEN     2   /////////////
                 switch (pulsed_bt) {
                     case OK_BT:
@@ -4371,7 +4705,7 @@ int main ( void ){
                         break;
                     case LEFT_BT:
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         break;
                     default:
                         break;
@@ -4399,7 +4733,7 @@ int main ( void ){
                         break;
                     case LEFT_BT:
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         break;
                     default:
                         break;
@@ -4523,7 +4857,7 @@ int main ( void ){
                             sel_sd_block_screen_generic(SDblock_pointer);
                         }
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         black_screen();
                         SD_page++;
                         sel_sd_block_screen_generic(SDblock_pointer);
@@ -4590,7 +4924,7 @@ int main ( void ){
                             sel_sd_block_screen_wr(SDblock_pointer);
                         }
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         black_screen();
                         SD_page++;
                         sel_sd_block_screen_wr(SDblock_pointer);
@@ -4679,7 +5013,7 @@ int main ( void ){
                             black_screen();
                         }
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         SD_page++;
                         sel_sd_block_screen_generic(SDblock_pointer);
                         break;
@@ -4768,7 +5102,7 @@ int main ( void ){
                         if(selected_share_id>1)selected_share_id--;
                         sel_sd_block_screen_merge(SDblock_pointer,selected_share_id);
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         if(selected_share_id<cN_MAX)selected_share_id++;
                         sel_sd_block_screen_merge(SDblock_pointer,selected_share_id);
                         break;
@@ -4863,7 +5197,7 @@ int main ( void ){
                         break;
                     case LEFT_BT:
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         break;
                     default:
                         break;
@@ -4898,7 +5232,7 @@ int main ( void ){
                         break;
                     case LEFT_BT:
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         break;
                     default:
                         break;
@@ -4930,7 +5264,7 @@ int main ( void ){
                         if (sel_K_N==1)sel_K_N=0;
                         print_selkn_screen(SSS_K, SSS_N, sel_K_N);
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         if (sel_K_N==0)sel_K_N=1;
                         print_selkn_screen(SSS_K, SSS_N, sel_K_N);
                         break;
@@ -4958,7 +5292,7 @@ int main ( void ){
                         break;
                     case LEFT_BT:
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         break;
                     default:
                         break;
@@ -4993,7 +5327,7 @@ int main ( void ){
                         break;
                     case LEFT_BT:
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         break;
                     default:
                         break;
@@ -5026,7 +5360,7 @@ int main ( void ){
                     case UP_BT:
                     case DOWN_BT:
                     case LEFT_BT:
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         break;
                     default:
                         break;
@@ -5067,7 +5401,7 @@ int main ( void ){
                         append_entropy_bits("0", 1);
                         refresh_entropy_screen();
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         if (seed_pointer == cSEED_dice) {
                             append_entropy_bits("00", 2);
                             refresh_entropy_screen();
@@ -5160,7 +5494,7 @@ int main ( void ){
                         print_dice_string_keyboard(dice_input_idx, len, target);
                         break;
                     }
-                    case RIGTH_BT: {
+                    case RIGHT_BT: {
                         int target = (size_pointer == cSIZE_12) ? c12_rolls : c24_rolls;
                         int len = strlen(dice_string_buf);
                         int max_idx = (len >= target) ? 6 : 5;
@@ -5230,7 +5564,7 @@ int main ( void ){
                         card_field_pointer = 0;
                         print_card_input_screen();
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         card_field_pointer = 1;
                         print_card_input_screen();
                         break;
@@ -5439,7 +5773,7 @@ int main ( void ){
                     case LEFT_BT:
                         update_keyboard_selection(&lt_idx, -1, word, found_bool, word_number, word_number_text);
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         update_keyboard_selection(&lt_idx, 1, word, found_bool, word_number, word_number_text);
                         break;
                     default:
@@ -5455,7 +5789,7 @@ int main ( void ){
                     case UP_BT:
                     case DOWN_BT:
                     case LEFT_BT:
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         break;
                     default:
                         break;
@@ -5471,7 +5805,7 @@ int main ( void ){
                     case UP_BT:
                     case DOWN_BT:
                     case LEFT_BT:
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         break;
                     default:
                         break;
@@ -5480,6 +5814,12 @@ int main ( void ){
             case SHOW_SEED:
                 switch (pulsed_bt) {
                     case OK_BT:
+#if defined(v2)
+                        bip84_address_index = 0;
+                        bip84_extended_key_page = 0;
+                        bip84_account_cached = false;
+                        print_bip84_menu();
+#else
                         if (!seedqr_enabled) break; //QR disabled
                         white_screen();
                         {
@@ -5488,6 +5828,7 @@ int main ( void ){
                             free(qr_buf);
                         }
                         estado = SHOW_QRSEED;
+#endif
                         break;
                     case BACK_BT:
                         break;
@@ -5520,7 +5861,7 @@ int main ( void ){
                         sel_sd_block_screen_wr(SDblock_pointer);
                         estado=SEL_SD_BLOCK_WR;
                         break;
-                    case RIGTH_BT: // Compact QR
+                    case RIGHT_BT: // Compact QR
                         if (!seedqr_enabled) break; //QR disabled
                         white_screen();
                         draw_compactqr_code(16 + size_pointer*16, data_array_256b);
@@ -5536,20 +5877,110 @@ int main ( void ){
                         break;
                 }
                 break;
+#if defined(v2)
+            case SHOW_SEED_MENU:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        if (bip84_menu_pointer == cBIP84_SEEDQR) {
+                            if (!seedqr_enabled) {
+                                black_screen();
+                                drawtext(1, 20, "SEEDQR DISABLED", ST7735_RED, ST7735_BLACK, 1);
+                                grid_OK_only();
+                                break;
+                            }
+
+                            white_screen();
+                            {
+                                BYTE *qr_buf = append_checksum(data_array_256b, 16 + size_pointer * 16);
+                                draw_QRSEED(qr_buf, 16 + size_pointer * 16 + 1);
+                                free(qr_buf);
+                            }
+                            bip84_qr_return_to_menu = true;
+                            estado = SHOW_QRSEED;
+                        } else {
+                            print_bip84_info_screen();
+                        }
+                        break;
+                    case BACK_BT:
+                        redraw_show_seed_with_offset();
+                        break;
+                    case UP_BT:
+                        if (bip84_menu_pointer > 0) {
+                            bip84_menu_pointer--;
+                        }
+                        print_bip84_menu();
+                        break;
+                    case DOWN_BT:
+                        if (bip84_menu_pointer < (cBIP84_n_opt - 1)) {
+                            bip84_menu_pointer++;
+                        }
+                        print_bip84_menu();
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case SHOW_BIP84_INFO:
+                switch (pulsed_bt) {
+                    case BACK_BT:
+                        print_bip84_menu();
+                        break;
+                    case UP_BT:
+                        if (bip84_menu_pointer == cBIP84_RECEIVE ||
+                            bip84_menu_pointer == cBIP84_CHANGE) {
+                            if (bip84_address_index > 0) {
+                                bip84_address_index--;
+                            }
+                            print_bip84_info_screen();
+                        }
+                        break;
+                    case DOWN_BT:
+                        if (bip84_menu_pointer == cBIP84_RECEIVE ||
+                            bip84_menu_pointer == cBIP84_CHANGE) {
+                            bip84_address_index++;
+                            print_bip84_info_screen();
+                        }
+                        break;
+                    case LEFT_BT:
+                    case RIGHT_BT:
+                        if (bip84_menu_pointer == cBIP84_XPUB) {
+                            bip84_extended_key_page = !bip84_extended_key_page;
+                            print_bip84_info_screen();
+                        }
+                        break;
+                    default:
+                        break;
+                }
+                break;
+#endif
            case SHOW_QRSEED:
                 switch (pulsed_bt) {
                     case OK_BT:
                         break;
                     case BACK_BT:
+#if defined(v2)
+                        if (bip84_qr_return_to_menu) {
+                            bip84_qr_return_to_menu = false;
+                            print_bip84_menu();
+                            break;
+                        }
+#endif
                         redraw_show_seed_with_offset();
                         break;
                     case UP_BT:
                     case DOWN_BT:
                         break;
                     case LEFT_BT:
+#if defined(v2)
+                        if (bip84_qr_return_to_menu) {
+                            bip84_qr_return_to_menu = false;
+                            print_bip84_menu();
+                            break;
+                        }
+#endif
                         redraw_show_seed_with_offset();
                         break;
-                    case RIGTH_BT:
+                    case RIGHT_BT:
                         break;
                     default:
                         break;
