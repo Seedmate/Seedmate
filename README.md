@@ -18,6 +18,18 @@ Status: Tested and production-ready. However, unexpected bugs may still occur.
 - SD card storage/export
 - TFT display and button-driven interface
 
+## Typical build flow and reproducibility
+
+1. Install [MPLAB X IDE 6.35](https://www.microchip.com/en-us/tools-resources/develop/mplab-x-ide), ensuring the **32-bit MCUs** box is checked during installation.
+2. When prompted afterwards, install the **XC32 compiler** (select the free version).
+3. Download the source code `.zip` and the pre-compiled `.hex` file from the Seedmate Releases page(https://github.com/Seedmate/Seedmate/releases).
+4. Extract the `.zip` file to any local folder.
+5. Open MPLAB X IDE 6.35, go to **File > Open Project**, and select the project located at: `[unzipped_folder]\seedmate_release\SW\BIP39_MCC.X`
+6. In the top menu, go to **Production > Build Project (Seedmate)**.
+7. Once finished, locate your generated `.hex` file here: `\SW\BIP39_MCC.X\dist\default\production\BIP39_MCC.X.production.hex`
+8. Use WinMerge or any other diff tool to compare your generated `.hex` file against the one downloaded from GitHub.
+9. Compare the SHA256 hash of your generated file against the SHA256 hash provided on the GitHub release page to verify a perfect match.
+
 ## Hardware target - See HW folder
 
 This project targets a PIC32MM-based device with:
@@ -65,20 +77,6 @@ This project is intended to be built with Microchip tools.
 - PIC32MM device pack
 
 - Any project-generated files required by Harmony / MPLAB
-
-
-
-### Typical build flow and reproducibility
-
-1. Install [MPLAB X IDE 6.35](https://www.microchip.com/en-us/tools-resources/develop/mplab-x-ide), ensuring the **32-bit MCUs** box is checked during installation.
-2. When prompted afterwards, install the **XC32 compiler** (select the free version).
-3. Download the source code `.zip` and the pre-compiled `.hex` file from the Seedmate Releases page(https://github.com/Seedmate/Seedmate/releases).
-4. Extract the `.zip` file to any local folder.
-5. Open MPLAB X IDE 6.35, go to **File > Open Project**, and select the project located at: `[unzipped_folder]\seedmate_release\SW\BIP39_MCC.X`
-6. In the top menu, go to **Production > Build Project (Seedmate)**.
-7. Once finished, locate your generated `.hex` file here: `\SW\BIP39_MCC.X\dist\default\production\BIP39_MCC.X.production.hex`
-8. Use WinMerge or any other diff tool to compare your generated `.hex` file against the one downloaded from GitHub.
-9. Compare the SHA256 hash of your generated file against the SHA256 hash provided on the GitHub release page to verify a perfect match.
 
 
 
