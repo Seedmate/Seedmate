@@ -18,7 +18,7 @@ Status: Tested and production-ready. However, unexpected bugs may still occur.
 - SD card storage/export
 - TFT display and button-driven interface
 
-## Hardware target - See HW folfer
+## Hardware target - See HW folder
 
 This project targets a PIC32MM-based device with:
 
@@ -30,7 +30,7 @@ This project targets a PIC32MM-based device with:
 MCU and tools:
 
 - MCU: `PIC32MM0064GPL028`
-- Toolchain: `XC32 v4.60`
+- Toolchain: `XC32 v5.10`
 - IDE / generated files: `MPLAB X / Harmony`
 
 ## Project structure
@@ -58,8 +58,6 @@ This project is intended to be built with Microchip tools.
 
 ### Requirements
 
-
-
 - MPLAB X
 
 - XC32 compiler
@@ -70,18 +68,19 @@ This project is intended to be built with Microchip tools.
 
 
 
-### Typical build flow
+### Typical build flow and reproducibility
+
+1. Install [MPLAB X IDE 6.35](https://www.microchip.com/en-us/tools-resources/develop/mplab-x-ide), ensuring the **32-bit MCUs** box is checked during installation.
+2. When prompted afterwards, install the **XC32 compiler** (select the free version).
+3. Download the source code `.zip` and the pre-compiled `.hex` file from the Seedmate Releases page(https://github.com/Seedmate/Seedmate/releases).
+4. Extract the `.zip` file to any local folder.
+5. Open MPLAB X IDE 6.35, go to **File > Open Project**, and select the project located at: `[unzipped_folder]\seedmate_release\SW\BIP39_MCC.X`
+6. In the top menu, go to **Production > Build Project (Seedmate)**.
+7. Once finished, locate your generated `.hex` file here: `\SW\BIP39_MCC.X\dist\default\production\BIP39_MCC.X.production.hex`
+8. Use WinMerge or any other diff tool to compare your generated `.hex` file against the one downloaded from GitHub.
+9. Compare the SHA256 hash of your generated file against the SHA256 hash provided on the GitHub release page to verify a perfect match.
 
 
-
-1. Open the project in MPLAB X.
-
-2. Select the correct configuration.
-
-3. Build the project with XC32.
-
-4. Flash the generated firmware to the target board. A Microchip programmer tool is required:
-https://www.microchip.com/en-us/development-tool/pg164130
 
 ## Programming instructions / firmware update
 See https://www.seedmate.net/FW_update.html
