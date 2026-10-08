@@ -30,11 +30,13 @@ _GEN_EXCPT_ADDR                = _ebase_address + 0x180;
 
 MEMORY
 {
-  kseg0_program_mem     (rx)  : ORIGIN = 0x9D000000, LENGTH = 0x0
+  /* Allocate exactly 8KB (0x2000) of main flash for the bootloader's heavy code */
+  kseg0_program_mem     (rx)  : ORIGIN = 0x9D000000, LENGTH = 0x2000
+  
   debug_exec_mem              : ORIGIN = 0x9FC00490, LENGTH = 0x760
   kseg0_boot_mem        (rx)  : ORIGIN = 0x9FC00490, LENGTH = 0x0
   
-  /* Full Boot Flash allocation for the bootloader */
+  /* Physical Boot Flash allocation for reset and exception vectors */
   kseg1_boot_mem        (rx)  : ORIGIN = 0xBFC00000, LENGTH = 0x1700
   
   config_BFC01744             : ORIGIN = 0xBFC01744, LENGTH = 0x4
@@ -108,10 +110,11 @@ SECTIONS
     KEEP(*(.gen_handler))
   } > kseg1_boot_mem
 
+  /* Move startup code and C runtime to 8KB main program memory */
   .startup :
   {
     KEEP(*(.startup))
-  } > kseg1_boot_mem
+  } > kseg0_program_mem
 
   .text :
   {
@@ -122,7 +125,7 @@ SECTIONS
     *(.mips16.call.*)
     *(.gnu.warning)
     . = ALIGN(4) ;
-  } > kseg1_boot_mem
+  } > kseg0_program_mem  
 
   .init :
   {
@@ -132,13 +135,13 @@ SECTIONS
     KEEP (*crtend.o(.init))
     KEEP (*crtn.o(.init))
     . = ALIGN(4) ;
-  } > kseg1_boot_mem
+  } > kseg0_program_mem
 
   .fini :
   {
     KEEP (*(.fini))
     . = ALIGN(4) ;
-  } > kseg1_boot_mem
+  } > kseg0_program_mem
 
   .rodata :
   {
@@ -146,36 +149,36 @@ SECTIONS
     *( .gnu.linkonce.r.*)
     *(.rodata1)
     . = ALIGN(4) ;
-  } > kseg1_boot_mem
+  } > kseg0_program_mem
 
   .sdata2 ALIGN(4) :
   {
     *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
     . = ALIGN(4) ;
-  } > kseg1_boot_mem
+  } > kseg0_program_mem
 
   .sbss2 ALIGN(4) :
   {
     *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*)
     . = ALIGN(4) ;
-  } > kseg1_boot_mem
+  } > kseg0_program_mem
 
   .eh_frame_hdr :
   {
     *(.eh_frame_hdr)
-  } > kseg1_boot_mem
+  } > kseg0_program_mem
     . = ALIGN(4) ;
     
   .eh_frame : ONLY_IF_RO
   {
     KEEP (*(.eh_frame))
-  } > kseg1_boot_mem
+  } > kseg0_program_mem
     . = ALIGN(4) ;
     
   .gcc_except_table : ONLY_IF_RO
   {
     *(.gcc_except_table .gcc_except_table.*)
-  } > kseg1_boot_mem
+  } > kseg0_program_mem
     . = ALIGN(4) ;
 
   .dbg_data (NOLOAD) :

@@ -333,7 +333,7 @@
         <property key="stack-smashing" value=""/>
         <property key="wpo-lto" value="false"/>
       </C32Global>
-      <item path="src/diskio.c" ex="true" overriding="false">
+      <item path="src/diskio.c" ex="false" overriding="false">
         <C32>
         </C32>
         <C32-AR>
@@ -349,7 +349,7 @@
         <C32Global>
         </C32Global>
       </item>
-      <item path="src/diskio.h" ex="true" overriding="false">
+      <item path="src/diskio.h" ex="false" overriding="false">
         <C32>
         </C32>
         <C32-AR>
@@ -365,7 +365,7 @@
         <C32Global>
         </C32Global>
       </item>
-      <item path="src/pff.c" ex="true" overriding="false">
+      <item path="src/pff.c" ex="false" overriding="false">
         <C32>
         </C32>
         <C32-AR>
@@ -381,7 +381,7 @@
         <C32Global>
         </C32Global>
       </item>
-      <item path="src/pff.h" ex="true" overriding="false">
+      <item path="src/pff.h" ex="false" overriding="false">
         <C32>
         </C32>
         <C32-AR>
@@ -397,7 +397,7 @@
         <C32Global>
         </C32Global>
       </item>
-      <item path="src/pffconf.h" ex="true" overriding="false">
+      <item path="src/pffconf.h" ex="false" overriding="false">
         <C32>
         </C32>
         <C32-AR>
