@@ -3,9 +3,9 @@
   <executable name="dist/v2/production/BIP39_MCC.X.production.elf">                 
     <memory name="program">                 
       <units>bytes</units>                 
-      <length>263312</length>                 
+      <length>259216</length>                 
       <used>82547</used>                     
-      <free>180765</free>                     
+      <free>176669</free>                     
     </memory>                              
     <memory name="data">              
       <units>bytes</units>                 
