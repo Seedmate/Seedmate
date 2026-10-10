@@ -11,6 +11,7 @@
             <file>file:/C:/Seedmate/Seedmate/bootloader/src/SPI.c</file>
             <file>file:/C:/Seedmate/Seedmate/bootloader/src/TFT.h</file>
             <file>file:/C:/Seedmate/Seedmate/bootloader/src/config/default/peripheral/gpio/plib_gpio.c</file>
+            <file>file:/C:/Seedmate/Seedmate/bootloader/src/diskio.c</file>
         </group>
     </open-files>
 </project-private>

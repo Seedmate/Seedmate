@@ -153,7 +153,7 @@ DSTATUS disk_initialize (void)
     }
     
     // Initialization complete, switch back to high speed
-    SPI3BRG = 1; 
+    SPI3BRG = 0x0001; 
 
     return 0; // Success (RES_OK)
 }

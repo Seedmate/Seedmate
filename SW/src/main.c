@@ -102,7 +102,7 @@
 #endif
 
 #if defined(v2) 
-    #define cVersion "v1.7+"
+    #define cVersion "v1.8+"
 
     #include "crypto/ripemd160.h"
     #include "crypto/bignum.h"
