@@ -72,6 +72,7 @@
 #include <string.h>
 #include "SSS/shamir.h"
 #include "QRCode-master/src/qrcode.h"
+#include "memzero.h"
 
 #define QR_SCALE 4 // Size of each module in pixels
 #define SCREEN_WIDTH 160
@@ -307,6 +308,7 @@ int bip84_menu_pointer = 0;
 uint32_t bip84_address_index = 0;
 int bip84_extended_key_page = 0;
 bool bip84_qr_return_to_menu = false;
+bool bip84_qr_return_to_info = false;
 
 bool bip84_account_cached = false;
 HDNode bip84_account_node;
@@ -1238,6 +1240,91 @@ static void draw_bip84_wrapped_text(const char *text, int x, int y,
     }
 }
 
+// ============================================================================
+// Base58Check Functions (No external dependencies, using custom memzero)
+// ============================================================================
+
+const char b58digits_ordered[] = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+bool b58enc(char *b58, size_t *b58sz, const void *data, size_t binsz) {
+    const uint8_t *bin = (const uint8_t *)data;
+    int carry = 0;
+    size_t i = 0, j = 0, high = 0, zcount = 0;
+    size_t size = 0;
+
+    // 1. Count leading null bytes (zeros)
+    while (zcount < binsz && !bin[zcount]) ++zcount;
+
+    // 2. Allocate maximum size needed for base58 conversion
+    size = (binsz - zcount) * 138 / 100 + 1;
+    uint8_t buf[size];
+    memzero(buf, size);
+
+    // 3. Process the binary array and convert it
+    for (i = zcount, high = size - 1; i < binsz; ++i, high = j) {
+        for (carry = bin[i], j = size - 1; (j > high) || carry; --j) {
+            carry += 256 * buf[j];
+            buf[j] = carry % 58;
+            carry /= 58;
+            if (!j) {
+                break;
+            }
+        }
+    }
+
+    // 4. Find the first useful digit (non-null)
+    for (j = 0; j < size && !buf[j]; ++j);
+
+    // 5. Check if the output buffer size is sufficient
+    if (*b58sz <= zcount + size - j) {
+        *b58sz = zcount + size - j + 1;
+        return false;
+    }
+
+    // 6. Write '1's (representing leading zeros in Base58)
+    if (zcount) memset(b58, '1', zcount);
+    
+    // 7. Write the remaining encoded characters
+    for (i = zcount; j < size; ++i, ++j) b58[i] = b58digits_ordered[buf[j]];
+    b58[i] = '\0';
+    *b58sz = i + 1;
+
+    return true;
+}
+
+size_t base58_encode_check(const uint8_t *data, size_t datalen, char *str, size_t strsize) {
+    if (datalen > 128) {
+        return 0;
+    }
+    
+    // Buffer for original data + 4 bytes of checksum
+    uint8_t buf[128 + 4]; 
+    memzero(buf, sizeof(buf));
+    memcpy(buf, data, datalen);
+
+    // Double SHA-256 hash to get the checksum
+    uint8_t hash1[32];
+    uint8_t hash2[32];
+    SHA256_CTX ctx;
+    
+    sha256_init(&ctx);
+    sha256_update(&ctx, data, datalen);
+    sha256_final(&ctx, hash1);
+    
+    sha256_init(&ctx);
+    sha256_update(&ctx, hash1, 32);
+    sha256_final(&ctx, hash2);
+
+    // Copy the first 4 bytes of the second hash to the end of the payload (checksum)
+    memcpy(buf + datalen, hash2, 4);
+
+    size_t res = strsize;
+    bool success = b58enc(str, &res, buf, datalen + 4);
+    
+    memzero(buf, sizeof(buf));
+    return success ? res : 0;
+}
+
 // Curve definition for the seed
 #ifndef SECP256K1_NAME
 #define SECP256K1_NAME "secp256k1"
@@ -1260,12 +1347,43 @@ static uint32_t hdnode_fingerprint(HDNode *node) {
     return ((uint32_t)hash160[0] << 24) | (hash160[1] << 16) | (hash160[2] << 8) | hash160[3];
 }
 
-// 2. Temporary placeholder to avoid Base58 dependencies
+// ============================================================================
+// BIP32 Packaging and Base58 Encoding
+// ============================================================================
+
 static void hdnode_serialize_public(const HDNode *node, uint32_t fingerprint, uint32_t version, char *str, size_t strsize) {
-    // True extended key serialization requires Base58Check encoding.
-    // For now, return a safe dummy string so you can test the SegWit address compilation.
-    strncpy(str, "REQUIRES BASE58 ADAPTATION", strsize);
-    str[strsize - 1] = '\0';
+    uint8_t payload[78];
+    
+    // 1. Key version (4 bytes, Big-Endian) (e.g., 0x0488B21E for xpub)
+    payload[0] = (version >> 24) & 0xFF;
+    payload[1] = (version >> 16) & 0xFF;
+    payload[2] = (version >> 8) & 0xFF;
+    payload[3] = version & 0xFF;
+
+    // 2. Depth of the node in the tree (1 byte)
+    payload[4] = node->depth;
+
+    // 3. Parent fingerprint (4 bytes, Big-Endian)
+    payload[5] = (fingerprint >> 24) & 0xFF;
+    payload[6] = (fingerprint >> 16) & 0xFF;
+    payload[7] = (fingerprint >> 8) & 0xFF;
+    payload[8] = fingerprint & 0xFF;
+
+    // 4. Child number (4 bytes, Big-Endian)
+    payload[9] = (node->child_num >> 24) & 0xFF;
+    payload[10] = (node->child_num >> 16) & 0xFF;
+    payload[11] = (node->child_num >> 8) & 0xFF;
+    payload[12] = node->child_num & 0xFF;
+
+    // 5. Chain code (32 bytes)
+    memcpy(payload + 13, node->chain_code, 32);
+
+    // 6. Compressed public key (33 bytes) 
+    // The Ledger library already stores this with the 0x02 or 0x03 prefix in node->public_key
+    memcpy(payload + 45, node->public_key, 33);
+
+    // 7. Encode the 78 bytes using Base58Check
+    base58_encode_check(payload, 78, str, strsize);
 }
 
 static bool get_current_bip84_result(uint32_t chain, uint32_t address_index, BitcoinBip84Result *result)
@@ -1319,6 +1437,8 @@ static bool get_current_bip84_result(uint32_t chain, uint32_t address_index, Bit
 
     // Clone the cached account node so we don't mutate the global variable
     HDNode node = bip84_account_node;
+    
+    hdnode_fill_public_key(&node);
 
     // Serialize account-level Extended Public Keys (XPUB and ZPUB)
     hdnode_serialize_public(&node, bip84_account_parent_fingerprint, 0x0488B21E, result->xpub, sizeof(result->xpub));
@@ -2500,16 +2620,16 @@ void draw_compactqr_code(int size, unsigned char *data){
 #if defined(v2) 
 void draw_xpub_qr(const char *text) {
     white_screen();
-    // Version 6 has 41x41 modules. 
-    // We use a local scale of 2 to fit the 160x128 screen bounds.
+    
+    // Version 8 has 49x49 modules. With a scale of 2, it fits the 160x128 screen.
     int local_scale = 2; 
 
-    // Dynamic buffer allocation for Version 6
-    uint8_t qrcodeData[qrcode_getBufferSize(6)];
+    // Dynamic buffer allocation for Version 8 (supports up to 132 bytes in ECC_LOW)
+    uint8_t qrcodeData[qrcode_getBufferSize(8)];
     QRCode qrcode;
 
-    // Initialize the QR code: Version 6, ECC_LOW (Level L)
-    qrcode_initText(&qrcode, qrcodeData, 6, ECC_LOW, text);
+    // Initialize the QR code: Version 8, ECC_LOW (Level L)
+    qrcode_initText(&qrcode, qrcodeData, 8, ECC_LOW, text);
 
     int qr_size = qrcode.size;
     int img_size = qr_size * local_scale;
@@ -2518,7 +2638,7 @@ void draw_xpub_qr(const char *text) {
     int x_offset = (SCREEN_WIDTH - img_size) / 2;
     int y_offset = (SCREEN_HEIGHT - img_size) / 2;
 
-    // 1. Draw the white background and the required 4-module "Quiet Zone"
+    // Draw the white background and the required margin (Quiet Zone)
     int margin = 8 * local_scale; 
     fillRect(
         x_offset - margin, 
@@ -2528,7 +2648,7 @@ void draw_xpub_qr(const char *text) {
         ST7735_WHITE
     );
 
-    // 2. Iterate and draw ONLY the black modules to maximize SPI performance
+    // Iterate and draw ONLY the black modules to maximize SPI performance
     for (int y = 0; y < qr_size; y++) {
         for (int x = 0; x < qr_size; x++) {
             if (qrcode_getModule(&qrcode, x, y)) {
@@ -2543,7 +2663,6 @@ void draw_xpub_qr(const char *text) {
         }
     }
 }
-
 #endif
 
 
@@ -5960,6 +6079,26 @@ int main ( void ){
                 break;
             case SHOW_BIP84_INFO:
                 switch (pulsed_bt) {
+                    case OK_BT: 
+                        {
+                            BitcoinBip84Result result;
+                            if (bip84_menu_pointer == cBIP84_XPUB) {
+                                if (get_current_bip84_result(0, 0, &result)) {
+                                    const char *value = (bip84_extended_key_page == 0) ? result.xpub : result.zpub;
+                                    draw_xpub_qr(value);
+                                    bip84_qr_return_to_info = true;
+                                    estado = SHOW_QRSEED;
+                                }
+                            } else if (bip84_menu_pointer == cBIP84_RECEIVE || bip84_menu_pointer == cBIP84_CHANGE) {
+                                uint32_t chain = (bip84_menu_pointer == cBIP84_RECEIVE) ? 0u : 1u;
+                                if (get_current_bip84_result(chain, bip84_address_index, &result)) {
+                                    draw_url_qr(result.address);
+                                    bip84_qr_return_to_info = true;
+                                    estado = SHOW_QRSEED;
+                                }
+                            }
+                        }
+                        break;
                     case BACK_BT:
                         print_bip84_menu();
                         break;
@@ -5997,6 +6136,11 @@ int main ( void ){
                         break;
                     case BACK_BT:
 #if defined(v2)
+                        if (bip84_qr_return_to_info) {
+                            bip84_qr_return_to_info = false;
+                            print_bip84_info_screen();
+                            break;
+                        }
                         if (bip84_qr_return_to_menu) {
                             bip84_qr_return_to_menu = false;
                             print_bip84_menu();
