@@ -311,6 +311,12 @@ bool bip84_qr_return_to_menu = false;
 bool bip84_qr_return_to_info = false;
 
 bool bip84_account_cached = false;
+char bip84_cached_xpub[115] = {0}; 
+char bip84_cached_zpub[115] = {0}; 
+
+HDNode bip84_receive_node_cache;
+HDNode bip84_change_node_cache;
+
 HDNode bip84_account_node;
 uint32_t bip84_master_fingerprint = 0;
 uint32_t bip84_account_parent_fingerprint = 0;
@@ -501,10 +507,11 @@ void PBKDF2_HMAC_SHA512(const char *password, const char *salt,
                 SYS_Tasks(); 
             }
             
-            // Simple UI Progress Bar 
+            // Simple UI Progress Bar at the bottom of the screen
             if (j % 102 == 0) {
                 int chunk = j / 102; // Yields 1 through 20
-                rectan(20 + (chunk * 5), 70, 24 + (chunk * 5), 80, ST7735_GREEN);
+                // Draw progress bar from x=10 to x=150 at y=115
+                rectan(10 + ((chunk - 1) * 7), 121, 10 + (chunk * 7), 124, ST7735_GREEN);
             }
         }
 
@@ -721,6 +728,7 @@ typedef enum
     OBFUS_CONFIG,
     ROLL_DICE1,
     SHOW_CHECKSUM_DETAILS,
+    PRECOMPUTE_BIP84,
     SHOW_SEED,
     SHOW_QRSEED,
     WRITE_WORD,
@@ -1386,68 +1394,89 @@ static void hdnode_serialize_public(const HDNode *node, uint32_t fingerprint, ui
     base58_encode_check(payload, 78, str, strsize);
 }
 
+// Background calculation function
+void precompute_bip84_account(void) {
+    if (bip84_account_cached) return;
+
+    char mnemonic_str[250];
+    get_mnemonic_string(mnemonic_str);
+
+    // Convert the entire mnemonic string to lowercase per BIP39 standard
+    for (int i = 0; mnemonic_str[i] != '\0'; i++) {
+        if (mnemonic_str[i] >= 'A' && mnemonic_str[i] <= 'Z') {
+            mnemonic_str[i] = mnemonic_str[i] + ('a' - 'A');
+        }
+    }
+
+    // Draw initial outline for progress bar over the footer area
+    rectan(0, 110, 159, 127, BLACK);
+    //drawtext(10, 105, "COMPUTING KEYS...", ST7735_YELLOW, ST7735_BLACK, 1);
+    rectan(9, 120, 151, 125, WHITE);
+
+    // Generate the master seed (This loop triggers the green progress bar)
+    uint8_t seed[64];
+    PBKDF2_HMAC_SHA512(mnemonic_str, "mnemonic", 2048, seed, 64);
+
+    HDNode root;
+    if (!hdnode_from_seed(seed, 64, SECP256K1_NAME, &root)) return;
+
+    // Store Master Fingerprint
+    bip84_master_fingerprint = hdnode_fingerprint(&root);
+
+    // Derive path m/84'/0'
+    bip84_account_node = root;
+    hdnode_private_ckd(&bip84_account_node, 84 | 0x80000000); 
+    hdnode_private_ckd(&bip84_account_node, 0  | 0x80000000); 
+
+    // Store parent fingerprint for account-level xpub/zpub
+    bip84_account_parent_fingerprint = hdnode_fingerprint(&bip84_account_node);
+
+    // Derive Account path: m/84'/0'/0'
+    hdnode_private_ckd(&bip84_account_node, 0  | 0x80000000); 
+    
+    // Precompute public key and Base58 strings under the loading bar ---
+    // Fill the public key for the account node so it can be serialized
+    hdnode_fill_public_key(&bip84_account_node);
+
+    // Serialize and cache the XPUB and ZPUB strings globally
+    hdnode_serialize_public(&bip84_account_node, bip84_account_parent_fingerprint, 0x0488B21E, bip84_cached_xpub, sizeof(bip84_cached_xpub));
+    hdnode_serialize_public(&bip84_account_node, bip84_account_parent_fingerprint, 0x04B24746, bip84_cached_zpub, sizeof(bip84_cached_zpub));
+    // --------------------------------------------------------------------------------
+
+    // This saves one heavy HMAC-SHA512 derivation per address request
+    bip84_receive_node_cache = bip84_account_node;
+    hdnode_private_ckd(&bip84_receive_node_cache, 0);
+
+    bip84_change_node_cache = bip84_account_node;
+    hdnode_private_ckd(&bip84_change_node_cache, 1);
+    
+    // Mark as successfully cached
+    bip84_account_cached = true;
+}
+
 static bool get_current_bip84_result(uint32_t chain, uint32_t address_index, BitcoinBip84Result *result)
 {
-    // 1. LAZY EVALUATION & CACHING: Compute account node only if not cached
+    // 1. LAZY EVALUATION FALLBACK
     if (!bip84_account_cached) {
-        // Show a loading message since PBKDF2 will take a few seconds
-        drawtext(1, 50, "CALCULATING KEYS...", ST7735_YELLOW, ST7735_BLACK, 1);
-
-        char mnemonic_str[250];
-        get_mnemonic_string(mnemonic_str);
-
-        // Convert the entire mnemonic string to lowercase per BIP39 standard
-        for (int i = 0; mnemonic_str[i] != '\0'; i++) {
-            if (mnemonic_str[i] >= 'A' && mnemonic_str[i] <= 'Z') {
-                mnemonic_str[i] = mnemonic_str[i] + ('a' - 'A');
-            }
-        }
-
-        // Generate the master seed
-        uint8_t seed[64];
-        PBKDF2_HMAC_SHA512(mnemonic_str, "mnemonic", 2048, seed, 64);
-
-        HDNode root;
-        if (!hdnode_from_seed(seed, 64, SECP256K1_NAME, &root)) return false;
-
-        // Store Master Fingerprint
-        bip84_master_fingerprint = hdnode_fingerprint(&root);
-
-        // Derive path m/84'/0'
-        bip84_account_node = root;
-        if (!hdnode_private_ckd(&bip84_account_node, 84 | 0x80000000)) return false; 
-        if (!hdnode_private_ckd(&bip84_account_node, 0  | 0x80000000)) return false; 
-
-        // Store parent fingerprint for account-level xpub/zpub
-        bip84_account_parent_fingerprint = hdnode_fingerprint(&bip84_account_node);
-
-        // Derive Account path: m/84'/0'/0'
-        if (!hdnode_private_ckd(&bip84_account_node, 0  | 0x80000000)) return false; 
-        
-        // Mark as successfully cached
-        bip84_account_cached = true;
-        
-        // Clear the loading message area
-        rectan(0, 50, 159, 60, BLACK);
+        precompute_bip84_account();
     }
 
     // 2. FILL RESULT FROM CACHE
     u16_to_hex4((bip84_master_fingerprint >> 16) & 0xFFFF, result->fingerprint);
     u16_to_hex4(bip84_master_fingerprint & 0xFFFF, result->fingerprint + 4);
 
-    // Clone the cached account node so we don't mutate the global variable
-    HDNode node = bip84_account_node;
-    
-    hdnode_fill_public_key(&node);
+    strcpy(result->xpub, bip84_cached_xpub);
+    strcpy(result->zpub, bip84_cached_zpub);
 
-    // Serialize account-level Extended Public Keys (XPUB and ZPUB)
-    hdnode_serialize_public(&node, bip84_account_parent_fingerprint, 0x0488B21E, result->xpub, sizeof(result->xpub));
-    hdnode_serialize_public(&node, bip84_account_parent_fingerprint, 0x04B24746, result->zpub, sizeof(result->zpub));
+    // --- NEW CODE: Start directly from the precomputed branch cache ---
+    HDNode node = (chain == 0) ? bip84_receive_node_cache : bip84_change_node_cache;
 
-    // 3. FAST DERIVATION: Derive only the external/internal chain and the final index
-    if (!hdnode_private_ckd(&node, chain)) return false;         // 0 = Receive, 1 = Change
-    if (!hdnode_private_ckd(&node, address_index)) return false; // Address Index
+    // FAST DERIVATION: Derive only the final specific address index
+    if (!hdnode_private_ckd(&node, address_index)) return false; 
+    // ------------------------------------------------------------------
 
+    // HEAVY MATH: Secp256k1 Elliptic Curve Scalar Multiplication
+    // This is computationally intensive but unavoidable for each new address
     hdnode_fill_public_key(&node);
 
     // 4. HASHING & ENCODING
@@ -2714,6 +2743,14 @@ void redraw_show_seed_with_offset(void) {
     extract_11bit_groups(c_buf, 16  + size_pointer*16 +1);
     free(c_buf); 
     
+#if defined(v2)
+    // Intercept to compute keys in the background while blocking user input.
+    // We skip this if navigating BIP85, as it doesn't need BIP84 keys.
+    if (!bip84_account_cached && (main_pointer != cMAIN_BIP85)) {
+        estado = PRECOMPUTE_BIP84;
+        return; 
+    }
+#endif
 
     estado = SHOW_SEED;
 }
@@ -3785,6 +3822,10 @@ void transition_to_sd_block(int sd_ptr) {
 // Helper to transition to the MAIN screen
 void transition_to_main(void) {
     black_screen();
+#if defined(v2)
+    // Invalidate the cache when returning to the main menu to prevent stale sessions
+    bip84_account_cached = false; 
+#endif
     main_screen(main_pointer);
     estado = MAIN;
 }
@@ -5968,13 +6009,25 @@ int main ( void ){
                         break;
                 }
                 break;
+#if defined(v2)
+            case PRECOMPUTE_BIP84:
+                // Perform the heavy calculation (shows progress bar)
+                precompute_bip84_account();
+                
+                // Redraw the screen to clean the progress bar and restore the footer buttons
+                redraw_show_seed_with_offset(); 
+                
+                // Flush any accidental button presses made while waiting
+                pulsed_bt = NONE;
+                break;
+#endif
             case SHOW_SEED:
                 switch (pulsed_bt) {
                     case OK_BT:
 #if defined(v2)
                         bip84_address_index = 0;
                         bip84_extended_key_page = 0;
-                        bip84_account_cached = false;
+                        //bip84_account_cached = false;
                         print_bip84_menu();
 #else
                         if (!seedqr_enabled) break; //QR disabled
@@ -6092,6 +6145,8 @@ int main ( void ){
                             } else if (bip84_menu_pointer == cBIP84_RECEIVE || bip84_menu_pointer == cBIP84_CHANGE) {
                                 uint32_t chain = (bip84_menu_pointer == cBIP84_RECEIVE) ? 0u : 1u;
                                 if (get_current_bip84_result(chain, bip84_address_index, &result)) {
+                                    black_screen();
+                                    white_screen();
                                     draw_url_qr(result.address);
                                     bip84_qr_return_to_info = true;
                                     estado = SHOW_QRSEED;
