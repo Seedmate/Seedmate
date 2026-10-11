@@ -35,6 +35,16 @@
 #define EXT_SEG_ADRS_RECORD     0x02
 #define EXT_LIN_ADRS_RECORD     0x04
 
+// --- Memory Boundaries (Shifted by 8KB for Bootloader) ---
+#define USER_APP_RESET_ADDRESS  0x9D002000
+#define APP_FLASH_BASE_ADDRESS  0x9D002000
+#define APP_FLASH_END_ADDRESS   0x9D03FFFF  // 256KB total flash limit
+#define FLASH_PAGE_SIZE         2048        // 2KB pages on PIC32MM
+
+// --- Bootloader Shared Memory Flags ---
+#define UPDATE_FLAG_ADDR ((volatile uint32_t *)0x80007F00)
+#define MAGIC_WORD_UPDATE 0x55AA1234
+
 // --- Hex Parser Structures ---
 typedef enum {
     REC_NOT_FOUND,
@@ -139,6 +149,18 @@ int main(void)
     SPI3CON = 0x10000120; // Off, Master Mode, 8-bit
     SPI3CON = 0x10008120; // On
     
+    // =========================================================================
+    // MAGIC WORD CHECK (SHARED MEMORY)
+    // =========================================================================
+    // Check if the main application requested a firmware update
+    if (*UPDATE_FLAG_ADDR != MAGIC_WORD_UPDATE) {
+        // No update requested, jump straight to the application
+        JumpToApp();
+    }
+    
+    // Clear the flag immediately to prevent bootloops in case the update fails
+    *UPDATE_FLAG_ADDR = 0;
+
     delay_ms(1000);
 
     // =========================================================================

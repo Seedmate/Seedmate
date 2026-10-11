@@ -133,7 +133,16 @@
     #define BT4       PORTBbits.RB3   // Button 4
     #define BT5       PORTCbits.RC2  // Button 5
     #define BT6       PORTAbits.RA4   // Button 6
+
+    // ============================================================================
+    // Bootloader Shared Memory Flags (v2 only)
+    // ============================================================================
+    #define UPDATE_FLAG_ADDR ((volatile uint32_t *)0x80007F00)
+    #define MAGIC_WORD_UPDATE 0x55AA1234
 #endif
+
+    
+    
 
 #define cMAIN_n_opt 10
 #define cSEED_n_opt 6
@@ -153,11 +162,17 @@
 #define cHASH_MODE_n_opt 2
 #define cRESOURCE_n_opt 5
 #if defined(v2)
-    #define cSETTINGS_n_opt 2
+    #define cSETTINGS_n_opt 3
 #else
     #define cSETTINGS_n_opt 1
 #endif
+
 #define cSETTINGS_SEEDQR 0
+
+#if defined(v2)
+    #define cSETTINGS_MCU_SERIAL 1
+    #define cSETTINGS_UPDATE_FW 2
+#endif
 #if defined(v2)
     #define cSETTINGS_MCU_SERIAL 1
 #endif
@@ -737,6 +752,7 @@ typedef enum
     #if defined(v2)
         QR_SCANNING,
         SHOW_MCU_SERIAL,
+        WARNING_UPDATE_FW,
         SHOW_SEED_MENU,
         SHOW_BIP84_INFO,
     #endif
@@ -1330,6 +1346,25 @@ static bool get_current_bip84_result(uint32_t chain, uint32_t address_index, Bit
 
     return true;
 }
+
+
+#if defined(v2)
+
+void grid_OK_back(void) {
+    print_cursor_grid();
+    print_ok();
+    print_back();
+}
+
+void print_update_fw_warning(void) {
+    black_screen();
+    drawtext(20, 25, "SYSTEM UPDATE", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(10, 45, "1. INSERT SD CARD", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(10, 60, "   WITH update.hex file", ST7735_WHITE, ST7735_BLACK, 1);    
+    grid_OK_back();
+}
+#endif
+
 static void print_bip84_menu(void)
 {
     black_screen();
@@ -3682,6 +3717,9 @@ void print_settings_screen(int sel) {
 #if defined(v2)
     uint16_t color_serial = (sel == cSETTINGS_MCU_SERIAL) ? ST7735_ORANGE : ST7735_WHITE;
     drawtext(1, 20, "MCU SERIAL NUMBER", color_serial, ST7735_BLACK, 1);
+    
+    uint16_t color_fw = (sel == cSETTINGS_UPDATE_FW) ? ST7735_ORANGE : ST7735_WHITE;
+    drawtext(1, 30, "UPDATE FIRMWARE", color_fw, ST7735_BLACK, 1);
 #endif
     
     grid_menu2(); 
@@ -6157,8 +6195,13 @@ int main ( void ){
                         print_mcu_serial_screen();
                         estado = SHOW_MCU_SERIAL;
                     }
+                    else if (settings_pointer == cSETTINGS_UPDATE_FW) {
+                        // Call the warning screen instead of resetting immediately
+                        print_update_fw_warning();
+                        estado = WARNING_UPDATE_FW;
+                    }
 #endif
-                    break;      
+                    break;
                 case BACK_BT:
                     transition_to_main();
                     break;
@@ -6190,6 +6233,44 @@ int main ( void ){
                     estado = SEL_SETTINGS;
                 }
                 break;
+                
+            case WARNING_UPDATE_FW:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        // Trigger Bootloader Update Sequence
+                        black_screen();
+                        drawtext(20, 50, "REBOOTING TO", ST7735_ORANGE, ST7735_BLACK, 1);
+                        drawtext(20, 65, "BOOTLOADER...", ST7735_WHITE, ST7735_BLACK, 1);
+                        
+                        delay_ms(1000);
+                        
+                        // 1. Write the magic word to the predefined RAM address
+                        *UPDATE_FLAG_ADDR = MAGIC_WORD_UPDATE;
+                        
+                        // 2. Unlock system sequence to allow software reset
+                        SYSKEY = 0x00000000;
+                        SYSKEY = 0xAA996655;
+                        SYSKEY = 0x556699AA;
+                        
+                        // 3. Trigger Software Reset
+                        RSWRSTSET = _RSWRST_SWRST_MASK;
+                        unsigned int dummy = RSWRST; 
+                        (void)dummy;                 
+                        
+                        while(1); 
+                        break;
+                        
+                    case BACK_BT:
+                        // Cancel and return to settings menu
+                        black_screen();
+                        print_settings_screen(settings_pointer);
+                        estado = SEL_SETTINGS;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+                
             case QR_SCANNING:
                 switch (pulsed_bt) {
                     case OK_BT: {
