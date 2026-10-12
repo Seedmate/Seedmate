@@ -424,6 +424,7 @@ void print_keyboard_with_validation(int index, bool word_found, const char *curr
 
 int find_word_index(const char *word);
 
+
 // Mnemonic to Cards Globals
 uint8_t card_sequence[132];
 int card_sequence_len = 0;
@@ -767,6 +768,7 @@ typedef enum
         SHOW_BIP84_INFO,
     #endif
     SEL_ERASE_MODE,
+    CONFIRM_WIPE_SD,
     PROCESS_WIPE_SD,
     END_MODE // Final
 } state_t;
@@ -3422,6 +3424,9 @@ bool sd_init(void) {
 }
 
 
+
+
+
 // Read R1 response of SD command (first byte different from 0xFF)
 // Returns 0xFF if there is a timeout
 uint8_t sd_get_r1(void) {
@@ -4121,6 +4126,68 @@ void print_card_encoding_screen(void) {
 }
 // ============================================================================
 
+// Reads the CSD register (CMD9) to determine exact SD card capacity
+// Returns total number of sectors (512 bytes each), or 0 if error occurs
+uint32_t sd_get_sector_count(void) {
+    uint8_t csd[16];
+    
+    SD_CS = 0;
+    sd_send_cmd(9, 0, 0xFF); // CMD9: SEND_CSD
+    
+    if (sd_get_r1() != 0x00) {
+        SD_CS = 1; 
+        spi_send(0xFF);
+        return 0;
+    }
+    
+    // Wait for the data start token 0xFE
+    uint32_t wait = 100000;
+    uint8_t token;
+    do {
+        token = spi_recv();
+        if (token == 0xFE) break;
+    } while (--wait);
+
+    if (token != 0xFE) { 
+        SD_CS = 1; 
+        spi_send(0xFF); 
+        return 0; 
+    }
+
+    // Read the 16 bytes of the CSD register
+    for (int i = 0; i < 16; i++) {
+        csd[i] = spi_recv();
+    }
+    
+    // Discard CRC
+    spi_recv(); 
+    spi_recv(); 
+    
+    SD_CS = 1; 
+    spi_send(0xFF);
+
+    uint32_t sectors = 0;
+    uint8_t csd_ver = (csd[0] >> 6) & 0x03;
+
+    if (csd_ver == 0x00) {
+        // CSD Version 1.0 (Standard Capacity SD, e.g., 32MB cards)
+        uint16_t c_size = ((csd[6] & 0x03) << 10) | (csd[7] << 2) | ((csd[8] >> 6) & 0x03);
+        uint8_t c_size_mult = ((csd[9] & 0x03) << 1) | ((csd[10] >> 7) & 0x01);
+        uint8_t read_bl_len = csd[5] & 0x0F;
+        
+        uint32_t mult = 1 << (c_size_mult + 2);
+        uint32_t block_len = 1 << read_bl_len;
+        
+        sectors = (c_size + 1) * mult * (block_len / 512);
+    } else if (csd_ver == 0x01) {
+        // CSD Version 2.0 (High Capacity SDHC/SDXC)
+        uint32_t c_size = ((uint32_t)(csd[7] & 0x3F) << 16) | ((uint32_t)csd[8] << 8) | csd[9];
+        sectors = (c_size + 1) * 1024;
+    }
+    
+    return sectors;
+}
+
 
 int main ( void ){
     /* Initialize all modules */
@@ -4249,6 +4316,9 @@ int main ( void ){
     int sel_K_N = 0;
     int SDblock_pointer = 0;
     int selinput_pointer = 0;
+    
+    uint32_t wipe_total_sectors = 0;
+    uint32_t wipe_mb_total = 0;
 
     uint16_t time_now ;
 
@@ -4715,9 +4785,49 @@ int main ( void ){
                             transition_to_sd_block(SDblock_pointer);
                         } else { // WIPE ALL CARD
                             black_screen();
-                            drawtext(10, 30, "WIPING ENTIRE SD...", ST7735_RED, ST7735_BLACK, 1);
-                            drawtext(10, 50, "PLEASE WAIT", ST7735_WHITE, ST7735_BLACK, 1);
-                            estado = PROCESS_WIPE_SD;
+                            
+                            // Initialize SD and get capacity before confirming
+                            wipe_total_sectors = 0;
+                            for (int retries = 0; retries < 3; retries++) {
+                                if (!SD_ready) SD_ready = sd_init();
+                                if (SD_ready) wipe_total_sectors = sd_get_sector_count();
+                                if (wipe_total_sectors > 0) break;
+                                SD_ready = false; 
+                                delay_ms(100);    
+                            }
+                            
+                            if (wipe_total_sectors == 0) {
+                                drawtext(10, 90, "SD CAPACITY ERROR", ST7735_RED, ST7735_BLACK, 1);
+                                print_cursor_grid();
+                                print_ok();
+                                estado = END_MODE;
+                            } else {
+                                wipe_mb_total = wipe_total_sectors / 2048;
+                                
+                                char msg_buf[32] = "Card size: ";
+                                char mb_str[10];
+                                size_t len = u16_to_str((unsigned int)wipe_mb_total, mb_str);
+                                int pos = 11; // "Card size: " length
+                                
+                                for(size_t i = 0; i < len; i++) {
+                                    msg_buf[pos++] = mb_str[i];
+                                }
+                                msg_buf[pos++] = ' ';
+                                msg_buf[pos++] = 'M';
+                                msg_buf[pos++] = 'B';
+                                msg_buf[pos++] = 's';
+                                msg_buf[pos] = '\0';
+                                
+                                drawtext(10, 30, msg_buf, ST7735_WHITE, ST7735_BLACK, 1);
+                                drawtext(10, 50, "Confirm wipe?", ST7735_ORANGE, ST7735_BLACK, 1);
+                                
+                                // Render OK and BACK grid manually for universal support
+                                print_cursor_grid();
+                                print_ok();
+                                print_back();
+                                
+                                estado = CONFIRM_WIPE_SD;
+                            }
                         }
                         break;
                     case BACK_BT:
@@ -4736,57 +4846,83 @@ int main ( void ){
                 }
                 break;
 
-            case PROCESS_WIPE_SD: {
-                uint32_t current_sector = 0;
-                uint8_t zero_buf[512] = {0};
-                
-                // Ensure card is ready before blind loop
-                if (!SD_ready) SD_ready = sd_init();
-                
-                while(1) {
-                    SYS_Tasks(); // Keep MCU watchdog/tasks happy during the long wipe
+            case CONFIRM_WIPE_SD:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        black_screen();
+                        drawtext(10, 30, "WIPING ENTIRE SD...", ST7735_RED, ST7735_BLACK, 1);
+                        drawtext(10, 50, "PLEASE WAIT", ST7735_WHITE, ST7735_BLACK, 1);
+                        estado = PROCESS_WIPE_SD;
+                        break;
+                    case BACK_BT:
+                        // Cancel and return to erase menu
+                        black_screen();
+                        print_generic_menu(menu_erase, cERASE_n_opt, erase_pointer);
+                        estado = SEL_ERASE_MODE;
+                        break;
+                    default:
+                        break;
+                }
+                break;
 
-                    // Blink LED while wiping (toggle every 256 sectors to avoid slowing down)
+            case PROCESS_WIPE_SD: {
+                uint8_t secure_wipe_buf[512]; 
+                
+                // Use alternating bit pattern (10101010) to prevent FTL compression 
+                for (int i = 0; i < 512; i++) {
+                    secure_wipe_buf[i] = 0xAA; 
+                }
+                
+                for (uint32_t current_sector = 0; current_sector < wipe_total_sectors; current_sector++) {
+                    SYS_Tasks(); // Keep MCU watchdog and tasks running
+                    
                     if ((current_sector % 256) == 0) {
                         LED = 1 - LED; 
                     }
 
-                    // sd_write_block returns false if we hit the end of the SD capacity or an error
-                    if (!sd_write_block(current_sector, zero_buf)) {
-                        LED = 0; // Ensure LED is turned off when finished
-                        drawtext(10, 90, "WIPE FINISHED/ERROR", ST7735_GREEN, ST7735_BLACK, 1);
-                        break; 
+                    if (!sd_write_block(current_sector, secure_wipe_buf)) {
+                        drawtext(10, 90, "PHYSICAL WRITE ERROR", ST7735_RED, ST7735_BLACK, 1);
+                        LED = 0;
+                        print_cursor_grid();
+                        print_ok();
+                        estado = END_MODE;
+                        goto wipe_end; 
                     }
                     
-                    current_sector++;
-
-                    // Update UI every 1000 sectors
+                    // Update UI every 1000 sectors (~0.5 MB)
                     if ((current_sector % 1000) == 0) {
-                        char progress_txt[32] = "Erased: ";
-                        char mb_str[10];
+                        char progress_txt[32];
+                        uint32_t mb_erased = current_sector / 2048;
                         
-                        // 1 Sector = 512 bytes. 2048 sectors = 1MB.
-                        uint32_t mb_erased = (current_sector / 2048); 
+                        size_t len1 = u16_to_str((unsigned int)mb_erased, progress_txt);
+                        progress_txt[len1] = ' ';
+                        progress_txt[len1 + 1] = '/';
+                        progress_txt[len1 + 2] = ' ';
                         
-                        // Using u16_to_str format matching the rest of the file
-                        size_t len = u16_to_str((unsigned int)mb_erased, mb_str);
-                        int pos = 8; 
-                        for(size_t i = 0; i < len; i++) progress_txt[pos++] = mb_str[i];
+                        size_t len2 = u16_to_str((unsigned int)wipe_mb_total, &progress_txt[len1 + 3]);
+                        int pos = len1 + 3 + len2;
+                        
                         progress_txt[pos++] = ' ';
                         progress_txt[pos++] = 'M';
                         progress_txt[pos++] = 'B';
-                        progress_txt[pos++] = ' ';
-                        progress_txt[pos++] = ' ';
                         progress_txt[pos] = '\0';
                         
+                        rectan(10, 70, 159, 78, BLACK); 
                         drawtext(10, 70, progress_txt, ST7735_CYAN, ST7735_BLACK, 1);
                     }
                 }
                 
-                grid_OK_only(); // Render OK button map at the bottom
-                estado = END_MODE; // Wait for OK button to return to the main menu
+                drawtext(10, 90, "SECURE WIPE FINISHED", ST7735_GREEN, ST7735_BLACK, 1);
+
+            wipe_end:
+                LED = 0; 
+                print_cursor_grid();
+                print_ok(); 
+                estado = END_MODE; 
                 break;
-            }         
+            }
+
+            
             case SEL_SIZE:        /////  SCREEN     2   /////////////
                 switch (pulsed_bt) {
                     case OK_BT:
