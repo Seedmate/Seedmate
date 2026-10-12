@@ -624,6 +624,26 @@
         <C32Global>
         </C32Global>
       </item>
+      <item path="../src/crypto/bignum.c" ex="true" overriding="false">
+      </item>
+      <item path="../src/crypto/bignum.h" ex="true" overriding="false">
+      </item>
+      <item path="../src/crypto/bip32.c" ex="true" overriding="false">
+      </item>
+      <item path="../src/crypto/bip32.h" ex="true" overriding="false">
+      </item>
+      <item path="../src/crypto/ecdsa.c" ex="true" overriding="false">
+      </item>
+      <item path="../src/crypto/ecdsa.h" ex="true" overriding="false">
+      </item>
+      <item path="../src/crypto/secp256k1.c" ex="true" overriding="false">
+      </item>
+      <item path="../src/crypto/secp256k1.h" ex="true" overriding="false">
+      </item>
+      <item path="../src/crypto/segwit_addr.c" ex="true" overriding="false">
+      </item>
+      <item path="../src/crypto/segwit_addr.h" ex="true" overriding="false">
+      </item>
       <C32>
         <property key="additional-warnings" value="true"/>
         <property key="addresss-attribute-use" value="false"/>
@@ -640,7 +660,8 @@
         <property key="enable-unroll-loops" value="false"/>
         <property key="exclude-floating-point" value="false"/>
         <property key="expand-pragma-config" value="false"/>
-        <property key="extra-include-directories" value="../src;../src/config/default"/>
+        <property key="extra-include-directories"
+                  value="../src;../src/config/default;..\src\SSS"/>
         <property key="generate-16-bit-code" value="false"/>
         <property key="generate-micro-compressed-code" value="false"/>
         <property key="isolate-each-function" value="true"/>

@@ -177,6 +177,14 @@
 #if defined(v2)
     #define cSETTINGS_MCU_SERIAL 1
 #endif
+
+    // Macro to easily move functions to the bootloader flash on v1 hardware
+#if defined(v1)
+    #define BOOTFLASH_FUNC __attribute__((section(".bootflash.text")))
+#else
+    #define BOOTFLASH_FUNC
+#endif
+
 #define cEND_OF_LINE 150
 #define cENTROPY_BITS12W 127
 #define cENTROPY_BITS24W 255
@@ -363,8 +371,14 @@ uint16_t card_history_start_bits[cCARD_MAX_HISTORY] = {0};
 uint8_t card_history_bit_len[cCARD_MAX_HISTORY] = {0};
 
 
+#if defined(v2)
 const char card_rank_chars[13] = { 'a', '2', '3', '4', '5', '6', '7', '8', '9', 't', 'j', 'q', 'k' };
 const char card_suit_chars[4] = { 'c', 'd', 'h', 's' };
+#else
+// Move simple character arrays to boot flash memory for legacy v1 hardware
+const char __attribute__((section(".bootflash"))) card_rank_chars[13] = { 'a', '2', '3', '4', '5', '6', '7', '8', '9', 't', 'j', 'q', 'k' };
+const char __attribute__((section(".bootflash"))) card_suit_chars[4] = { 'c', 'd', 'h', 's' };
+#endif
 const char * const card_entropy_map[52] = {
     "00000", "00001", "00010", "00011", "00100", "00101", "00110", "00111", "01000", "01001", "01010", "01011", "01100",
     "01101", "01110", "01111", "10000", "10001", "10010", "10011", "10100", "10101", "10110", "10111", "11000", "11001",
@@ -916,12 +930,21 @@ void spi_send(uint8_t data) {
 // ============================================================================
 // BITMAP GRAPHICS REPLACEMENT
 // ============================================================================
+#if defined(v1)
+const uint16_t __attribute__((section(".bootflash"))) bmp_camera[11]      = { 0x0700, 0x0880, 0xF078, 0x8708, 0x8888, 0x9048, 0x9048, 0x8888, 0x8708, 0x8008, 0xFFF8 };
+const uint16_t __attribute__((section(".bootflash"))) bmp_arrow_up[6]     = { 0x2000, 0x7000, 0xF800, 0x2000, 0x2000, 0x2000 };
+const uint16_t __attribute__((section(".bootflash"))) bmp_arrow_down[6]   = { 0x2000, 0x2000, 0x2000, 0xF800, 0x7000, 0x2000 };
+const uint16_t __attribute__((section(".bootflash")))bmp_arrow_left[5]   = { 0x2000, 0x6000, 0xFC00, 0x6000, 0x2000 };
+const uint16_t __attribute__((section(".bootflash"))) bmp_arrow_right[5]  = { 0x1000, 0x1800, 0xFC00, 0x1800, 0x1000 };
+const uint16_t __attribute__((section(".bootflash"))) bmp_add_symbol[7]   = { 0x1000, 0x1000, 0x1000, 0xFE00, 0x1000, 0x1000, 0x1000 };
+#else
 const uint16_t bmp_camera[11]      = { 0x0700, 0x0880, 0xF078, 0x8708, 0x8888, 0x9048, 0x9048, 0x8888, 0x8708, 0x8008, 0xFFF8 };
 const uint16_t bmp_arrow_up[6]     = { 0x2000, 0x7000, 0xF800, 0x2000, 0x2000, 0x2000 };
 const uint16_t bmp_arrow_down[6]   = { 0x2000, 0x2000, 0x2000, 0xF800, 0x7000, 0x2000 };
 const uint16_t bmp_arrow_left[5]   = { 0x2000, 0x6000, 0xFC00, 0x6000, 0x2000 };
 const uint16_t bmp_arrow_right[5]  = { 0x1000, 0x1800, 0xFC00, 0x1800, 0x1000 };
 const uint16_t bmp_add_symbol[7]   = { 0x1000, 0x1000, 0x1000, 0xFE00, 0x1000, 0x1000, 0x1000 };
+#endif
 
 // Generic 1-bit monochrome renderer
 void draw_bitmap(int x, int y, int w, int h, const uint16_t *bitmap, uint16_t color) {
@@ -966,6 +989,44 @@ void print_camera(int x, int y, int safe) {
 // ============================================================================
 
 
+#if defined(v1)
+BOOTFLASH_FUNC void print_cursor_grid(){
+    drawFastHLine(60,105,90,WHITE);
+    drawFastHLine(60,115,90,WHITE);
+    drawFastHLine(60,125,90,WHITE);
+    drawFastVLine(60,105,20,WHITE);
+    drawFastVLine(90,105,20,WHITE);
+    drawFastVLine(120,105,20,WHITE);
+    drawFastVLine(150,105,20,WHITE);
+}
+
+
+BOOTFLASH_FUNC void print_minus_symbol(int x,int y){
+    drawFastHLine(x,y-3,7,WHITE);
+}
+
+BOOTFLASH_FUNC void print_ok(){
+    drawtext(130,107, OK_MSG, ST7735_WHITE, ST7735_WHITE, 1);
+}
+
+
+BOOTFLASH_FUNC void grid_menu1(){
+    print_cursor_grid();
+    print_up_arrow(103,114);
+    print_down_arrow(103,123);
+    print_ok();
+}
+BOOTFLASH_FUNC void grid_menuwr(){
+    print_cursor_grid();
+    print_up_arrow(103,114);
+    print_down_arrow(103,123);
+    print_ok();
+    drawtext(64,107, "LIST", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(122,117, "PAGE+", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(62,117, "PAGE-", ST7735_WHITE, ST7735_WHITE, 1);
+}
+
+#else
 
 void print_cursor_grid(){
     drawFastHLine(60,105,90,WHITE);
@@ -1002,6 +1063,8 @@ void grid_menuwr(){
     drawtext(122,117, "PAGE+", ST7735_WHITE, ST7735_WHITE, 1);
     drawtext(62,117, "PAGE-", ST7735_WHITE, ST7735_WHITE, 1);
 }
+    
+#endif
 
 void print_back(){
     drawtext(64,107, "BACK", ST7735_WHITE, ST7735_WHITE, 1);
@@ -1158,9 +1221,12 @@ void version_display(){
 }
 static bool SD_ready= false;
 
+int SD_page = 0;
+
 // ============================================================================
 // Generic Menu Renderer
 // ============================================================================
+#if defined(v2)
 void print_generic_menu(const char* const *options, int n_opt, int sel) {
     for (int i = 0; i < n_opt; i++) {
         uint16_t color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
@@ -1177,10 +1243,6 @@ void main_screen(int sel) {
     if(SD_ready)drawtext(10, 118, "SD OK", ST7735_GREEN, ST7735_BLACK, 1);
     grid_menu1();
 }
-
-
-int SD_page = 0;
-
 
 static void u16_to_hex4(uint16_t value, char *buf) {
     static const char hex[] = "0123456789ABCDEF";
@@ -1207,7 +1269,6 @@ static size_t u16_to_str(unsigned int n, char *buf) {
     buf[j] = '\0';
     return (size_t)j;
 }
-
 static size_t u16_to_str_pad(unsigned int n, char *buf, unsigned int width) {
     char tmp[6];
     unsigned int i = 0;
@@ -1230,6 +1291,82 @@ static size_t u16_to_str_pad(unsigned int n, char *buf, unsigned int width) {
     buf[j] = '\0';
     return (size_t)j;
 }
+#else
+BOOTFLASH_FUNC void print_generic_menu(const char* const *options, int n_opt, int sel) {
+    for (int i = 0; i < n_opt; i++) {
+        uint16_t color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
+        drawtext(1, 10 + i * 10, (char*)options[i], color, ST7735_BLACK, 1);
+    }
+    grid_menu2();
+}
+
+BOOTFLASH_FUNC void main_screen(int sel) {
+    for (int i = 0; i < cMAIN_n_opt; i++) {
+        uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
+        drawtext(1, 5 + i * 10, (char*)menu_main[i], color, ST7735_BLACK, 1);
+    }
+    if(SD_ready)drawtext(10, 118, "SD OK", ST7735_GREEN, ST7735_BLACK, 1);
+    grid_menu1();
+}
+
+BOOTFLASH_FUNC static void u16_to_hex4(uint16_t value, char *buf) {
+    static const char hex[] = "0123456789ABCDEF";
+    buf[0] = hex[(value >> 12) & 0x0F];
+    buf[1] = hex[(value >> 8) & 0x0F];
+    buf[2] = hex[(value >> 4) & 0x0F];
+    buf[3] = hex[value & 0x0F];
+    buf[4] = '\0';
+}
+
+// Minimal base-10 itoa without dependencies
+BOOTFLASH_FUNC static size_t u16_to_str(unsigned int n, char *buf) {
+    char tmp[6]; // Enough for 65535
+    int i = 0;
+    do {
+        tmp[i++] = (char)('0' + (n % 10));
+        n /= 10;
+    } while (n > 0);
+    // Reverse into the destination buffer
+    int j = 0;
+    while (i > 0) {
+        buf[j++] = tmp[--i];
+    }
+    buf[j] = '\0';
+    return (size_t)j;
+}
+
+BOOTFLASH_FUNC static size_t u16_to_str_pad(unsigned int n, char *buf, unsigned int width) {
+    char tmp[6];
+    unsigned int i = 0;
+    unsigned int j = 0;
+
+    do {
+        tmp[i++] = (char)('0' + (n % 10));
+        n /= 10;
+    } while (n > 0);
+
+    while (i < width) {
+        buf[j++] = '0';
+        width--;
+    }
+
+    while (i > 0) {
+        buf[j++] = tmp[--i];
+    }
+
+    buf[j] = '\0';
+    return (size_t)j;
+}
+#endif
+    
+
+
+
+
+
+
+
+
 
 #if defined(v2)
 static void draw_bip84_wrapped_text(const char *text, int x, int y,
@@ -1639,6 +1776,7 @@ static int read_entropy_bit(const BYTE data_array[36], int bit_index) {
     return (data_array[byte_index] >> bit_position) & 1;
 }
 
+#if defined(v2) 
 void draw_shared_entropy_building(void) {
     rectan(0, 35, 159, 43, BLACK); 
     int completed_words = bit_count_dice / 11;
@@ -1756,6 +1894,128 @@ static void print_card_input_screen(void) {
     draw_shared_entropy_building();
     grid_keyboard();
 }
+#else
+BOOTFLASH_FUNC void draw_shared_entropy_building(void) {
+    rectan(0, 35, 159, 43, BLACK); 
+    int completed_words = bit_count_dice / 11;
+    int remaining_bits = bit_count_dice % 11;
+    char buf[64];
+
+    // Track the last known state to prevent unnecessary history redraws
+    static int last_completed_words = -1;
+    static bool history_has_purple = false;
+    
+    // Check if the number of completed words changed or if the screen was reset
+    bool words_changed = (completed_words != last_completed_words) || (bit_count_dice == 0);
+    
+    // We redraw history if words changed, OR if we left purple bits in the history last time.
+    bool redraw_history = words_changed || history_has_purple;
+    last_completed_words = completed_words;
+
+    // ---------------------------------------------------------
+    // Row 1: Active bits currently being accumulated
+    // (ALWAYS redraw this row since it changes on every input)
+    // ---------------------------------------------------------
+    if (remaining_bits > 0) {
+        int cursor_x = 1;
+        for (int i = 0; i < remaining_bits; i++) {
+            int abs_idx = completed_words * 11 + i;
+            uint16_t color = (abs_idx >= bit_count_dice - last_input_len) ? ST7735_MAGENTA : ST7735_ORANGE;
+            char single_char[2] = { read_entropy_bit(data_array_256b, abs_idx) ? '1' : '0', '\0' };
+            drawtext(cursor_x, 35, single_char, color, ST7735_BLACK, 1);
+            cursor_x += 6;
+        }
+        // Pad spaces to overwrite any trailing characters
+        char pad_str[24] = {0};
+        for (int p = 0; p < 20 - remaining_bits; p++) pad_str[p] = ' ';
+        drawtext(cursor_x, 35, pad_str, ST7735_BLACK, ST7735_BLACK, 1);
+    } else if (bit_count_dice == 0) {
+        // Draw a solid black row to clear TFT pixels before writing
+        rectan(0, 35, 159, 44, BLACK); 
+        drawtext(1, 35, "WAITING FOR INPUT...", ST7735_GREY, ST7735_BLACK, 1); 
+    } else {
+        // Clears the active row cleanly when bits exactly match a word boundary
+        rectan(0, 35, 159, 44, BLACK); 
+    }
+
+    // ---------------------------------------------------------
+    // Rows 2 to 6: Displaying up to the 5 previous completed words
+    // ---------------------------------------------------------
+    if (redraw_history) {
+        int y_offset = 45;
+        history_has_purple = false; // Reset the flag before drawing
+        
+        // If the only reason to redraw is to clear purple bits, we only need 
+        // to update the first history row (which is the second row overall on the screen, r = 0).
+        int rows_to_draw = words_changed ? 5 : 1;
+        
+        for (int r = 0; r < rows_to_draw; r++) {
+            int word_index = completed_words - 1 - r; 
+            
+            if (word_index >= 0) {
+                // There is a completed word to display for this row
+                int word_val = read_11bit_value(data_array_256b, word_index + 1); 
+                const char* word_str = get_confirmed_word_from_entropy(data_array_256b, word_index + 1);
+
+                int cursor_x = 1;
+                for (int b = 0; b < 11; b++) {
+                    int abs_idx = word_index * 11 + b;
+                    
+                    bool is_purple = (abs_idx >= bit_count_dice - last_input_len);
+                    if (is_purple) {
+                        history_has_purple = true; // Mark that this row contains purple bits
+                    }
+                    uint16_t color = is_purple ? ST7735_MAGENTA : ST7735_GREEN;
+                    
+                    char single_char[2] = { read_entropy_bit(data_array_256b, abs_idx) ? '1' : '0', '\0' };
+                    drawtext(cursor_x, y_offset, single_char, color, ST7735_BLACK, 1);
+                    cursor_x += 6;
+                }
+
+                char dec_str[6];
+                u16_to_str_pad((unsigned int)word_val, dec_str, 4);
+
+                int pos = 0;
+                buf[pos++] = ' ';
+                
+                int d = 0;
+                while (dec_str[d] != '\0') buf[pos++] = dec_str[d++];
+                
+                buf[pos++] = ' ';                
+               
+                int w = 0;
+                while (word_str && word_str[w] != '\0') buf[pos++] = word_str[w++];
+                
+                // Pad with spaces to overwrite ghost characters in shorter words.
+                // Changed from 26 to 15 to prevent TFT line-wrap overlay.
+                while (pos < 15) {
+                    buf[pos++] = ' ';
+                }
+                buf[pos] = '\0';
+
+                drawtext(cursor_x, y_offset, buf, ST7735_GREEN, ST7735_BLACK, 1);
+            } else {
+                // No word exists for this slot, print a solid black row to erase the TFT pixels completely
+                rectan(0, y_offset, 159, y_offset + 9, BLACK);
+            }
+            
+            y_offset += 10;
+        }
+    }
+}
+
+BOOTFLASH_FUNC static void print_card_input_screen(void) {
+    drawtext(1, 5, (size_pointer == cSIZE_24) ? "DRAW CARDS UP TO 256 BITS" : "DRAW CARDS UP TO 128 BITS", ST7735_WHITE, ST7735_BLACK, 1);
+    draw_card_bit_counter();
+    draw_card_selection();
+    
+    draw_shared_entropy_building();
+    grid_keyboard();
+}
+
+#endif
+
+
 
 // Accepts excess bits without truncation to allow proper red-bit display in checksum screen
 static void append_entropy_bits(const char *bits, size_t len) {
@@ -1960,6 +2220,53 @@ void print_triple_checksum(int word_target) {
     grid_OK_only(); 
 }
 
+#if defined(v1)
+BOOTFLASH_FUNC void print_diceroll_screen(int sel, int sel2){
+
+    // sel: 0 -> 128 bits, 1 -> 256 bits
+
+     char *text_dices = sel ? "ROLL DICE up to 256 bits" : "ROLL DICE up to 128 bits";
+     char *text_coins = sel ? "THROW COINS up to 256 bits" : "THROW COINS up to 128 bits";
+     char *text_bits = sel ? "000/256 bits" : "000/128 bits";
+
+        if (sel2==0){
+            drawtext(1,5, text_coins, ST7735_WHITE, ST7735_BLACK, 1);
+            grid_coins();
+        } else {
+            drawtext(1,5, text_dices, ST7735_WHITE, ST7735_BLACK, 1);
+            grid_dices();
+        }
+        drawtext(45,15, text_bits, ST7735_WHITE, ST7735_BLACK, 1);
+        draw_shared_entropy_building();
+}
+
+BOOTFLASH_FUNC void print_TMR_screen(int size_TMR){
+
+    // sel: 0 -> 128 bits, 1 -> 256 bits
+    drawtext(1,5, "STOP timer to set entropy", ST7735_WHITE, ST7735_BLACK, 1);
+    char *text_TMR_SEED = size_TMR ? "000/256 bits" : "000/128 bits";
+    drawtext(45,15, text_TMR_SEED, ST7735_WHITE, ST7735_BLACK, 1);
+    grid_OK_only();
+}
+
+BOOTFLASH_FUNC void print_child_config_screen(void) {
+    drawtext(1, 10, "CHILD SIZE:", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(80, 10, "BIP85 INDEX:", ST7735_WHITE, ST7735_BLACK, 1);
+
+    uint16_t size_color = (bip85_cursor == 0) ? ST7735_ORANGE : ST7735_WHITE;
+    uint16_t index_color = (bip85_cursor == 1) ? ST7735_ORANGE : ST7735_WHITE;
+
+    const char *size_str = (bip85_size == cSIZE_12) ? "12 WORDS" : "24 WORDS";
+    drawtext(10, 30, (char*)size_str, size_color, ST7735_BLACK, 1);
+
+    char index_str[12];
+    u16_to_str((unsigned int)bip85_index, index_str);
+    rectan(80, 30, 159, 38, BLACK); // clear index area
+    drawtext(100, 30, index_str, index_color, ST7735_BLACK, 1);
+
+    grid_bip85();
+}
+#else
 void print_diceroll_screen(int sel, int sel2){
 
     // sel: 0 -> 128 bits, 1 -> 256 bits
@@ -2005,6 +2312,7 @@ void print_child_config_screen(void) {
 
     grid_bip85();
 }
+#endif
 
 // Unified Obfuscation Configuration Screen
 int obfus_cursor = 0;
@@ -2477,8 +2785,12 @@ static const char *search_unique_prefix(const char *prefix, char *result, size_t
             return NULL;
         }
 
-        strncpy(result, unique_match, result_size - 1);
-        result[result_size - 1] = '\0';
+        size_t i = 0;
+        while (i < (result_size - 1) && unique_match[i] != '\0') {
+            result[i] = unique_match[i];
+            i++;
+        }
+        result[i] = '\0';
         return result;
 }
 
@@ -4081,11 +4393,15 @@ void print_card_encoding_screen(void) {
     black_screen();
     drawtext(1, 2, "MNEMONIC TO CARDS", ST7735_ORANGE, ST7735_BLACK, 1);
     
-    char decks_str[30];
-    strcpy(decks_str, "DECKS NEEDED: ");
+    char decks_str[30] = "DECKS NEEDED: ";
     char num[4];
-    u16_to_str((unsigned int)card_decks_needed, num);
-    strcat(decks_str, num);
+    size_t len = u16_to_str((unsigned int)card_decks_needed, num);
+    int pos = 14; // Longitud de "DECKS NEEDED: "
+    
+    for (size_t i = 0; i < len; i++) {
+        decks_str[pos++] = num[i];
+    }
+    decks_str[pos] = '\0';
     drawtext(1, 12, decks_str, ST7735_GREEN, ST7735_BLACK, 1);
     
     int cards_per_page = 32; // 8 per line, 4 lines 
@@ -4922,7 +5238,6 @@ int main ( void ){
                 break;
             }
 
-            
             case SEL_SIZE:        /////  SCREEN     2   /////////////
                 switch (pulsed_bt) {
                     case OK_BT:
@@ -6083,7 +6398,12 @@ int main ( void ){
                             clear_string(word);
                             saved_word = get_confirmed_word_from_entropy(data_array_256b, word_number);
                             if (saved_word != NULL) {
-                                strncpy(word, saved_word, 31);
+                                int i = 0;
+                                while (i < 31 && saved_word[i] != '\0') {
+                                    word[i] = saved_word[i];
+                                    i++;
+                                }
+                                word[i] = '\0';
                                 word[31] = '\0';
                             }
                             found = refresh_word_input_preview(word, result, sizeof(result), &found_bool);
