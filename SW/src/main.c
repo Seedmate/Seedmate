@@ -79,7 +79,7 @@
 
 
 #if defined(v1) 
-    #define cVersion "v1.7"
+    #define cVersion "v1.8"
 
     #define SD_SCK    PORTBbits.RB7
     #define SD_CS     PORTCbits.RC9
@@ -339,6 +339,10 @@ int card_history_count = 0;
 uint16_t card_history_start_bits[cCARD_MAX_HISTORY] = {0};
 uint8_t card_history_bit_len[cCARD_MAX_HISTORY] = {0};
 
+// Circular buffer to accumulate entropy from button presses
+static uint8_t sss_entropy_pool[32] = {0};
+static uint8_t sss_pool_idx = 0;
+
 
 const char card_rank_chars[13] = { 'a', '2', '3', '4', '5', '6', '7', '8', '9', 't', 'j', 'q', 'k' };
 const char card_suit_chars[4] = { 'c', 'd', 'h', 's' };
@@ -359,8 +363,6 @@ uint8_t c2[BYTES_PER_COEFF] = { 0 };
 uint8_t c3[BYTES_PER_COEFF] = { 0 };
 uint8_t c4[BYTES_PER_COEFF] = { 0 };
 
-
-int coeff_byte_idx = 0;
 
 // Pointer table to avoid a switch
 uint8_t * const coefficient_buffers[5] = { c0, c1, c2, c3, c4 };
@@ -667,29 +669,38 @@ static void process_bip85_derivation(void) {
 
 
 
-// Writes byte 'val' at linear position 'i' (0..159)
- inline void write_coefficient_byte(unsigned i, uint8_t val){
-    unsigned coef = i / BYTES_PER_COEFF;  // 0..4
-    unsigned off  = i % BYTES_PER_COEFF;  // 0..31
-    coefficient_buffers[coef][off] = val;
+void update_entropy_coefficients(void) {
+    uint16_t t = TMR1; // Read timer jitter
+    
+    // Circularly overwrite the pool by XORing with the jitter
+    sss_entropy_pool[sss_pool_idx] ^= (uint8_t)t;
+    sss_pool_idx = (sss_pool_idx + 1) % 32;
+    sss_entropy_pool[sss_pool_idx] ^= (uint8_t)(t >> 8);
+    sss_pool_idx = (sss_pool_idx + 1) % 32;
 }
 
-
-
-void update_entropy_coefficients(void){
-    if (coeff_byte_idx < (TOTAL_BYTES-2)) {
-        uint16_t t = TMR1;               // Read the 16-bit timer
-        uint8_t  lo = (uint8_t)t;        // Low byte
-        uint8_t  hi = (uint8_t)(t >> 8); // High byte
-
-        // Store the low byte first.
-        write_coefficient_byte(coeff_byte_idx, lo);
-        coeff_byte_idx += 1;
-        write_coefficient_byte(coeff_byte_idx, hi);
-        coeff_byte_idx += 1;
-
+// New function to expand the pool into c0..c4 using SHA256
+void expand_sss_coefficients(void) {
+    SHA256_CTX ctx;
+    for (uint8_t i = 0; i < 5; i++) {
+        uint8_t index_byte = i + 1; // Indices 1, 2, 3, 4, 5
+        sha256_init(&ctx);
+        // Feed with the pool collected during button presses
+        sha256_update(&ctx, sss_entropy_pool, 32); 
+        // Add the index (1..5) to derive a different coefficient each time
+        sha256_update(&ctx, &index_byte, 1);
+        sha256_final(&ctx, coefficient_buffers[i]);
     }
+    
+    // Secure wipe of the SHA256 context in RAM
+    volatile uint8_t *p = (volatile uint8_t *)&ctx;
+    for(size_t j = 0; j < sizeof(SHA256_CTX); j++) p[j] = 0;
+    
+    // Clear the pool so future splits do not reuse the same entropy
+    for(int j = 0; j < 32; j++) sss_entropy_pool[j] = 0;
 }
+
+
 
 // State definitions
 typedef enum
@@ -4767,6 +4778,7 @@ int main ( void ){
                                 } else if (main_pointer==cMAIN_SSS){
                                     drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
                                     black_screen();
+                                    expand_sss_coefficients();
                                     sss_split_kofm(data_array_256b /* c0 */,
                                         coeffs, SSS_K /* k threshold */,
                                         LEN,
@@ -5648,6 +5660,7 @@ int main ( void ){
                                             apply_1word_xor(obfus_xor_word_idx, size_pointer); // Apply 1 Word XOR
                                         }
                                     } else if ((main_pointer==cMAIN_SSS) & (sss_pointer==cSPLIT)){
+                                        expand_sss_coefficients();
                                         sss_split_kofm(data_array_256b /* c0 */,
                                             coeffs, SSS_K /* k threshold */,
                                             LEN,
