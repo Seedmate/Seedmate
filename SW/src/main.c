@@ -2568,8 +2568,7 @@ void redraw_show_seed_with_offset(void) {
     }
     
     BYTE *c_buf = append_checksum(data_array_256b, 16 + size_pointer*16);
-    extract_11bit_groups(c_buf, 16  + size_pointer*16 +1);
-    free(c_buf); 
+    extract_11bit_groups(c_buf, 16  + size_pointer*16 +1);    
     
 
     estado = SHOW_SEED;
@@ -4232,15 +4231,13 @@ int main ( void ){
                         break;
                     case BACK_BT:
                         break;
-                    case UP_BT:
-                        spi_send(0x33);
+                    case UP_BT:                        
                         if (main_pointer > 0) {
                             main_pointer--;
                         }
                         main_screen(main_pointer); // <--- Actualizado
                         break;
-                    case DOWN_BT:
-                        spi_send(0x55);
+                    case DOWN_BT:                        
                         if (main_pointer < (cMAIN_n_opt-1)) {
                             main_pointer++;
                         }
@@ -5837,8 +5834,7 @@ int main ( void ){
                         white_screen();
                         {
                             BYTE *qr_buf = append_checksum(data_array_256b, 16 + size_pointer*16);
-                            draw_QRSEED(qr_buf, 16 + size_pointer*16 +1);
-                            free(qr_buf);
+                            draw_QRSEED(qr_buf, 16 + size_pointer*16 +1);                            
                         }
                         estado = SHOW_QRSEED;
 #endif
