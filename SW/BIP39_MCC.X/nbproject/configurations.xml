@@ -624,26 +624,6 @@
         <C32Global>
         </C32Global>
       </item>
-      <item path="../src/crypto/bignum.c" ex="true" overriding="false">
-      </item>
-      <item path="../src/crypto/bignum.h" ex="true" overriding="false">
-      </item>
-      <item path="../src/crypto/bip32.c" ex="true" overriding="false">
-      </item>
-      <item path="../src/crypto/bip32.h" ex="true" overriding="false">
-      </item>
-      <item path="../src/crypto/ecdsa.c" ex="true" overriding="false">
-      </item>
-      <item path="../src/crypto/ecdsa.h" ex="true" overriding="false">
-      </item>
-      <item path="../src/crypto/secp256k1.c" ex="true" overriding="false">
-      </item>
-      <item path="../src/crypto/secp256k1.h" ex="true" overriding="false">
-      </item>
-      <item path="../src/crypto/segwit_addr.c" ex="true" overriding="false">
-      </item>
-      <item path="../src/crypto/segwit_addr.h" ex="true" overriding="false">
-      </item>
       <C32>
         <property key="additional-warnings" value="true"/>
         <property key="addresss-attribute-use" value="false"/>
@@ -660,8 +640,7 @@
         <property key="enable-unroll-loops" value="false"/>
         <property key="exclude-floating-point" value="false"/>
         <property key="expand-pragma-config" value="false"/>
-        <property key="extra-include-directories"
-                  value="../src;../src/config/default;..\src\SSS"/>
+        <property key="extra-include-directories" value="../src;../src/config/default"/>
         <property key="generate-16-bit-code" value="false"/>
         <property key="generate-micro-compressed-code" value="false"/>
         <property key="isolate-each-function" value="true"/>
@@ -1812,8 +1791,8 @@
         <makeCustomizationPreStepEnabled>false</makeCustomizationPreStepEnabled>
         <makeUseCleanTarget>false</makeUseCleanTarget>
         <makeCustomizationPreStep></makeCustomizationPreStep>
-        <makeCustomizationPostStepEnabled>true</makeCustomizationPostStepEnabled>
-        <makeCustomizationPostStep>hexmate "${ImagePath}" -O"${DISTDIR}/update.hex"</makeCustomizationPostStep>
+        <makeCustomizationPostStepEnabled>false</makeCustomizationPostStepEnabled>
+        <makeCustomizationPostStep></makeCustomizationPostStep>
         <makeCustomizationPutChecksumInUserID>false</makeCustomizationPutChecksumInUserID>
         <makeCustomizationEnableLongLines>false</makeCustomizationEnableLongLines>
         <makeCustomizationNormalizeHexFile>false</makeCustomizationNormalizeHexFile>
@@ -2090,7 +2069,7 @@
         <property key="enable-omit-frame-pointer" value="false"/>
         <property key="enable-procedural-abstraction" value="false"/>
         <property key="enable-short-double" value="false"/>
-        <property key="enable-symbols" value="false"/>
+        <property key="enable-symbols" value="true"/>
         <property key="enable-unroll-loops" value="false"/>
         <property key="exclude-floating-point" value="false"/>
         <property key="expand-pragma-config" value="false"/>

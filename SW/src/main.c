@@ -267,6 +267,9 @@ int settings_pointer = 0;
 #define  cK_MAX 6 // Max 6th order polynomial
 #define  cN_MAX 9 // Max 9 samples
 
+// Set to 1 to enable SSS coefficient debugging screen. Set to 0 for production.
+#define SSS_DEBUG 0
+
 #define INCORRECT_MSG "INCORRECT SET OF WORDS"
 #define LOAD_OK "LOAD OK"
 #define OK_MSG "OK"
@@ -396,8 +399,9 @@ uint8_t c2[BYTES_PER_COEFF] = { 0 };
 uint8_t c3[BYTES_PER_COEFF] = { 0 };
 uint8_t c4[BYTES_PER_COEFF] = { 0 };
 
-
-int coeff_byte_idx = 0;
+// Circular buffer to accumulate entropy from button presses
+static uint8_t sss_entropy_pool[32] = {0};
+static uint8_t sss_pool_idx = 0;
 
 // Pointer table to avoid a switch
 uint8_t * const coefficient_buffers[5] = { c0, c1, c2, c3, c4 };
@@ -715,19 +719,120 @@ static void process_bip85_derivation(void) {
 
 
 
-void update_entropy_coefficients(void){
-    if (coeff_byte_idx < (TOTAL_BYTES-2)) {
-        uint16_t t = TMR1;               // Read the 16-bit timer
-        uint8_t  lo = (uint8_t)t;        // Low byte
-        uint8_t  hi = (uint8_t)(t >> 8); // High byte
+void update_entropy_coefficients(void) {
+    uint16_t t = TMR1; // Read timer jitter
+    
+    // Circularly overwrite the pool by XORing with the jitter
+    sss_entropy_pool[sss_pool_idx] ^= (uint8_t)t;
+    sss_pool_idx = (sss_pool_idx + 1) % 32;
+    sss_entropy_pool[sss_pool_idx] ^= (uint8_t)(t >> 8);
+    sss_pool_idx = (sss_pool_idx + 1) % 32;
+}
 
-        // Store the low byte first.
-        write_coefficient_byte(coeff_byte_idx, lo);
-        coeff_byte_idx += 1;
-        write_coefficient_byte(coeff_byte_idx, hi);
-        coeff_byte_idx += 1;
 
+#if SSS_DEBUG
+void debug_print_sss_state(void) {
+    int page = 0;
+    bool redraw = true;
+    
+    while(1) {
+        SYS_Tasks(); // Keep hardware watchdog and background tasks happy
+        
+        if (redraw) {
+            black_screen();
+            
+            // Draw title with pagination info (e.g., "DEBUG SSS - PAGE 1/4")
+            char title[25];
+            strcpy(title, "DEBUG SSS - PAGE ");
+            char page_str[2] = {'1' + page, '\0'};
+            strcat(title, page_str);
+            strcat(title, "/4");
+            drawtext(5, 5, title, ST7735_YELLOW, ST7735_BLACK, 1);
+            
+            char line[30];
+            int y = 25;
+            int offset = page * 8; // Each page shows 8 bytes (16 hex chars)
+            
+            // 1. Print 8 bytes of the Entropy Pool
+            strcpy(line, "POOL: ");
+            for (int j = 0; j < 4; j++) {
+                // Combine 2 bytes into a 16-bit word and format to hex
+                u16_to_hex4(((uint16_t)sss_entropy_pool[offset + j*2] << 8) | sss_entropy_pool[offset + j*2 + 1], &line[6 + j*4]);
+            }
+            drawtext(5, y, line, ST7735_WHITE, ST7735_BLACK, 1);
+            y += 14;
+
+            // 2. Print 8 bytes of C0 through C4
+            for (int i = 0; i < 5; i++) {
+                line[0] = 'C';
+                line[1] = '0' + i;
+                line[2] = ':';
+                line[3] = ' ';
+                line[4] = ' ';
+                line[5] = '\0';
+                
+                for (int j = 0; j < 4; j++) {
+                    u16_to_hex4(((uint16_t)coefficient_buffers[i][offset + j*2] << 8) | coefficient_buffers[i][offset + j*2 + 1], &line[5 + j*4]);
+                }
+                
+                drawtext(5, y, line, ST7735_CYAN, ST7735_BLACK, 1);
+                y += 12;
+            }
+            
+            drawtext(5, 105, "LEFT/RIGHT: PAGE", ST7735_WHITE, ST7735_BLACK, 1);
+            drawtext(5, 117, "OK: CONTINUE", ST7735_GREEN, ST7735_BLACK, 1);
+            
+            redraw = false;
+            delay_ms(150); // Small delay to avoid visual flickering
+        }
+        
+        // Button handling (Active LOW: 0 = pressed)
+        if (BT6 == 0) { // Right button
+            page = (page + 1) % 4;
+            redraw = true;
+            while(BT6 == 0) { SYS_Tasks(); } // Wait for release
+        }
+        
+        if (BT2 == 0) { // Left button
+            page = (page + 3) % 4; // Equivalent to (page - 1) wrapping around
+            redraw = true;
+            while(BT2 == 0) { SYS_Tasks(); } // Wait for release
+        }
+        
+        if (BT_OK == 0) { // OK button
+            while(BT_OK == 0) { SYS_Tasks(); } // Wait for release
+            break; // Exit debug screen and continue execution
+        }
     }
+    
+    black_screen(); // Clear the debug info before returning to standard flow
+}
+#endif
+
+void expand_sss_coefficients(void) {
+    SHA256_CTX ctx;
+    for (uint8_t i = 0; i < 5; i++) {
+        uint8_t index_byte = i + 1; // Indices 1, 2, 3, 4, 5
+        sha256_init(&ctx);
+        // Feed with the pool collected during button presses
+        sha256_update(&ctx, sss_entropy_pool, 32);  
+        // Add the index (1..5) to derive a different coefficient each time
+        sha256_update(&ctx, &index_byte, 1);
+        sha256_final(&ctx, coefficient_buffers[i]);
+    }
+    
+    // --- DEBUG INJECTION POINT ---
+    // Print the state before wiping the buffers
+    #if SSS_DEBUG
+        debug_print_sss_state();
+    #endif
+    
+    // Secure wipe of the SHA256 context in RAM
+    volatile uint8_t *p = (volatile uint8_t *)&ctx;
+    for(size_t j = 0; j < sizeof(SHA256_CTX); j++) p[j] = 0;
+    
+    // Clear the pool so future splits do not reuse the same entropy
+    for(int j = 0; j < 32; j++) sss_entropy_pool[j] = 0;
 }
 
 // State definitions
@@ -4805,15 +4910,13 @@ int main ( void ){
                         break;
                     case BACK_BT:
                         break;
-                    case UP_BT:
-                        spi_send(0x33);
+                    case UP_BT:                        
                         if (main_pointer > 0) {
                             main_pointer--;
                         }
                         main_screen(main_pointer); // <--- Actualizado
                         break;
-                    case DOWN_BT:
-                        spi_send(0x55);
+                    case DOWN_BT:                        
                         if (main_pointer < (cMAIN_n_opt-1)) {
                             main_pointer++;
                         }
@@ -5416,6 +5519,7 @@ int main ( void ){
                                 } else if (main_pointer==cMAIN_SSS){
                                     drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
                                     black_screen();
+                                    expand_sss_coefficients();
                                     sss_split_kofm(data_array_256b /* c0 */,
                                         coeffs, SSS_K /* k threshold */,
                                         LEN,
@@ -6297,6 +6401,7 @@ int main ( void ){
                                             apply_1word_xor(obfus_xor_word_idx, size_pointer); // Apply 1 Word XOR
                                         }
                                     } else if ((main_pointer==cMAIN_SSS) & (sss_pointer==cSPLIT)){
+                                        expand_sss_coefficients();
                                         sss_split_kofm(data_array_256b /* c0 */,
                                             coeffs, SSS_K /* k threshold */,
                                             LEN,
