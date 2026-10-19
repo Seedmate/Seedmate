@@ -3159,8 +3159,7 @@ void redraw_show_seed_with_offset(void) {
     }
     
     BYTE *c_buf = append_checksum(data_array_256b, 16 + size_pointer*16);
-    extract_11bit_groups(c_buf, 16  + size_pointer*16 +1);
-    free(c_buf); 
+    extract_11bit_groups(c_buf, 16  + size_pointer*16 +1);    
     
 #if defined(v2)
     // Intercept to compute keys in the background while blocking user input.
@@ -6663,8 +6662,7 @@ int main ( void ){
                             white_screen();
                             {
                                 BYTE *qr_buf = append_checksum(data_array_256b, 16 + size_pointer * 16);
-                                draw_QRSEED(qr_buf, 16 + size_pointer * 16 + 1);
-                                free(qr_buf);
+                                draw_QRSEED(qr_buf, 16 + size_pointer * 16 + 1);                                
                             }
                             bip84_qr_return_to_menu = true;
                             estado = SHOW_QRSEED;
