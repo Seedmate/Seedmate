@@ -302,6 +302,22 @@ const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD", "QR SCAN"};
 const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD"};
 #endif
 
+//Text editor
+#define KBD_LETTER_SPACING 8
+
+#define LAYER_ABC 0
+#define LAYER_ABC_UPPER 1
+#define LAYER_NUM 2
+#define LAYER_SYM 3
+const char kbd_abc[27] = "abcdefghijklmnopqrstuvwxyz";
+const char kbd_ABC[27] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+// Fixed: Padded with a trailing space to reach 26 slots, preventing ghost chars
+const char kbd_num[27] = "0123456789.,!?+-*/=()@#$%&"; // Exactly 26 chars
+const char kbd_sym[27] = "<>[]{}~^|_\\\"';:.,!?+-*/=@#"; // Exactly 26 chars
+
+#define TEXT_EDITOR_MAX_LEN 400
+char my_text_buffer[TEXT_EDITOR_MAX_LEN] = {0};
+
 int erase_pointer = 0;
 int main_pointer = 0;
 int obfuscation_pointer =0;
@@ -1465,8 +1481,339 @@ BOOTFLASH_FUNC static size_t u16_to_str_pad(unsigned int n, char *buf, unsigned 
 #endif
     
 
+// --- Helper: Draw Editor Text Box with Auto-Scroll and Delta Rendering ---
+static void draw_editor_textbox(const char* text, int len, bool show_cursor, int prev_len) {
+    int chars_per_line = 25;
+    int max_lines = 6;
+    
+    // Calculate the current line block to determine if we need to scroll
+    int current_line = len / chars_per_line;
+    int start_idx = 0;
+    if (current_line >= max_lines) {
+        start_idx = (current_line - max_lines + 1) * chars_per_line;
+    }
+    
+    // Calculate previous state to detect if a line wrap triggered a scroll
+    int prev_line = (prev_len >= 0) ? (prev_len / chars_per_line) : 0;
+    int prev_start_idx = 0;
+    if (prev_line >= max_lines) {
+        prev_start_idx = (prev_line - max_lines + 1) * chars_per_line;
+    }
 
+    // Full redraw when scrolling a whole line up/down or starting fresh
+    if (prev_len < 0 || start_idx != prev_start_idx) {
+        rectan(2, 15, 157, 75, ST7735_BLACK); 
+        int pos_x = 5;
+        int pos_y = 15; 
+        
+        for (int i = start_idx; i < len; i++) {
+            char single_char[2] = { text[i], '\0' };
+            // Draw confirmed text in WHITE
+            drawtext(pos_x, pos_y, single_char, ST7735_WHITE, ST7735_BLACK, 1);
+            
+            pos_x += 6; 
+            if (pos_x > 150) { 
+                pos_x = 5;
+                pos_y += 10;
+            }
+        }
+        if (show_cursor) {
+            // Keep the active cursor in ORANGE
+            drawtext(pos_x, pos_y, "_", ST7735_ORANGE, ST7735_BLACK, 1);
+        }
+    } else {
+        // Delta update to prevent flickering within the same line block
+        int pos_x = 5; 
+        int pos_y = 15; 
+        
+        // Fast-forward coordinates to the previous cursor position
+        for (int i = start_idx; i < prev_len; i++) {
+            pos_x += 6; 
+            if (pos_x > 150) { pos_x = 5; pos_y += 10; }
+        }
 
+        if (len > prev_len) {
+            // Append new characters
+            for (int i = prev_len; i < len; i++) {
+                char single_char[2] = { text[i], '\0' };
+                drawtext(pos_x, pos_y, single_char, ST7735_WHITE, ST7735_BLACK, 1);
+                pos_x += 6; 
+                if (pos_x > 150) { pos_x = 5; pos_y += 10; }
+            }
+            if (show_cursor) {
+                drawtext(pos_x, pos_y, "_", ST7735_ORANGE, ST7735_BLACK, 1);
+            }
+        } else if (len < prev_len) {
+            // Delete characters (Backspace)
+            int new_x = 5;
+            int new_y = 18; 
+            for (int i = start_idx; i < len; i++) {
+                new_x += 6; 
+                if (new_x > 150) { new_x = 5; new_y += 10; }
+            }
+            
+            if (show_cursor) {
+                drawtext(new_x, new_y, "_", ST7735_ORANGE, ST7735_BLACK, 1);
+            }
+            
+            // Wipe the old characters and old cursor position
+            int erase_x = new_x + 6;
+            int erase_y = new_y;
+            if (erase_x > 150) { erase_x = 5; erase_y += 10; }
+            
+            for (int i = len; i <= prev_len; i++) {
+                drawtext(erase_x, erase_y, " ", ST7735_BLACK, ST7735_BLACK, 1);
+                erase_x += 6; 
+                if (erase_x > 150) { erase_x = 5; erase_y += 10; }
+            }
+        }
+    }
+}
+
+// --- Helper: Delta Renderer for a Single Key ---
+static void draw_keyboard_key(int idx, int active_layer, bool is_selected) {
+    uint16_t color = is_selected ? ST7735_ORANGE : ST7735_WHITE;
+    uint16_t bg = ST7735_BLACK;
+    
+    if (idx >= 0 && idx <= 25) { 
+        const char* charset = (active_layer == LAYER_ABC) ? kbd_abc : 
+                              (active_layer == LAYER_ABC_UPPER) ? kbd_ABC : 
+                              (active_layer == LAYER_NUM) ? kbd_num : kbd_sym;
+        
+        char single_char[2] = { charset[idx], '\0' };
+        int row = (idx <= 12) ? 0 : 1;
+        int col = (idx <= 12) ? idx : (idx - 13);
+        
+        int kx = 5 + (col * KBD_LETTER_SPACING);
+        int ky = 81 + (row * 12); // Pushed down to Y=85
+        
+        drawtext(kx, ky, single_char, color, bg, 1);
+        
+    } else if (idx == 26) { // Custom drawn ? character
+        int sx = 5 + 13 * KBD_LETTER_SPACING;
+        int sy = 87; 
+        
+        // Clear previous bounding box to avoid artifacts during delta switch
+        rectan(sx, sy, sx + 6, sy + 7, ST7735_BLACK);
+        
+        drawFastHLine(sx, sy + 6, 6, color);
+        drawFastVLine(sx, sy + 4, 3, color);
+        drawFastVLine(sx + 5, sy + 4, 3, color);
+        
+    } else if (idx == 27) { // CANCEL button
+        drawtext(120, 81, "CANCEL", color, bg, 1);
+    } else if (idx == 28) { // ENTER button
+        uint16_t enter_color = is_selected ? ST7735_ORANGE : ST7735_WHITE;
+        drawtext(120, 93, "ENTER ", enter_color, bg, 1); 
+    } else if (idx >= 29 && idx <= 32) { // Layer Selectors
+        int target_layer = idx - 29;
+        uint16_t l_color = is_selected ? ST7735_ORANGE : ((active_layer == target_layer) ? ST7735_CYAN : ST7735_WHITE);
+        
+        if (idx == 29) drawtext(5,  105, "abc ",  l_color, bg, 1);
+        if (idx == 30) drawtext(35, 105, "ABC ",  l_color, bg, 1);
+        if (idx == 31) drawtext(5,  117, "?123", l_color, bg, 1);
+        if (idx == 32) drawtext(35, 117, "=\\< ", l_color, bg, 1);
+    }
+}
+
+// --- Main Modal Function ---
+bool full_text_editor(const char* title, char* buffer, size_t max_len) {
+    int cursor_idx = 0; 
+    int prev_cursor = -1;
+    int active_layer = LAYER_ABC;
+    
+    bool full_redraw = true;
+    bool text_changed = true;
+    
+    int text_len = strlen(buffer); 
+    int prev_text_len = -1; 
+    
+    while(BT_OK == 0 || BT1 == 0) SYS_Tasks();
+
+    black_screen();
+
+    while (1) {
+        SYS_Tasks();
+
+        if (full_redraw) {
+            drawtext(2, 2, (char*)title, ST7735_WHITE, ST7735_BLACK, 1);
+            drawFastHLine(0, 76, 160, ST7735_WHITE); // Separator pushed down
+            grid_keyboard_dice_hash(); 
+            
+            for (int i = 0; i <= 32; i++) {
+                draw_keyboard_key(i, active_layer, (i == cursor_idx));
+            }
+            
+            full_redraw = false;
+            text_changed = true; 
+            prev_text_len = -1; // Force textbox full redraw
+            prev_cursor = cursor_idx;
+        } else if (prev_cursor != cursor_idx) {
+            draw_keyboard_key(prev_cursor, active_layer, false);
+            draw_keyboard_key(cursor_idx, active_layer, true);
+            prev_cursor = cursor_idx;
+        }
+
+        if (text_changed) {
+            draw_editor_textbox(buffer, text_len, true, prev_text_len);
+            prev_text_len = text_len;
+            text_changed = false;
+        }
+
+        if (BT_OK == 0) { 
+            delay_ms(30); 
+            if (BT_OK == 0) { 
+                update_entropy_coefficients();
+                LED = 1;
+                
+                if (cursor_idx >= 0 && cursor_idx <= 25) { 
+                    char c = (active_layer == LAYER_ABC) ? kbd_abc[cursor_idx] : 
+                             (active_layer == LAYER_ABC_UPPER) ? kbd_ABC[cursor_idx] : 
+                             (active_layer == LAYER_NUM) ? kbd_num[cursor_idx] : kbd_sym[cursor_idx];
+                    
+                    if (c != ' ' && text_len < max_len - 1) {
+                        buffer[text_len] = c;
+                        buffer[text_len + 1] = '\0';
+                        text_len++;
+                        text_changed = true;
+                    }
+                } else if (cursor_idx == 26) { 
+                    if (text_len < max_len - 1) {
+                        buffer[text_len] = ' ';
+                        buffer[text_len + 1] = '\0';
+                        text_len++;
+                        text_changed = true;
+                    }
+                } else if (cursor_idx == 27) { 
+                    while(BT_OK == 0) SYS_Tasks();
+                    delay_ms(30);
+                    black_screen();
+                    LED = 0;
+                    return false; 
+                } else if (cursor_idx == 28) { 
+                    while(BT_OK == 0) SYS_Tasks();
+                    delay_ms(30);
+                    black_screen();
+                    LED = 0;
+                    return true; 
+                } else if (cursor_idx >= 29 && cursor_idx <= 32) { 
+                    active_layer = cursor_idx - 29;
+                    cursor_idx = 0; 
+                    full_redraw = true; 
+                    // Guarantee no background artifacts when swapping layers
+                    rectan(0, 80, 159, 103, ST7735_BLACK);
+                }
+                
+                while(BT_OK == 0) SYS_Tasks(); 
+                delay_ms(30); 
+                LED = 0;
+            }
+        }
+        
+        if (BT1 == 0) { 
+            delay_ms(30);
+            if (BT1 == 0) {
+                update_entropy_coefficients();
+                LED = 1;
+                if (text_len > 0) {
+                    text_len--;
+                    buffer[text_len] = '\0';
+                    text_changed = true;
+                } else {
+                    while(BT1 == 0) SYS_Tasks();
+                    delay_ms(30);
+                    black_screen();
+                    return false; 
+                }
+                while(BT1 == 0) SYS_Tasks();
+                delay_ms(30);
+                LED = 0;
+            }
+        }
+
+        if (BT6 == 0) { 
+            delay_ms(30);
+            if (BT6 == 0) {
+                update_entropy_coefficients();
+                if (cursor_idx <= 11) cursor_idx++;
+                else if (cursor_idx == 12) cursor_idx = 26; // a..m -> SPACE
+                else if (cursor_idx >= 13 && cursor_idx <= 24) cursor_idx++;
+                else if (cursor_idx == 25) cursor_idx = 26; // n..z -> SPACE
+                else if (cursor_idx == 26) cursor_idx = 28; // SPACE -> ENTER
+                else if (cursor_idx == 27) cursor_idx = 0;  // CANCEL -> 'a'
+                else if (cursor_idx == 28) cursor_idx = 13; // ENTER -> 'n'
+                else if (cursor_idx == 29) cursor_idx = 30; 
+                else if (cursor_idx == 30) cursor_idx = 29; 
+                else if (cursor_idx == 31) cursor_idx = 32; 
+                else if (cursor_idx == 32) cursor_idx = 31; 
+                
+                while(BT6 == 0) SYS_Tasks();
+                delay_ms(30);
+            }
+        }
+
+        if (BT2 == 0) { 
+            delay_ms(30);
+            if (BT2 == 0) {
+                update_entropy_coefficients();
+                if (cursor_idx == 0) cursor_idx = 27;       // 'a' -> CANCEL
+                else if (cursor_idx >= 1 && cursor_idx <= 12) cursor_idx--;
+                else if (cursor_idx == 13) cursor_idx = 28; // 'n' -> ENTER
+                else if (cursor_idx >= 14 && cursor_idx <= 25) cursor_idx--;
+                else if (cursor_idx == 26) cursor_idx = 25; // SPACE -> 'z'
+                else if (cursor_idx == 27) cursor_idx = 26; // CANCEL -> SPACE
+                else if (cursor_idx == 28) cursor_idx = 26; // ENTER -> SPACE
+                else if (cursor_idx == 29) cursor_idx = 30; 
+                else if (cursor_idx == 30) cursor_idx = 29; 
+                else if (cursor_idx == 31) cursor_idx = 32; 
+                else if (cursor_idx == 32) cursor_idx = 31; 
+                
+                while(BT2 == 0) SYS_Tasks();
+                delay_ms(30);
+            }
+        }
+
+        if (BT4 == 0) { 
+            delay_ms(30);
+            if (BT4 == 0) {
+                update_entropy_coefficients();
+                if (cursor_idx >= 0 && cursor_idx <= 12) cursor_idx += 13; 
+                else if (cursor_idx >= 13 && cursor_idx <= 16) cursor_idx = 29; 
+                else if (cursor_idx >= 17 && cursor_idx <= 25) cursor_idx = 30; 
+                else if (cursor_idx == 26) cursor_idx = 28; // SPACE -> ENTER
+                else if (cursor_idx == 27) cursor_idx = 28; // CANCEL -> ENTER
+                else if (cursor_idx == 28) cursor_idx = 27; // ENTER -> CANCEL
+                else if (cursor_idx == 29) cursor_idx = 31; 
+                else if (cursor_idx == 30) cursor_idx = 32; 
+                else if (cursor_idx == 31) cursor_idx = 0;  
+                else if (cursor_idx == 32) cursor_idx = 6;  
+                
+                while(BT4 == 0) SYS_Tasks();
+                delay_ms(30);
+            }
+        }
+
+        if (BT5 == 0) { 
+            delay_ms(30);
+            if (BT5 == 0) {
+                update_entropy_coefficients();
+                if (cursor_idx >= 13 && cursor_idx <= 25) cursor_idx -= 13; 
+                else if (cursor_idx >= 0 && cursor_idx <= 5) cursor_idx = 31;  
+                else if (cursor_idx >= 6 && cursor_idx <= 12) cursor_idx = 32; 
+                else if (cursor_idx == 26) cursor_idx = 27; // SPACE -> CANCEL
+                else if (cursor_idx == 27) cursor_idx = 28; // CANCEL -> ENTER
+                else if (cursor_idx == 28) cursor_idx = 27; // ENTER -> CANCEL
+                else if (cursor_idx == 29) cursor_idx = 13; 
+                else if (cursor_idx == 30) cursor_idx = 20; 
+                else if (cursor_idx == 31) cursor_idx = 29; 
+                else if (cursor_idx == 32) cursor_idx = 30; 
+                
+                while(BT5 == 0) SYS_Tasks();
+                delay_ms(30);
+            }
+        }
+    }
+}
 
 
 
@@ -4863,7 +5210,19 @@ int main ( void ){
                     case DOWN_BT:
                     case LEFT_BT:
                     case RIGHT_BT:
-                        transition_to_main();
+                        if (full_text_editor("NEW NOTE:", my_text_buffer, TEXT_EDITOR_MAX_LEN)) {
+                            black_screen();
+
+                            drawtext(5, 5, "TEXT SAVED:", ST7735_GREEN, ST7735_BLACK, 1);
+
+                            // Pass false for show_cursor, and -1 for prev_len to force a full clean draw
+                            draw_editor_textbox(my_text_buffer, strlen(my_text_buffer), false, -1);
+
+                            delay_ms(5000); 
+                            transition_to_main(); 
+                        } else {
+                            transition_to_main();
+                        }
                         break;
                     default:
                         break;
