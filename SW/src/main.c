@@ -217,7 +217,8 @@ int settings_pointer = 0;
 #define cBIP84_SEEDQR 2
 #define cBIP84_FINGERPRINT 3
 #define cBIP84_XPUB 4
-#define cBIP84_n_opt 5
+#define cBIP84_PASSPHRASE 5
+#define cBIP84_n_opt 6
 #endif
 
 #define cOBFUS_SHIFT 0
@@ -293,7 +294,8 @@ const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS AD
 const char* const menu_erase[]    = {"ERASE SECTOR", "WIPE ALL CARD"};
 
 #if defined(v2)
-const char* const menu_bip84[]    = {"RECEIVE ADDRESS", "CHANGE ADDRESS", "SEEDQR", "FINGERPRINT", "XPUB"};
+const char* const menu_bip84[] = {"RECEIVE ADDRESS", "CHANGE ADDRESS", "SEEDQR", "FINGERPRINT", "XPUB", "PASSPHRASE"};
+char bip84_passphrase[200] = {0}; // Holds the optional BIP39 passphrase
 #endif
 
 #if defined(v2)
@@ -1687,7 +1689,7 @@ static void draw_editor_title_full(char* title, int len, int t_cursor, bool is_e
             drawtext(pos_x, 2, s, ST7735_WHITE, ST7735_BLACK, 1);
         } else {
             // Overwrite trailing characters with empty black spaces
-            drawtext(pos_x, 2, " ", ST7735_BLACK, ST7735_BLACK, 1);
+            drawtext(pos_x, 2, " ", ST7735_WHITE, ST7735_BLACK, 1);
         }
         
         pos_x += 6;
@@ -2230,7 +2232,10 @@ void precompute_bip84_account(void) {
 
     // Generate the master seed (This loop triggers the green progress bar)
     uint8_t seed[64];
-    PBKDF2_HMAC_SHA512(mnemonic_str, "mnemonic", 2048, seed, 64);
+    char bip39_salt[250] = "mnemonic"; 
+    strcat(bip39_salt, bip84_passphrase); 
+    
+    PBKDF2_HMAC_SHA512(mnemonic_str, bip39_salt, 2048, seed, 64);
 
     HDNode root;
     if (!hdnode_from_seed(seed, 64, SECP256K1_NAME, &root)) return;
@@ -7245,7 +7250,20 @@ int main ( void ){
             case SHOW_SEED_MENU:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        if (bip84_menu_pointer == cBIP84_SEEDQR) {
+                        if (bip84_menu_pointer == cBIP84_PASSPHRASE) {
+                            char pass_title[25] = "BIP39 PASSPHRASE:";
+                            // Open text editor. Returns true if user selects SAVE
+                            if (full_text_editor(pass_title, 25, bip84_passphrase, 200, PASSPHRASE_MODE)) {
+                                // Invalidate cache to force a new derivation with the passphrase
+                                bip84_account_cached = false;
+                                black_screen();
+                                estado = PRECOMPUTE_BIP84; // Will recalculate and show progress bar
+                            } else {
+                                // User cancelled, return to menu cleanly
+                                black_screen();
+                                print_bip84_menu();
+                            }
+                        } else if (bip84_menu_pointer == cBIP84_SEEDQR) {
                             if (!seedqr_enabled) {
                                 black_screen();
                                 drawtext(1, 20, "SEEDQR DISABLED", ST7735_RED, ST7735_BLACK, 1);
