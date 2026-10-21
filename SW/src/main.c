@@ -931,7 +931,33 @@ typedef enum
 #if defined(v2)
 bool validate_and_load_qr(uint8_t *buffer, int length) {
     
-    // --- FIX FOR ISSUE 2: Remove trailing whitespace/newlines ---
+    // --- PRO FIX: Handle CompactQR FIRST, treating it as strictly binary data ---
+    // CompactQR payload is exactly 16 or 32 bytes. Hardware scanners may append \r, \n, or \0, 
+    // making the total received length 17-20 or 33-36 bytes.
+    // Since the shortest possible Text SeedQR is 47 characters and Numeric is 48, 
+    // any length in these ranges is guaranteed to be a CompactQR.
+    if ((length >= 16 && length <= 20) || (length >= 32 && length <= 36)) {
+        
+        int compact_len = (length < 32) ? 16 : 32;
+        size_pointer = (compact_len == 16) ? cSIZE_12 : cSIZE_24;
+        
+        // Clear target array
+        for (int i = 0; i < 36; i++) {
+            data_array_256b[i] = 0;
+        }
+        
+        // Blindly copy exactly 16 or 32 bytes of raw entropy. 
+        // We completely ignore scanner suffixes (bytes at index 16+ or 32+)
+        for (int i = 0; i < compact_len; i++) {
+            data_array_256b[i] = buffer[i];
+        }
+        
+        return true;
+    }
+    
+    // --- Now it is safe to trim string artifacts for Text and Numeric QR ---
+    // At this point we know the buffer is text, so if a byte matches '\r' or ' ', 
+    // it is genuinely a scanner artifact, not valid binary entropy.
     while (length > 0 && (buffer[length - 1] == '\r' || 
                           buffer[length - 1] == '\n' || 
                           buffer[length - 1] == ' '  || 
@@ -939,22 +965,7 @@ bool validate_and_load_qr(uint8_t *buffer, int length) {
         length--;
     }
     
-    buffer[length] = '\0';
-    
-    // --- FIX FOR ISSUE 1: Proper 16/32 byte Compact SeedQR handling ---
-    if (length == 16 || length == 32) {
-        size_pointer = (length == 16) ? cSIZE_12 : cSIZE_24;
-        
-        for (int i = 0; i < 36; i++) {
-            data_array_256b[i] = 0;
-        }
-        
-        for (int i = 0; i < length; i++) {
-            data_array_256b[i] = buffer[i];
-        }
-        
-        return true;
-    }
+    buffer[length] = '\0'; // Properly terminate the string for string processing
     
     // 2. Check if standard SeedQR (48 or 96 numeric digits)
     bool is_numeric = true;
@@ -970,7 +981,7 @@ bool validate_and_load_qr(uint8_t *buffer, int length) {
         size_pointer = (words == 12) ? cSIZE_12 : cSIZE_24;
         for (int i = 0; i < 36; i++) data_array_256b[i] = 0;
         
-        int last_val = 0; // Fix: Track the last word index
+        int last_val = 0; 
         
         for (int w = 0; w < words; w++) {
             int val = (buffer[w*4]-'0')*1000 + (buffer[w*4+1]-'0')*100 + (buffer[w*4+2]-'0')*10 + (buffer[w*4+3]-'0');
@@ -983,14 +994,13 @@ bool validate_and_load_qr(uint8_t *buffer, int length) {
             }
         }
         
-        // Fix: Use the tracked value instead of calling read_11bit_value
         const char *last_word = get_word(last_val); 
         return matches_last_word_checksum(data_array_256b, (char *)last_word, size_pointer);
     }
     
     // 3. Check pure text sequence (Space/Newline separated)
     int word_count = 0;
-    int last_val = 0; // Fix: Track the last word index
+    int last_val = 0; 
     for (int i = 0; i < 36; i++) data_array_256b[i] = 0;
     
     char tmp_word[16];
@@ -1005,14 +1015,15 @@ bool validate_and_load_qr(uint8_t *buffer, int length) {
                 if (word_count > 24) return false;
                 
                 write_11bit_value(data_array_256b, word_count, idx);
-                last_val = idx; // Fix: Save the index
+                last_val = idx; 
                 
                 char_idx = 0;
             }
         } else {
             if (char_idx < 15) {
                 char c = buffer[i];
-                if (c >= 'A' && c <= 'Z') c = c + ('a' - 'A'); // lowercase
+                // Convert lowercase letters to UPPERCASE to match the UI dictionary
+                if (c >= 'a' && c <= 'z') c = c - ('a' - 'A'); 
                 tmp_word[char_idx++] = c;
             } else {
                 return false; // Word is suspiciously long
@@ -1023,7 +1034,6 @@ bool validate_and_load_qr(uint8_t *buffer, int length) {
     if (word_count == 12 || word_count == 24) {
         size_pointer = (word_count == 12) ? cSIZE_12 : cSIZE_24;
         
-        // Fix: Use the tracked value instead of calling read_11bit_value
         const char *last_word = get_word(last_val); 
         return matches_last_word_checksum(data_array_256b, (char *)last_word, size_pointer);
     }

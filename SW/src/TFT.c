@@ -435,7 +435,8 @@ void drawChar(unsigned int x, unsigned int y, unsigned int c, unsigned int color
           line = Font[(c - 32)*5 + i];
         else
           line = Font2[(c - 'S')*5 + i];
-        for(j=0; j<7; j++, line >>= 1) {
+        // FIX: Loop up to 8 pixels to draw the bottom tail of lowercase letters (g, y, p, q, j)
+        for(j=0; j<8; j++, line >>= 1) {        
           if(line & 0x01) {
             if(size == 1) drawPixel(x+i, y+j, color);
             else          fillRect(x+(i*size), y+(j*size), size, size, color);
@@ -455,9 +456,10 @@ void drawtext(unsigned int x, unsigned int y, char *_text, unsigned int color, u
       cursor_x = x, cursor_y = y;
       textsize = strlen(_text);
       for(i = 0; i < textsize; i++){
+        // FIX: Adjust vertical line spacing from 7 to 8 pixels to match the new character height
         if(wrap && ((cursor_x + size * 5) > _width)){
-          cursor_x = 0;
-          cursor_y = cursor_y + size * 7 + 3 ;
+            cursor_x = 0;
+            cursor_y = cursor_y + size * 8 + 3 ;
           if(cursor_y > _height) cursor_y = _height;
           if(_text[i] == 0x20) goto _skip; }
         drawChar(cursor_x, cursor_y, _text[i], color, bg, size);
