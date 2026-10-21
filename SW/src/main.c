@@ -668,14 +668,7 @@ void draw_hex16(unsigned int x, unsigned int y, uint16_t numero, int N, unsigned
 static void process_bip85_derivation(void) {
     char mnemonic_str[250]; 
     get_mnemonic_string(mnemonic_str);
-    
-    // Convert the entire mnemonic string to lowercase per BIP39 standard
-    for (int i = 0; mnemonic_str[i] != '\0'; i++) {
-        if (mnemonic_str[i] >= 'A' && mnemonic_str[i] <= 'Z') {
-            mnemonic_str[i] = mnemonic_str[i] + ('a' - 'A');
-        }
-    }
-    
+   
     uint8_t seed[64];
     PBKDF2_HMAC_SHA512(mnemonic_str, "mnemonic", 2048, seed, 64);
     
@@ -1022,8 +1015,8 @@ bool validate_and_load_qr(uint8_t *buffer, int length) {
         } else {
             if (char_idx < 15) {
                 char c = buffer[i];
-                // Convert lowercase letters to UPPERCASE to match the UI dictionary
-                if (c >= 'a' && c <= 'z') c = c - ('a' - 'A'); 
+                // FIX: Convert uppercase letters to lowercase to match the UI dictionary
+                if (c >= 'A' && c <= 'Z') c = c - ('a' - 'A'); 
                 tmp_word[char_idx++] = c;
             } else {
                 return false; // Word is suspiciously long
@@ -2228,12 +2221,6 @@ void precompute_bip84_account(void) {
     char mnemonic_str[250];
     get_mnemonic_string(mnemonic_str);
 
-    // Convert the entire mnemonic string to lowercase per BIP39 standard
-    for (int i = 0; mnemonic_str[i] != '\0'; i++) {
-        if (mnemonic_str[i] >= 'A' && mnemonic_str[i] <= 'Z') {
-            mnemonic_str[i] = mnemonic_str[i] + ('a' - 'A');
-        }
-    }
 
     // Draw initial outline for progress bar over the footer area
     rectan(0, 110, 159, 127, BLACK);
@@ -3378,8 +3365,9 @@ static char *add_char(char *text, int letter_index, size_t capacity) {
     if (len + 1 >= capacity) {
         return text;
     }
-
-    text[len] = (char)('A' + letter_index);
+    
+    // FIX: Base character is now 'a' instead of 'A'
+    text[len] = (char)('a' + letter_index);
     text[len + 1] = '\0';
     return text;
 }
@@ -3420,8 +3408,9 @@ static void get_valid_next_letters(const char *prefix, bool *valid_letters) {
         int cmp = strncmp(ptr, prefix, prefix_len);
         if (cmp == 0) {
             char next_char = ptr[prefix_len];
-            if (next_char >= 'A' && next_char <= 'Z') {
-                valid_letters[next_char - 'A'] = true;
+            // FIX: Check against lowercase ASCII boundaries
+            if (next_char >= 'a' && next_char <= 'z') {
+                valid_letters[next_char - 'a'] = true;
             }
         } else if (cmp > 0) {
             break; // Dictionary is sorted, we can stop
@@ -3817,7 +3806,8 @@ void print_keyboard(int index, bool word_found, bool *valid_letters){
     int current_index = 0;
     uint16_t color;
 
-    for (letra = 'A'; letra <= 'Z'; letra++) {
+    // FIX: Iterate through lowercase letters
+    for (letra = 'a'; letra <= 'z'; letra++) {
         letter_text[0] = letra;
         letter_text[1] = '\0';
         
