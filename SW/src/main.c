@@ -2049,7 +2049,7 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
 
 
 
-#if defined(v2)
+
 static void draw_bip84_wrapped_text(const char *text, int x, int y,
                                     int line_length, int line_count)
 {
@@ -2333,8 +2333,18 @@ void print_update_fw_warning(void) {
 
 static void print_bip84_menu(void)
 {
-    black_screen();
     print_generic_menu(menu_bip84, cBIP84_n_opt, bip84_menu_pointer);
+    // --- ADDED: Display master fingerprint at the bottom left ---
+    // Convert the 32-bit fingerprint into an 8-character hex string
+    char fgp_str[9];
+    u16_to_hex4((bip84_master_fingerprint >> 16) & 0xFFFF, fgp_str);
+    u16_to_hex4(bip84_master_fingerprint & 0xFFFF, fgp_str + 4);
+    fgp_str[8] = '\0';
+    
+    // Draw the fingerprint string in Cyan color at x=5, y=117 (bottom left corner)
+    drawtext(5, 117, fgp_str, ST7735_CYAN, ST7735_BLACK, 1);
+    
+    estado = SHOW_SEED_MENU;
     estado = SHOW_SEED_MENU;
 }
 
@@ -2349,40 +2359,46 @@ static void print_bip84_info_screen(void)
 
     if (bip84_menu_pointer == cBIP84_RECEIVE ||
         bip84_menu_pointer == cBIP84_CHANGE) {
+        
+        // Only run the heavy elliptic curve derivation when we actually need an address
         uint32_t chain = (bip84_menu_pointer == cBIP84_RECEIVE) ? 0u : 1u;
         bool derived = get_current_bip84_result(chain, bip84_address_index, &result);
+        
         title = (chain == 0u) ? "RECEIVE ADDRESS" : "CHANGE ADDRESS";
         drawtext(1, 5, (char *)title, ST7735_ORANGE, ST7735_BLACK, 1);
         drawtext(1, 15, "INDEX:", ST7735_WHITE, ST7735_BLACK, 1);
+        
         u16_to_str((unsigned int)bip84_address_index, index_text);
         drawtext(45, 15, index_text, ST7735_CYAN, ST7735_BLACK, 1);
+        
         if (derived) {
             draw_bip84_wrapped_text(result.address, 1, 30, 25, 6);
         } else {
             drawtext(1, 30, "DERIVATION ERROR", ST7735_RED, ST7735_BLACK, 1);
         }
+        
     } else if (bip84_menu_pointer == cBIP84_FINGERPRINT) {
-        if (get_current_bip84_result(0, 0, &result)) {
-            drawtext(1, 5, "MASTER FINGERPRINT", ST7735_ORANGE, ST7735_BLACK, 1);
-            drawtext(1, 30, result.fingerprint, ST7735_CYAN, ST7735_BLACK, 2);
-        } else {
-            drawtext(1, 5, "FINGERPRINT ERROR", ST7735_RED, ST7735_BLACK, 1);
-        }
+        // FAST PATH: Read directly from the cached global variable
+        char fgp_str[9];
+        u16_to_hex4((bip84_master_fingerprint >> 16) & 0xFFFF, fgp_str);
+        u16_to_hex4(bip84_master_fingerprint & 0xFFFF, fgp_str + 4);
+        fgp_str[8] = '\0';
+        
+        drawtext(1, 5, "MASTER FINGERPRINT", ST7735_ORANGE, ST7735_BLACK, 1);
+        drawtext(1, 30, fgp_str, ST7735_CYAN, ST7735_BLACK, 2);
+        
     } else {
-        if (get_current_bip84_result(0, 0, &result)) {
-            value = (bip84_extended_key_page == 0) ? result.xpub : result.zpub;
-            title = (bip84_extended_key_page == 0) ? "XPUB" : "ZPUB";
-            drawtext(1, 5, (char *)title, ST7735_ORANGE, ST7735_BLACK, 1);
-            draw_bip84_wrapped_text(value, 1, 18, 25, 7);
-        } else {
-            drawtext(1, 5, "KEY DERIVATION ERROR", ST7735_RED, ST7735_BLACK, 1);
-        }
+        // FAST PATH: Read the XPUB/ZPUB directly from the cached global buffers
+        value = (bip84_extended_key_page == 0) ? bip84_cached_xpub : bip84_cached_zpub;
+        title = (bip84_extended_key_page == 0) ? "XPUB" : "ZPUB";
+        
+        drawtext(1, 5, (char *)title, ST7735_ORANGE, ST7735_BLACK, 1);
+        draw_bip84_wrapped_text(value, 1, 18, 25, 7);
     }
 
     grid_menu2();
     estado = SHOW_BIP84_INFO;
 }
-#endif
 
 
 
@@ -3970,14 +3986,9 @@ void extract_11bit_groups(BYTE *data, size_t size) {
         }
     }
     print_camera(145,20,cNOTSAFE);
-    if (seedqr_enabled) {
-        drawtext(135,80, "SEED", ST7735_ORANGE, ST7735_BLACK, 1);
-        drawtext(145,90, "QR", ST7735_ORANGE, ST7735_BLACK, 1);
-
-        print_rigth_arrow(150,105, ST7735_WHITE);
-        drawtext(90,117, "QR COMPACT", ST7735_ORANGE, ST7735_BLACK, 1);
-        print_rigth_arrow(150,123, ST7735_WHITE);
-    }
+    // QR functions moved to the next menu, so we just show a MENU hint
+    drawtext(120, 117, "LOAD", ST7735_ORANGE, ST7735_BLACK, 1);
+    print_rigth_arrow(150, 123, ST7735_WHITE);
     
     drawtext(7,117, "SAVE TO SD", ST7735_ORANGE, ST7735_BLACK, 1);
     print_left_arrow(0,123, ST7735_WHITE);
@@ -5184,6 +5195,114 @@ uint32_t sd_get_sector_count(void) {
     return sectors;
 }
 
+void scan_ur_animated_qr(void) {
+    // 1. Clear hardware errors and flush the UART buffer
+    if (U2STAbits.OERR) U2STAbits.OERR = 0; 
+    while (U2STAbits.URXDA) (void)U2RXREG; 
+
+    // Trigger command array for the GM861 scanner
+    uint8_t trigger_cmd[] = {0x7E, 0x00, 0x08, 0x01, 0x00, 0x02, 0x01, 0xAB, 0xCD};
+    
+    // 2. Initial trigger command to start the first scan
+    for (int i = 0; i < sizeof(trigger_cmd); i++) {
+        while (U2STAbits.UTXBF); 
+        U2TXREG = trigger_cmd[i]; 
+    }
+    
+    black_screen();
+    drawtext(10, 10, "SCANNING UR ANIMATED", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(10, 110, "PRESS BACK TO CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
+    
+    char rx_window[16] = {0}; 
+    char header_buf[16] = {0}; 
+    int h_idx = 0;
+    bool reading_header = false;
+    
+    // Timeout counter to auto-re-trigger if no data arrives
+    uint32_t no_data_timeout = 300000; 
+    
+    // 3. Infinite loop catching frames until BACK is pressed
+    while (BT1 == 1) { // BT1 is BACK_BT (Active LOW)
+        SYS_Tasks(); // Keep watchdog alive
+        
+        // Clear overrun flag immediately if it triggers at high speeds
+        if (U2STAbits.OERR) U2STAbits.OERR = 0; 
+        
+        if (U2STAbits.URXDA) {               
+            char c = U2RXREG;
+            no_data_timeout = 300000; // Reset timeout since data is actively arriving
+            
+            // End of frame detected via Carriage Return
+            if (c == '\r') {
+                // Give the scanner hardware a short breather to reset its internal state
+                delay_ms(1); 
+
+                // Fire the trigger command again to catch the next animated frame
+                for (int i = 0; i < sizeof(trigger_cmd); i++) {
+                    while (U2STAbits.UTXBF); 
+                    U2TXREG = trigger_cmd[i]; 
+                }
+                
+                // Reset the parser state machine for the new frame
+                reading_header = false;
+                h_idx = 0;
+                continue; 
+            }
+            
+            // Ignore Line Feed '\n'
+            if (c == '\n') continue;
+            
+            // Convert to uppercase for easy pattern matching
+            char cu = (c >= 'a' && c <= 'z') ? c - ('a' - 'A') : c;
+            
+            if (reading_header) {
+                if (c == '/' || h_idx >= 15) {
+                    // End of the "X-Y" header reached
+                    header_buf[h_idx] = '\0';
+                    
+                    // Clear the specific line and draw the new frame data
+                    rectan(10, 50, 159, 60, BLACK);
+                    drawtext(10, 50, "FRAME:", ST7735_GREEN, ST7735_BLACK, 1);
+                    drawtext(55, 50, header_buf, ST7735_CYAN, ST7735_BLACK, 1);
+                    
+                    reading_header = false;
+                    h_idx = 0;
+                } else {
+                    header_buf[h_idx++] = c; // Keep original casing for display
+                }
+            } else {
+                // Shift the 15-character sliding window
+                for(int i = 0; i < 14; i++) {
+                    rx_window[i] = rx_window[i+1];
+                }
+                rx_window[14] = cu;
+                rx_window[15] = '\0';
+                
+                // Look for the standard UR PSBT header
+                if (strcmp(rx_window, "UR:CRYPTO-PSBT/") == 0) {
+                    reading_header = true;
+                    h_idx = 0;
+                }
+            }
+        } else {
+            // Decrement timeout counter if no byte is available in this cycle
+            if (no_data_timeout > 0) {
+                no_data_timeout--;
+                if (no_data_timeout == 0) {
+                    // Timeout expired: re-trigger the scanner automatically
+                    for (int i = 0; i < sizeof(trigger_cmd); i++) {
+                        while (U2STAbits.UTXBF); 
+                        U2TXREG = trigger_cmd[i]; 
+                    }
+                    no_data_timeout = 300000; // Reset timeout counter
+                }
+            }
+        }
+    }
+    
+    // Wait for button release before exiting
+    while (BT1 == 0) SYS_Tasks();
+}
 
 int main ( void ){
     /* Initialize all modules */
@@ -5286,7 +5405,9 @@ int main ( void ){
     U2MODEbits.UEN = 0;
 
     // 4. Baud rate
-    U2BRG = 155; // 9600 bps at 24 MHz (Change to 51 if your clock is 8 MHz)
+    //U2BRG = 155; // 9600 bps at 24 MHz (Change to 51 if your clock is 8 MHz)
+    //U2BRG = 77; // 19200 bps at 24 MHz (Standard mode BRGH=0)
+    U2BRG = 12; // 115200 bps at 24 MHz (Standard mode BRGH=0)
 
     // 5. Enable module and pins
     U2STAbits.UTXEN = 1; // Enable TX
@@ -5439,7 +5560,7 @@ int main ( void ){
                     case DOWN_BT:
                     case LEFT_BT:
                     case RIGHT_BT:
-                        char pass_title[25] = "SEED:";
+                        /*char pass_title[25] = "SEED:";
                         if (full_text_editor(pass_title, 25, (char*)buffer, 400, PASSPHRASE_MODE)) {
                             black_screen();
 
@@ -5462,7 +5583,9 @@ int main ( void ){
                             transition_to_main(); 
                         } else {
                             transition_to_main();
-                        }
+                        }*/
+                        scan_ur_animated_qr();
+                        transition_to_main();
                         break;
                     default:
                         break;
@@ -7173,8 +7296,15 @@ int main ( void ){
                 // Perform the heavy calculation (shows progress bar)
                 precompute_bip84_account();
                 
-                // Redraw the screen to clean the progress bar and restore the footer buttons
-                redraw_show_seed_with_offset(); 
+                if (bip84_qr_return_to_menu) {
+                    // Returning from Passphrase edit, go back to BIP84 menu
+                    bip84_qr_return_to_menu = false;
+                    black_screen();
+                    print_bip84_menu();
+                } else {
+                    // Initial seed load, show the words screen
+                    redraw_show_seed_with_offset(); 
+                }
                 
                 // Flush any accidental button presses made while waiting
                 pulsed_bt = NONE;
@@ -7187,6 +7317,7 @@ int main ( void ){
                         bip84_address_index = 0;
                         bip84_extended_key_page = 0;
                         //bip84_account_cached = false;
+                        black_screen();
                         print_bip84_menu();
 #else
                         if (!seedqr_enabled) break; //QR disabled
@@ -7231,15 +7362,10 @@ int main ( void ){
                         estado=SEL_SD_BLOCK_WR;
                         break;
                     case RIGHT_BT: // Compact QR
-                        if (!seedqr_enabled) break; //QR disabled
-                        white_screen();
-                        draw_compactqr_code(16 + size_pointer*16, data_array_256b);
-                        print_camera(2,50,cNOTSAFE);
-                        print_camera(2,80,cNOTSAFE);
-                        print_camera(145,50,cNOTSAFE);
-                        print_camera(145,80,cNOTSAFE);
-                        print_left_arrow_black(5,123);
-                        estado = SHOW_QRSEED;
+                        bip84_address_index = 0;
+                        bip84_extended_key_page = 0;
+                        black_screen();
+                        print_bip84_menu();
 
                         break;
                     default:
@@ -7257,6 +7383,7 @@ int main ( void ){
                                 // Invalidate cache to force a new derivation with the passphrase
                                 bip84_account_cached = false;
                                 black_screen();
+                                bip84_qr_return_to_menu = true;
                                 estado = PRECOMPUTE_BIP84; // Will recalculate and show progress bar
                             } else {
                                 // User cancelled, return to menu cleanly
@@ -7305,15 +7432,14 @@ int main ( void ){
                 switch (pulsed_bt) {
                     case OK_BT: 
                         {
-                            BitcoinBip84Result result;
                             if (bip84_menu_pointer == cBIP84_XPUB) {
-                                if (get_current_bip84_result(0, 0, &result)) {
-                                    const char *value = (bip84_extended_key_page == 0) ? result.xpub : result.zpub;
-                                    draw_xpub_qr(value);
-                                    bip84_qr_return_to_info = true;
-                                    estado = SHOW_QRSEED;
-                                }
+                                // FAST PATH: Draw QR directly from cache without recalculating
+                                const char *value = (bip84_extended_key_page == 0) ? bip84_cached_xpub : bip84_cached_zpub;
+                                draw_xpub_qr(value);
+                                bip84_qr_return_to_info = true;
+                                estado = SHOW_QRSEED;
                             } else if (bip84_menu_pointer == cBIP84_RECEIVE || bip84_menu_pointer == cBIP84_CHANGE) {
+                                BitcoinBip84Result result;
                                 uint32_t chain = (bip84_menu_pointer == cBIP84_RECEIVE) ? 0u : 1u;
                                 if (get_current_bip84_result(chain, bip84_address_index, &result)) {
                                     black_screen();
@@ -7326,6 +7452,7 @@ int main ( void ){
                         }
                         break;
                     case BACK_BT:
+                        black_screen();
                         print_bip84_menu();
                         break;
                     case UP_BT:
@@ -7369,6 +7496,7 @@ int main ( void ){
                         }
                         if (bip84_qr_return_to_menu) {
                             bip84_qr_return_to_menu = false;
+                            black_screen();
                             print_bip84_menu();
                             break;
                         }
@@ -7382,6 +7510,7 @@ int main ( void ){
 #if defined(v2)
                         if (bip84_qr_return_to_menu) {
                             bip84_qr_return_to_menu = false;
+                            black_screen();
                             print_bip84_menu();
                             break;
                         }
