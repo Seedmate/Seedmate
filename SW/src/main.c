@@ -468,6 +468,19 @@ int card_sequence_len = 0;
 int card_decks_needed = 0;
 int card_view_page = 0;
 
+// --- UR ANIMATED QR (SPARROW PSBT) GLOBALS ---
+#define MAX_UR_TOTAL_PARTS   30
+#define MAX_UR_PAYLOAD_LEN   400
+
+
+// 2D Memory pool to securely store the captured payloads
+static char ur_payloads[MAX_UR_TOTAL_PARTS][MAX_UR_PAYLOAD_LEN];
+static uint16_t ur_payload_lengths[MAX_UR_TOTAL_PARTS];
+
+// Sequence history
+static uint32_t ur_stored_seqs[MAX_UR_TOTAL_PARTS]; 
+static uint32_t ur_total_parts_expected = 0;
+static uint32_t ur_unique_parts_count = 0;
 
 // ============================================================================
 // BIP85 Derivation Engine
@@ -5195,112 +5208,239 @@ uint32_t sd_get_sector_count(void) {
     return sectors;
 }
 
-void scan_ur_animated_qr(void) {
-    // 1. Clear hardware errors and flush the UART buffer
-    if (U2STAbits.OERR) U2STAbits.OERR = 0; 
-    while (U2STAbits.URXDA) (void)U2RXREG; 
 
-    // Trigger command array for the GM861 scanner
-    uint8_t trigger_cmd[] = {0x7E, 0x00, 0x08, 0x01, 0x00, 0x02, 0x01, 0xAB, 0xCD};
-    
-    // 2. Initial trigger command to start the first scan
+//QR animated scan
+
+// Helper: Fast trigger command via UART
+static inline void trigger_gm861_scanner(void) {
+    const uint8_t trigger_cmd[] = {0x7E, 0x00, 0x08, 0x01, 0x00, 0x02, 0x01, 0xAB, 0xCD};
     for (int i = 0; i < sizeof(trigger_cmd); i++) {
-        while (U2STAbits.UTXBF); 
-        U2TXREG = trigger_cmd[i]; 
+        while (U2STAbits.UTXBF);
+        U2TXREG = trigger_cmd[i];
+    }
+}
+
+// Helper: safe integer to string conversion
+static void fast_itoa(uint32_t val, char* buf) {
+    if (val == 0) {
+        buf[0] = '0';
+        buf[1] = '\0';
+        return;
+    }
+    char temp[12];
+    int i = 0;
+    while (val > 0) {
+        temp[i++] = (val % 10) + '0';
+        val /= 10;
+    }
+    int j = 0;
+    while (i > 0) {
+        buf[j++] = temp[--i];
+    }
+    buf[j] = '\0';
+}
+
+// Helper: parse unsigned integers
+static bool parse_ur_header_numbers(const char *hdr, uint32_t *out_seq, uint32_t *out_total) {
+    uint32_t s = 0, t = 0;
+    const char *p = hdr;
+    
+    if (*p < '0' || *p > '9') return false;
+    while (*p >= '0' && *p <= '9') {
+        s = (s * 10) + (*p - '0');
+        p++;
     }
     
+    if (*p != '-') return false;
+    p++;
+    
+    if (*p < '0' || *p > '9') return false;
+    while (*p >= '0' && *p <= '9') {
+        t = (t * 10) + (*p - '0');
+        p++;
+    }
+    
+    *out_seq = s;
+    *out_total = t;
+    return true;
+}
+
+void scan_ur_animated_qr(void) {
+    // 1. Draw UI FIRST
     black_screen();
     drawtext(10, 10, "SCANNING UR ANIMATED", ST7735_YELLOW, ST7735_BLACK, 1);
     drawtext(10, 110, "PRESS BACK TO CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
-    
-    char rx_window[16] = {0}; 
-    char header_buf[16] = {0}; 
-    int h_idx = 0;
-    bool reading_header = false;
-    
-    // Timeout counter to auto-re-trigger if no data arrives
-    uint32_t no_data_timeout = 300000; 
-    
-    // 3. Infinite loop catching frames until BACK is pressed
-    while (BT1 == 1) { // BT1 is BACK_BT (Active LOW)
-        SYS_Tasks(); // Keep watchdog alive
-        
-        // Clear overrun flag immediately if it triggers at high speeds
-        if (U2STAbits.OERR) U2STAbits.OERR = 0; 
-        
-        if (U2STAbits.URXDA) {               
-            char c = U2RXREG;
-            no_data_timeout = 300000; // Reset timeout since data is actively arriving
-            
-            // End of frame detected via Carriage Return
-            if (c == '\r') {
-                // Give the scanner hardware a short breather to reset its internal state
-                delay_ms(1); 
 
-                // Fire the trigger command again to catch the next animated frame
-                for (int i = 0; i < sizeof(trigger_cmd); i++) {
-                    while (U2STAbits.UTXBF); 
-                    U2TXREG = trigger_cmd[i]; 
-                }
+    // 2. Initialize memory
+    memset(ur_payload_lengths, 0, sizeof(ur_payload_lengths));
+    memset(ur_stored_seqs, 0, sizeof(ur_stored_seqs));
+    ur_total_parts_expected = 0;
+    ur_unique_parts_count = 0;
+
+    uint32_t trigger_timeout = 200000;
+    char burst_buffer[MAX_UR_PAYLOAD_LEN + 50]; 
+    char status_str[32]; 
+    char num_buf[6];
+
+    // 3. Flush FIFO and fire
+    if (U2STAbits.OERR) U2STAbits.OERR = 0;
+    while (U2STAbits.URXDA) (void)U2RXREG;
+    trigger_gm861_scanner();
+
+    while (BT1 == 1) { 
+        if (U2STAbits.OERR) U2STAbits.OERR = 0;
+
+        if (U2STAbits.URXDA) {
+            int burst_idx = 0;
+            uint32_t byte_timeout = 400000;
+
+            // --- BURST CAPTURE MODE ---
+            // Read until timeout, buffer full, or newline
+            while (byte_timeout > 0 && burst_idx < sizeof(burst_buffer) - 1) {
+                if (U2STAbits.OERR) U2STAbits.OERR = 0;
                 
-                // Reset the parser state machine for the new frame
-                reading_header = false;
-                h_idx = 0;
-                continue; 
-            }
-            
-            // Ignore Line Feed '\n'
-            if (c == '\n') continue;
-            
-            // Convert to uppercase for easy pattern matching
-            char cu = (c >= 'a' && c <= 'z') ? c - ('a' - 'A') : c;
-            
-            if (reading_header) {
-                if (c == '/' || h_idx >= 15) {
-                    // End of the "X-Y" header reached
-                    header_buf[h_idx] = '\0';
+                if (U2STAbits.URXDA) {
+                    char c = U2RXREG;
+                    byte_timeout = 400000; 
                     
-                    // Clear the specific line and draw the new frame data
-                    rectan(10, 50, 159, 60, BLACK);
-                    drawtext(10, 50, "FRAME:", ST7735_GREEN, ST7735_BLACK, 1);
-                    drawtext(55, 50, header_buf, ST7735_CYAN, ST7735_BLACK, 1);
-                    
-                    reading_header = false;
-                    h_idx = 0;
-                } else {
-                    header_buf[h_idx++] = c; // Keep original casing for display
-                }
-            } else {
-                // Shift the 15-character sliding window
-                for(int i = 0; i < 14; i++) {
-                    rx_window[i] = rx_window[i+1];
-                }
-                rx_window[14] = cu;
-                rx_window[15] = '\0';
-                
-                // Look for the standard UR PSBT header
-                if (strcmp(rx_window, "UR:CRYPTO-PSBT/") == 0) {
-                    reading_header = true;
-                    h_idx = 0;
-                }
-            }
-        } else {
-            // Decrement timeout counter if no byte is available in this cycle
-            if (no_data_timeout > 0) {
-                no_data_timeout--;
-                if (no_data_timeout == 0) {
-                    // Timeout expired: re-trigger the scanner automatically
-                    for (int i = 0; i < sizeof(trigger_cmd); i++) {
-                        while (U2STAbits.UTXBF); 
-                        U2TXREG = trigger_cmd[i]; 
+                    if (c == '\r' || c == '\n') {
+                        if (burst_idx > 0) {
+                            break; // Valid end of transmission
+                        }
+                    } else {
+                        burst_buffer[burst_idx++] = c;
                     }
-                    no_data_timeout = 300000; // Reset timeout counter
+                } else {
+                    byte_timeout--;
+                }
+            }
+            burst_buffer[burst_idx] = '\0';
+
+            // --- DEBUG UI: PROVE DATA ARRIVED ---
+            if (burst_idx > 0) {
+                rectan(10, 25, 159, 38, BLACK); 
+                strcpy(status_str, "RX LEN: ");
+                fast_itoa(burst_idx, num_buf);
+                strcat(status_str, num_buf);
+                drawtext(10, 25, status_str, ST7735_CYAN, ST7735_BLACK, 1);
+            }
+
+            // --- PROCESS FRAME ---
+            // Process if we have enough bytes, regardless of newline presence
+            if (burst_idx > 15) {
+                const char target[] = "UR:CRYPTO-PSBT/";
+                char *header_start = NULL;
+
+                // Sliding window search for "UR:CRYPTO-PSBT/"
+                for (int i = 0; i <= burst_idx - 15; i++) {
+                    bool match = true;
+                    for (int j = 0; j < 15; j++) {
+                        char cu = burst_buffer[i + j];
+                        if (cu >= 'a' && cu <= 'z') cu -= ('a' - 'A'); // To uppercase
+                        if (cu != target[j]) {
+                            match = false;
+                            break;
+                        }
+                    }
+                    if (match) {
+                        header_start = &burst_buffer[i];
+                        break;
+                    }
+                }
+
+                if (header_start != NULL) {
+                    char *payload_start = header_start + 15;
+                    char header_numbers[16] = {0};
+                    int h_num_idx = 0;
+                    char *payload_clean = NULL;
+
+                    // Extract sequence and total (e.g. 44-6)
+                    for (int i = 0; payload_start[i] != '\0'; i++) {
+                        if (payload_start[i] == '/') {
+                            header_numbers[h_num_idx] = '\0';
+                            payload_clean = &payload_start[i + 1];
+                            break;
+                        } else if (h_num_idx < 15) {
+                            header_numbers[h_num_idx++] = payload_start[i];
+                        }
+                    }
+
+                    if (payload_clean != NULL) {
+                        uint32_t seq = 0, total = 0;
+                        if (parse_ur_header_numbers(header_numbers, &seq, &total)) {
+                            
+                            // Visual feedback for successful parse
+                            rectan(10, 45, 159, 58, BLACK); 
+                            drawtext(10, 45, "SEEING: ", ST7735_YELLOW, ST7735_BLACK, 1);
+                            drawtext(60, 45, header_numbers, ST7735_CYAN, ST7735_BLACK, 1);
+
+                            if (total > 0 && total <= MAX_UR_TOTAL_PARTS) {
+                                if (ur_total_parts_expected == 0) ur_total_parts_expected = total;
+
+                                if (total == ur_total_parts_expected) {
+                                    bool is_duplicate = false;
+                                    for (uint32_t i = 0; i < ur_unique_parts_count; i++) {
+                                        if (ur_stored_seqs[i] == seq) {
+                                            is_duplicate = true;
+                                            break;
+                                        }
+                                    }
+
+                                    if (!is_duplicate && ur_unique_parts_count < ur_total_parts_expected) {
+                                        
+                                        int clean_len = 0;
+                                        while (payload_clean[clean_len] != '\0') clean_len++;
+
+                                        if (clean_len < MAX_UR_PAYLOAD_LEN) {
+                                            // Store new frame
+                                            ur_stored_seqs[ur_unique_parts_count] = seq;
+                                            memcpy(ur_payloads[ur_unique_parts_count], payload_clean, clean_len);
+                                            ur_payload_lengths[ur_unique_parts_count] = clean_len;
+                                            ur_unique_parts_count++;
+
+                                            // Update UI counter
+                                            rectan(10, 60, 159, 75, BLACK);
+                                            strcpy(status_str, "SAVED: ");
+                                            fast_itoa(ur_unique_parts_count, num_buf);
+                                            strcat(status_str, num_buf);
+                                            strcat(status_str, "/");
+                                            fast_itoa(total, num_buf);
+                                            strcat(status_str, num_buf);
+                                            
+                                            drawtext(10, 60, status_str, ST7735_GREEN, ST7735_BLACK, 1);
+                                            
+                                            if (ur_unique_parts_count == ur_total_parts_expected) {
+                                                drawtext(10, 85, "PSBT PARTS CAUGHT!", ST7735_GREEN, ST7735_BLACK, 1);
+                                                delay_ms(1500);
+                                                break; // Exit frame capture loop
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Clean UART buffer and re-trigger scanner
+            while (U2STAbits.URXDA) (void)U2RXREG;
+            trigger_gm861_scanner();
+            trigger_timeout = 200000;
+            
+        } else {
+            SYS_Tasks(); // Execute system tasks while UART is idle
+            
+            if (trigger_timeout > 0) {
+                trigger_timeout--;
+                if (trigger_timeout == 0) {
+                    trigger_gm861_scanner();
+                    trigger_timeout = 200000;
                 }
             }
         }
     }
-    
-    // Wait for button release before exiting
+
     while (BT1 == 0) SYS_Tasks();
 }
 
