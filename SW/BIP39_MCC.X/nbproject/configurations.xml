@@ -68,6 +68,10 @@
       <itemPath>../src/SSS/memzero.h</itemPath>
       <itemPath>../src/words_opt.h</itemPath>
       <itemPath>../src/sha512.h</itemPath>
+      <itemPath>../src/bytewords.h</itemPath>
+      <itemPath>../src/prng.h</itemPath>
+      <itemPath>../src/sampler.h</itemPath>
+      <itemPath>../src/fountain.h</itemPath>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
                    displayName="Important Files"
@@ -173,6 +177,10 @@
       <itemPath>../src/main.c</itemPath>
       <itemPath>../src/sha512.c</itemPath>
       <itemPath>../src/EFF_short.c</itemPath>
+      <itemPath>../src/bytewords.c</itemPath>
+      <itemPath>../src/prng.c</itemPath>
+      <itemPath>../src/sampler.c</itemPath>
+      <itemPath>../src/fountain.c</itemPath>
     </logicalFolder>
   </logicalFolder>
   <sourceRootList>

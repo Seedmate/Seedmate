@@ -73,6 +73,10 @@
 #include "SSS/shamir.h"
 #include "QRCode-master/src/qrcode.h"
 #include "memzero.h"
+#include "bytewords.h"
+#include "prng.h"
+#include "sampler.h"
+#include "fountain.h"
 
 #define QR_SCALE 4 // Size of each module in pixels
 #define SCREEN_WIDTH 160
@@ -469,18 +473,10 @@ int card_decks_needed = 0;
 int card_view_page = 0;
 
 // --- UR ANIMATED QR (SPARROW PSBT) GLOBALS ---
-#define MAX_UR_TOTAL_PARTS   30
+//#define MAX_UR_TOTAL_PARTS   30
 #define MAX_UR_PAYLOAD_LEN   400
 
 
-// 2D Memory pool to securely store the captured payloads
-static char ur_payloads[MAX_UR_TOTAL_PARTS][MAX_UR_PAYLOAD_LEN];
-static uint16_t ur_payload_lengths[MAX_UR_TOTAL_PARTS];
-
-// Sequence history
-static uint32_t ur_stored_seqs[MAX_UR_TOTAL_PARTS]; 
-static uint32_t ur_total_parts_expected = 0;
-static uint32_t ur_unique_parts_count = 0;
 
 // ============================================================================
 // BIP85 Derivation Engine
@@ -5240,73 +5236,92 @@ static void fast_itoa(uint32_t val, char* buf) {
     buf[j] = '\0';
 }
 
-// Helper: parse unsigned integers
-static bool parse_ur_header_numbers(const char *hdr, uint32_t *out_seq, uint32_t *out_total) {
-    uint32_t s = 0, t = 0;
-    const char *p = hdr;
-    
-    if (*p < '0' || *p > '9') return false;
-    while (*p >= '0' && *p <= '9') {
-        s = (s * 10) + (*p - '0');
-        p++;
+
+
+// Helper to convert byte to a 2-character hex string
+static void byte_to_hex(uint8_t val, char *out_str) {
+    const char hex_chars[] = "0123456789ABCDEF";
+    out_str[0] = hex_chars[(val >> 4) & 0x0F];
+    out_str[1] = hex_chars[val & 0x0F];
+    out_str[2] = '\0';
+}
+
+// Helper to read CBOR integer and advance cursor
+static uint32_t read_cbor_int(const uint8_t *buf, uint32_t *idx) {
+    uint8_t v = buf[(*idx)++] & 0x1F;
+    if (v < 24) return v;
+    if (v == 24) return buf[(*idx)++];
+    if (v == 25) { uint32_t val = (buf[*idx]<<8) | buf[*idx+1]; *idx += 2; return val; }
+    if (v == 26) {
+        uint32_t val = (buf[*idx]<<24) | (buf[*idx+1]<<16) | (buf[*idx+2]<<8) | buf[*idx+3];
+        *idx += 4;
+        return val;
     }
-    
-    if (*p != '-') return false;
-    p++;
-    
-    if (*p < '0' || *p > '9') return false;
-    while (*p >= '0' && *p <= '9') {
-        t = (t * 10) + (*p - '0');
-        p++;
+    return 0;
+}
+
+static uint32_t crc32_update(uint32_t crc, const uint8_t *data, size_t length) {
+    for (size_t i = 0; i < length; i++) {
+        crc ^= data[i];
+        for (int j = 0; j < 8; j++) {
+            if (crc & 1) crc = (crc >> 1) ^ 0xEDB88320;
+            else crc >>= 1;
+        }
     }
-    
-    *out_seq = s;
-    *out_total = t;
-    return true;
+    return crc;
 }
 
 void scan_ur_animated_qr(void) {
-    // 1. Draw UI FIRST
     black_screen();
-    drawtext(10, 10, "SCANNING UR ANIMATED", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(10, 10, "DIAGNOSTIC MODE", ST7735_YELLOW, ST7735_BLACK, 1);
     drawtext(10, 110, "PRESS BACK TO CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
 
-    // 2. Initialize memory
-    memset(ur_payload_lengths, 0, sizeof(ur_payload_lengths));
-    memset(ur_stored_seqs, 0, sizeof(ur_stored_seqs));
-    ur_total_parts_expected = 0;
-    ur_unique_parts_count = 0;
+    init_bytewords_lookup();
+    fountain_init();
 
     uint32_t trigger_timeout = 200000;
-    char burst_buffer[MAX_UR_PAYLOAD_LEN + 50]; 
-    char status_str[32]; 
+    char burst_buffer[MAX_UR_PAYLOAD_LEN * 2 + 50]; 
     char num_buf[6];
+    char status_str[32];
 
-    // 3. Flush FIFO and fire
+    // Telemetry counters for Test 1 (Frame CRC filter) and Test 2 (crc32_update self-test)
+    uint32_t bw_crc_ok_count = 0;
+    uint32_t bw_crc_err_count = 0;
+
+    // Clear OERR flag and flush buffer ONLY once at startup
     if (U2STAbits.OERR) U2STAbits.OERR = 0;
     while (U2STAbits.URXDA) (void)U2RXREG;
     trigger_gm861_scanner();
 
+    bool psbt_recovered = false;
+    uint32_t expected_msg_len = 0;
+
     while (BT1 == 1) { 
-        if (U2STAbits.OERR) U2STAbits.OERR = 0;
+        SYS_Tasks(); // Keep MCU watchdog alive in the main loop
+
+        // PROBE 1: UART OVERRUN DETECTION
+        if (U2STAbits.OERR) {
+            U2STAbits.OERR = 0;
+            drawtext(10, 20, "UART OERR DETECTED!", ST7735_RED, ST7735_BLACK, 1);
+        }
 
         if (U2STAbits.URXDA) {
             int burst_idx = 0;
             uint32_t byte_timeout = 400000;
 
-            // --- BURST CAPTURE MODE ---
-            // Read until timeout, buffer full, or newline
             while (byte_timeout > 0 && burst_idx < sizeof(burst_buffer) - 1) {
-                if (U2STAbits.OERR) U2STAbits.OERR = 0;
+                SYS_Tasks(); // Keep MCU alive during long UART bursts
+                
+                if (U2STAbits.OERR) {
+                    U2STAbits.OERR = 0;
+                    drawtext(10, 20, "UART OERR DETECTED!", ST7735_RED, ST7735_BLACK, 1);
+                }
                 
                 if (U2STAbits.URXDA) {
                     char c = U2RXREG;
                     byte_timeout = 400000; 
-                    
                     if (c == '\r' || c == '\n') {
-                        if (burst_idx > 0) {
-                            break; // Valid end of transmission
-                        }
+                        if (burst_idx > 0) break;
                     } else {
                         burst_buffer[burst_idx++] = c;
                     }
@@ -5316,104 +5331,195 @@ void scan_ur_animated_qr(void) {
             }
             burst_buffer[burst_idx] = '\0';
 
-            // --- DEBUG UI: PROVE DATA ARRIVED ---
-            if (burst_idx > 0) {
-                rectan(10, 25, 159, 38, BLACK); 
-                strcpy(status_str, "RX LEN: ");
-                fast_itoa(burst_idx, num_buf);
-                strcat(status_str, num_buf);
-                drawtext(10, 25, status_str, ST7735_CYAN, ST7735_BLACK, 1);
-            }
+            // Reset scanner timeout since we just received data
+            trigger_timeout = 200000;
 
-            // --- PROCESS FRAME ---
-            // Process if we have enough bytes, regardless of newline presence
             if (burst_idx > 15) {
                 const char target[] = "UR:CRYPTO-PSBT/";
                 char *header_start = NULL;
 
-                // Sliding window search for "UR:CRYPTO-PSBT/"
                 for (int i = 0; i <= burst_idx - 15; i++) {
                     bool match = true;
                     for (int j = 0; j < 15; j++) {
                         char cu = burst_buffer[i + j];
-                        if (cu >= 'a' && cu <= 'z') cu -= ('a' - 'A'); // To uppercase
-                        if (cu != target[j]) {
-                            match = false;
-                            break;
-                        }
+                        if (cu >= 'a' && cu <= 'z') cu -= ('a' - 'A'); 
+                        if (cu != target[j]) { match = false; break; }
                     }
-                    if (match) {
-                        header_start = &burst_buffer[i];
-                        break;
-                    }
+                    if (match) { header_start = &burst_buffer[i]; break; }
                 }
 
                 if (header_start != NULL) {
                     char *payload_start = header_start + 15;
-                    char header_numbers[16] = {0};
-                    int h_num_idx = 0;
                     char *payload_clean = NULL;
 
-                    // Extract sequence and total (e.g. 44-6)
                     for (int i = 0; payload_start[i] != '\0'; i++) {
                         if (payload_start[i] == '/') {
-                            header_numbers[h_num_idx] = '\0';
                             payload_clean = &payload_start[i + 1];
                             break;
-                        } else if (h_num_idx < 15) {
-                            header_numbers[h_num_idx++] = payload_start[i];
                         }
                     }
 
                     if (payload_clean != NULL) {
-                        uint32_t seq = 0, total = 0;
-                        if (parse_ur_header_numbers(header_numbers, &seq, &total)) {
+                        uint8_t decoded_bytes[512]; 
+                        uint32_t decoded_len = 0;
+                        bool decode_error = false;
+
+                        int payload_char_len = strlen(payload_clean);
+                        if ((payload_char_len % 2 != 0) || (payload_char_len < 10)) {
+                            decode_error = true;
+                        } else {
+                            for (int k = 0; k < payload_char_len; k += 2) {
+                                int val = decode_bytewords_pair(payload_clean[k], payload_clean[k+1]);
+                                if (val == -1) { decode_error = true; break; }
+                                if (decoded_len < sizeof(decoded_bytes)) {
+                                    decoded_bytes[decoded_len++] = (uint8_t)val;
+                                } else {
+                                    decode_error = true; break;
+                                }
+                            }
+                        }
+
+                        // TEST 1 & TEST 2: INDIVIDUAL FRAME BYTEWORDS CRC-32 VERIFICATION
+                        if (!decode_error && decoded_len > 4) {
+                            uint32_t bw_data_len = decoded_len - 4;
                             
-                            // Visual feedback for successful parse
-                            rectan(10, 45, 159, 58, BLACK); 
-                            drawtext(10, 45, "SEEING: ", ST7735_YELLOW, ST7735_BLACK, 1);
-                            drawtext(60, 45, header_numbers, ST7735_CYAN, ST7735_BLACK, 1);
+                            // Extract the 4-byte Big-Endian CRC appended to the Bytewords payload
+                            uint32_t expected_bw_crc = ((uint32_t)decoded_bytes[bw_data_len] << 24) |
+                                                       ((uint32_t)decoded_bytes[bw_data_len + 1] << 16) |
+                                                       ((uint32_t)decoded_bytes[bw_data_len + 2] << 8)  |
+                                                       ((uint32_t)decoded_bytes[bw_data_len + 3]);
 
-                            if (total > 0 && total <= MAX_UR_TOTAL_PARTS) {
-                                if (ur_total_parts_expected == 0) ur_total_parts_expected = total;
+                            // Compute CRC-32 over the frame CBOR data using the MCU's crc32_update
+                            uint32_t calc_bw_crc = crc32_update(0xFFFFFFFFU, decoded_bytes, bw_data_len) ^ 0xFFFFFFFFU;
 
-                                if (total == ur_total_parts_expected) {
-                                    bool is_duplicate = false;
-                                    for (uint32_t i = 0; i < ur_unique_parts_count; i++) {
-                                        if (ur_stored_seqs[i] == seq) {
-                                            is_duplicate = true;
-                                            break;
-                                        }
-                                    }
+                            if (calc_bw_crc == expected_bw_crc) {
+                                bw_crc_ok_count++;
+                                decoded_len = bw_data_len;
+                            } else {
+                                bw_crc_err_count++;
+                                decode_error = true; // Reject corrupted UART frame before it pollutes Fountain XOR
+                            }
 
-                                    if (!is_duplicate && ur_unique_parts_count < ur_total_parts_expected) {
+                            // Display live Bytewords CRC telemetry on line Y=32
+                            rectan(10, 32, 159, 43, BLACK);
+                            strcpy(status_str, "BW OK:");
+                            fast_itoa(bw_crc_ok_count, num_buf);
+                            strcat(status_str, num_buf);
+                            strcat(status_str, " ERR:");
+                            fast_itoa(bw_crc_err_count, num_buf);
+                            strcat(status_str, num_buf);
+                            drawtext(10, 32, status_str, (bw_crc_err_count > 0) ? ST7735_RED : ST7735_CYAN, ST7735_BLACK, 1);
+                        } else {
+                            decode_error = true;
+                        }
+
+                        if (!decode_error && decoded_len > 0) {
+                            if (decoded_bytes[0] == 0x85) { 
+                                uint32_t cursor = 1;
+                                uint32_t cbor_seq = read_cbor_int(decoded_bytes, &cursor);
+                                uint32_t cbor_total = read_cbor_int(decoded_bytes, &cursor);
+                                uint32_t cbor_msg_len = read_cbor_int(decoded_bytes, &cursor);
+                                uint32_t cbor_checksum = read_cbor_int(decoded_bytes, &cursor);
+
+                                uint8_t str_type = decoded_bytes[cursor++];
+                                uint32_t frag_len = 0;
+                                if ((str_type & 0xE0) == 0x40) { 
+                                    uint8_t v = str_type & 0x1F;
+                                    if (v < 24) frag_len = v;
+                                    else if (v == 24) frag_len = decoded_bytes[cursor++];
+                                    else if (v == 25) { frag_len = ((uint32_t)decoded_bytes[cursor]<<8) | decoded_bytes[cursor+1]; cursor += 2; }
+                                }
+
+                                if (frag_len > 0 && (cursor + frag_len) <= decoded_len) {
+                                    uint8_t *fragment_data = &decoded_bytes[cursor];
+                                    
+                                    bool complete = fountain_process_frame(cbor_seq, cbor_total, cbor_msg_len, cbor_checksum, fragment_data, frag_len);
+                                    
+                                    // PROBE 2: MEMORY LEAK MONITORING (MIXED COUNT)
+                                    rectan(10, 45, 159, 105, BLACK);
+                                    strcpy(status_str, "PURE: ");
+                                    fast_itoa(fountain_get_pure_count(), num_buf);
+                                    strcat(status_str, num_buf);
+                                    strcat(status_str, "/");
+                                    fast_itoa(cbor_total, num_buf);
+                                    strcat(status_str, num_buf);
+                                    drawtext(10, 45, status_str, ST7735_GREEN, ST7735_BLACK, 1);
+                                    
+                                    strcpy(status_str, "MIXED BUF: ");
+                                    fast_itoa(fountain_get_mixed_count(), num_buf);
+                                    strcat(status_str, num_buf);
+                                    drawtext(10, 60, status_str, ST7735_ORANGE, ST7735_BLACK, 1);
+
+                                    if (complete) {
+                                        uint32_t crc = 0xFFFFFFFFU;
+                                        uint32_t bytes_checked = 0;
                                         
-                                        int clean_len = 0;
-                                        while (payload_clean[clean_len] != '\0') clean_len++;
-
-                                        if (clean_len < MAX_UR_PAYLOAD_LEN) {
-                                            // Store new frame
-                                            ur_stored_seqs[ur_unique_parts_count] = seq;
-                                            memcpy(ur_payloads[ur_unique_parts_count], payload_clean, clean_len);
-                                            ur_payload_lengths[ur_unique_parts_count] = clean_len;
-                                            ur_unique_parts_count++;
-
-                                            // Update UI counter
-                                            rectan(10, 60, 159, 75, BLACK);
-                                            strcpy(status_str, "SAVED: ");
-                                            fast_itoa(ur_unique_parts_count, num_buf);
-                                            strcat(status_str, num_buf);
-                                            strcat(status_str, "/");
-                                            fast_itoa(total, num_buf);
-                                            strcat(status_str, num_buf);
+                                        // Rebuild complete message to check final CRC32
+                                        for (uint32_t i = 0; i < cbor_total; i++) {
+                                            uint8_t *part_data = fountain_get_part(i);
+                                            uint32_t part_len = fountain_get_part_length(i);
                                             
-                                            drawtext(10, 60, status_str, ST7735_GREEN, ST7735_BLACK, 1);
-                                            
-                                            if (ur_unique_parts_count == ur_total_parts_expected) {
-                                                drawtext(10, 85, "PSBT PARTS CAUGHT!", ST7735_GREEN, ST7735_BLACK, 1);
-                                                delay_ms(1500);
-                                                break; // Exit frame capture loop
+                                            // Truncate trailing XOR padding from the final fragment
+                                            if (bytes_checked + part_len > cbor_msg_len) {
+                                                part_len = cbor_msg_len - bytes_checked;
                                             }
+                                            crc = crc32_update(crc, part_data, part_len);
+                                            bytes_checked += part_len;
+                                            if (bytes_checked >= cbor_msg_len) break;
+                                        }
+                                        crc ^= 0xFFFFFFFFU;
+
+                                        if (crc == cbor_checksum) {
+                                            psbt_recovered = true;
+                                            expected_msg_len = cbor_msg_len; 
+                                            break; // Break the URXDA loop
+                                        } else {
+                                            // HALT ON ERROR SO WE CAN READ THE EXACT VALUES
+                                            rectan(5, 62, 159, 112, BLACK);
+                                            drawtext(5, 62, "CRC FAIL! (PAUSED)", ST7735_RED, ST7735_BLACK, 1);
+                                            
+                                            char hex_dbg[24];
+                                            drawtext(5, 74, "CALC:", ST7735_WHITE, ST7735_BLACK, 1);
+                                            u16_to_hex4((crc >> 16) & 0xFFFF, hex_dbg);
+                                            u16_to_hex4(crc & 0xFFFF, &hex_dbg[4]);
+                                            drawtext(40, 74, hex_dbg, ST7735_YELLOW, ST7735_BLACK, 1);
+
+                                            drawtext(5, 86, "CBOR:", ST7735_WHITE, ST7735_BLACK, 1);
+                                            u16_to_hex4((cbor_checksum >> 16) & 0xFFFF, hex_dbg);
+                                            u16_to_hex4(cbor_checksum & 0xFFFF, &hex_dbg[4]);
+                                            drawtext(40, 86, hex_dbg, ST7735_CYAN, ST7735_BLACK, 1);
+
+                                            // Extract and display the first byte of up to 6 parts (P0-P5) to check for XOR corruption
+                                            drawtext(5, 98, "P0-P5:", ST7735_WHITE, ST7735_BLACK, 1);
+                                            memset(hex_dbg, 0, sizeof(hex_dbg));
+                                            for (int i = 0; i < cbor_total && i < 6; i++) {
+                                                uint8_t *p = fountain_get_part(i);
+                                                if (p) {
+                                                    char b_hex[3];
+                                                    byte_to_hex(p[0], b_hex);
+                                                    strcat(hex_dbg, b_hex);
+                                                } else {
+                                                    strcat(hex_dbg, "--");
+                                                }
+                                            }
+                                            drawtext(45, 98, hex_dbg, ST7735_ORANGE, ST7735_BLACK, 1);
+                                            
+                                            // Force override option
+                                            drawtext(5, 110, "OK=FORCE  BACK=EXIT", ST7735_WHITE, ST7735_BLACK, 1);
+
+                                            // Wait for button press
+                                            while (BT1 == 1 && BT_OK == 1) SYS_Tasks();
+                                            
+                                            if (BT_OK == 0) {
+                                                psbt_recovered = true;
+                                                expected_msg_len = cbor_msg_len;
+                                                while (BT_OK == 0) SYS_Tasks(); // Wait for release
+                                                break; 
+                                            }
+
+                                            if (BT1 == 0) break;
+                                            rectan(5, 62, 159, 112, BLACK);
+                                            fountain_init();
                                         }
                                     }
                                 }
@@ -5422,15 +5528,11 @@ void scan_ur_animated_qr(void) {
                     }
                 }
             }
+            
+            // NO buffer flushing here. Let the scanner stream uninterrupted.
 
-            // Clean UART buffer and re-trigger scanner
-            while (U2STAbits.URXDA) (void)U2RXREG;
-            trigger_gm861_scanner();
-            trigger_timeout = 200000;
-            
         } else {
-            SYS_Tasks(); // Execute system tasks while UART is idle
-            
+            // Trigger scanner ONLY if there is actual UART inactivity
             if (trigger_timeout > 0) {
                 trigger_timeout--;
                 if (trigger_timeout == 0) {
@@ -5439,10 +5541,157 @@ void scan_ur_animated_qr(void) {
                 }
             }
         }
+        
+        if (psbt_recovered) break; 
     }
 
-    while (BT1 == 0) SYS_Tasks();
+    if (psbt_recovered) {
+        black_screen();
+        drawtext(5, 5, "SUCCESS! PSBT REBUILT", ST7735_GREEN, ST7735_BLACK, 1);
+        
+        int cursor_x = 5;
+        int cursor_y = 25;
+        uint32_t total_bytes = 0;
+        uint32_t bytes_printed = 0;
+        
+        uint32_t final_total = fountain_get_total_parts();
+        
+        uint8_t sd_sector_buffer[512];
+        uint32_t export_bytes_written = 0;
+
+        // 1. Clear the 512-byte block buffer with zeros
+        for (int i = 0; i < 512; i++) {
+            sd_sector_buffer[i] = 0;
+        }
+        
+        for (uint32_t i = 0; i < final_total; i++) {
+            uint8_t *part_data = fountain_get_part(i);
+            uint32_t part_len = fountain_get_part_length(i);
+            
+            
+            for (uint32_t j = 0; j < part_len; j++) {
+                if (total_bytes >= expected_msg_len) break; // Drop XOR padding
+                
+                if (export_bytes_written < 512) {
+                    sd_sector_buffer[export_bytes_written] = part_data[j];
+                }  
+                export_bytes_written++;
+
+                if (bytes_printed >= 100 && bytes_printed < 200) {
+                    char hex_str[3];
+                    byte_to_hex(part_data[j], hex_str);
+                    drawtext(cursor_x, cursor_y, hex_str, ST7735_WHITE, ST7735_BLACK, 1);
+                    
+                    cursor_x += 18;
+                    if (cursor_x > 140) {
+                        cursor_x = 5;
+                        cursor_y += 12;
+                    }
+                    
+  
+                }                
+                bytes_printed++;
+                total_bytes++;
+            }
+        }
+        
+        char size_str[32];
+        strcpy(size_str, "SIZE: ");
+        fast_itoa(total_bytes, num_buf);
+        strcat(size_str, num_buf);
+        strcat(size_str, " BYTES");
+        drawtext(5, 110, size_str, ST7735_YELLOW, ST7735_BLACK, 1);
+        
+        // --- EXPORT RECOVERED PSBT TO SD CARD BLOCK (WITHOUT OBFUSCATION) ---
+        // Assuming the PSBT fits within a single 512-byte SD sector block.
+
+
+
+
+        // 3. Write the block directly to the selected SD sector slot
+        uint32_t target_sector = 6;
+
+        if (sd_write_block(target_sector, sd_sector_buffer)) {
+            // Success feedback on TFT screen
+            drawtext(70, 20 + (10 ), "PSBT WRITE OK", ST7735_GREEN, ST7735_BLACK, 1);
+        } else {
+            // Error feedback on TFT screen
+            drawtext(70, 20 + (10 ), "SD WRITE ERR", ST7735_RED, ST7735_BLACK, 1);
+        }
+        // --------------------------------------------------------------------
+        
+        while (BT1 == 1) SYS_Tasks(); // Wait for user to press back
+    }
+    
+    while (BT1 == 0) SYS_Tasks(); // Wait for button release
 }
+
+
+
+// Helper to print 64-bit integers on screen
+static void uint64_to_hex(uint64_t val, char *out_str) {
+    const char hex_chars[] = "0123456789ABCDEF";
+    for (int i = 15; i >= 0; i--) {
+        out_str[i] = hex_chars[val & 0x0F];
+        val >>= 4;
+    }
+    out_str[16] = '\0';
+}
+
+
+void test_prng_to_screen(void) {
+    black_screen();
+    drawtext(10, 10, "XOSHIRO256** TEST", ST7735_YELLOW, ST7735_BLACK, 1);
+    
+    // Seed with seq, total, msg_len, and checksum
+    prng_seed(369, 5, 446, 0);
+    
+    char hex_str[17];
+    int cursor_y = 30;
+    
+    for (int i = 0; i < 3; i++) {
+        uint64_t rand_val = prng_next();
+        uint64_to_hex(rand_val, hex_str);
+        
+        drawtext(10, cursor_y, hex_str, ST7735_GREEN, ST7735_BLACK, 1);
+        cursor_y += 15;
+    }
+    
+    delay_ms(5000);
+}
+
+
+void test_sampler_to_screen(void) {
+    black_screen();
+    drawtext(10, 10, "FOUNTAIN SAMPLER", ST7735_YELLOW, ST7735_BLACK, 1);
+    
+    uint32_t degree = 0;
+    uint32_t fragments[MAX_UR_TOTAL_PARTS];
+    
+    // Pass seq, total, msg_len, checksum, &degree, fragments
+    get_fountain_parts(369, 5, 446, 0, &degree, fragments);
+    
+    char debug_str[32];
+    char num_str[6];
+    
+    strcpy(debug_str, "DEGREE: ");
+    fast_itoa(degree, num_str);
+    strcat(debug_str, num_str);
+    drawtext(10, 30, debug_str, ST7735_GREEN, ST7735_BLACK, 1);
+    
+    strcpy(debug_str, "PARTS: ");
+    for (uint32_t i = 0; i < degree; i++) {
+        fast_itoa(fragments[i] + 1, num_str); 
+        strcat(debug_str, num_str);
+        if (i < degree - 1) strcat(debug_str, ", ");
+    }
+    
+    drawtext(10, 45, debug_str, ST7735_CYAN, ST7735_BLACK, 1);
+    
+    delay_ms(5000);
+}
+
+
 
 int main ( void ){
     /* Initialize all modules */
@@ -5724,7 +5973,16 @@ int main ( void ){
                         } else {
                             transition_to_main();
                         }*/
+                        
                         scan_ur_animated_qr();
+                        
+                        //test_bytewords_to_screen();
+                        
+                        //test_prng_to_screen();
+                        
+                        //test_sampler_to_screen();
+                        
+                        
                         transition_to_main();
                         break;
                     default:
