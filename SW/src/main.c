@@ -83,30 +83,7 @@
 #define SCREEN_HEIGHT 128
 
 
-#if defined(v1) 
-    #define cVersion "v1.7"
 
-    #define SD_SCK    PORTBbits.RB7
-    #define SD_CS     PORTCbits.RC9
-    #define SD_MISO   PORTAbits.RA4
-    #define SD_MOSI   PORTAbits.RA3
-
-    // Pin mapping
-    #define LED       PORTAbits.RA2   // CPU activity led
-
-    // LCD
-    #define LED_LCD   PORTBbits.RB10  // TFT backlight control
-
-    // Buttons
-    #define BT1       PORTBbits.RB2   // Button 1
-    #define BT2       PORTBbits.RB12  // Button 2
-    #define BT_OK     PORTBbits.RB13  // Button 3
-    #define BT4       PORTBbits.RB3   // Button 4
-    #define BT5       PORTBbits.RB11  // Button 5
-    #define BT6       PORTBbits.RB6   // Button 6
-#endif
-
-#if defined(v2) 
     #define cVersion "v1.8+"
 
     #include "crypto/ripemd160.h"
@@ -144,7 +121,6 @@
     // ============================================================================
     #define UPDATE_FLAG_ADDR ((volatile uint32_t *)0x80007F00)
     #define MAGIC_WORD_UPDATE 0x55AA1234
-#endif
 
     
     
@@ -158,36 +134,20 @@
 #define cQR_n_opt 2
 #define cSDBLOCK_n_opt 8
 #define cERASE_n_opt 2
-#if defined(v2)
     #define cSELINPUT_n_opt 3
-#else
-    #define cSELINPUT_n_opt 2
-#endif
 #define cDICE_MODE_n_opt 2
 #define cHASH_MODE_n_opt 2
 #define cRESOURCE_n_opt 5
-#if defined(v2)
     #define cSETTINGS_n_opt 3
-#else
-    #define cSETTINGS_n_opt 1
-#endif
 
 #define cSETTINGS_SEEDQR 0
 
-#if defined(v2)
     #define cSETTINGS_MCU_SERIAL 1
     #define cSETTINGS_UPDATE_FW 2
-#endif
-#if defined(v2)
     #define cSETTINGS_MCU_SERIAL 1
-#endif
 
     // Macro to easily move functions to the bootloader flash on v1 hardware
-#if defined(v1)
-    #define BOOTFLASH_FUNC __attribute__((section(".bootflash.text")))
-#else
     #define BOOTFLASH_FUNC
-#endif
 
 #define cEND_OF_LINE 150
 #define cENTROPY_BITS12W 127
@@ -215,7 +175,6 @@ int settings_pointer = 0;
 #define cRESOURCE_wordlist 3
 #define cRESOURCE_BINlist 4
 
-#if defined(v2)
 #define cBIP84_RECEIVE 0
 #define cBIP84_CHANGE 1
 #define cBIP84_SEEDQR 2
@@ -223,7 +182,6 @@ int settings_pointer = 0;
 #define cBIP84_XPUB 4
 #define cBIP84_PASSPHRASE 5
 #define cBIP84_n_opt 6
-#endif
 
 #define cOBFUS_SHIFT 0
 #define cOBFUS_NOT 1
@@ -244,9 +202,7 @@ int settings_pointer = 0;
 
 #define cKEYBOARD 0
 #define cFROMSD 1
-#if defined(v2)
     #define cQRSCAN 2
-#endif
 #define cSD_CHECKSUM_ADDR 64
 #define cSD_SIZE_ADDR 65
 #define cSD_XOR_ADDR 66 // Key storage offset
@@ -297,16 +253,10 @@ const char* const menu_resource[] = {"TUTORIAL", "BACKUP TOOL", "DICE TESTER", "
 const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB","1 WORD XOR","HOW TO"}; 
 const char* const menu_erase[]    = {"ERASE SECTOR", "WIPE ALL CARD"};
 
-#if defined(v2)
 const char* const menu_bip84[] = {"RECEIVE ADDRESS", "CHANGE ADDRESS", "SEEDQR", "FINGERPRINT", "XPUB", "PASSPHRASE"};
 char bip84_passphrase[200] = {0}; // Holds the optional BIP39 passphrase
-#endif
 
-#if defined(v2)
 const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD", "QR SCAN"};
-#else
-const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD"};
-#endif
 
 //Text editor
 #define KBD_LETTER_SPACING 8
@@ -337,7 +287,6 @@ int bip85_size = cSIZE_12;
 int bip85_index = 0;
 int bip85_cursor = 0;
 
-#if defined(v2)
 int bip84_menu_pointer = 0;
 uint32_t bip84_address_index = 0;
 int bip84_extended_key_page = 0;
@@ -354,7 +303,6 @@ HDNode bip84_change_node_cache;
 HDNode bip84_account_node;
 uint32_t bip84_master_fingerprint = 0;
 uint32_t bip84_account_parent_fingerprint = 0;
-#endif
 
 // XOR Globals moved from main()
 int xor_pointer = 0;
@@ -397,14 +345,8 @@ uint16_t card_history_start_bits[cCARD_MAX_HISTORY] = {0};
 uint8_t card_history_bit_len[cCARD_MAX_HISTORY] = {0};
 
 
-#if defined(v2)
 const char card_rank_chars[13] = { 'a', '2', '3', '4', '5', '6', '7', '8', '9', 't', 'j', 'q', 'k' };
 const char card_suit_chars[4] = { 'c', 'd', 'h', 's' };
-#else
-// Move simple character arrays to boot flash memory for legacy v1 hardware
-const char __attribute__((section(".bootflash"))) card_rank_chars[13] = { 'a', '2', '3', '4', '5', '6', '7', '8', '9', 't', 'j', 'q', 'k' };
-const char __attribute__((section(".bootflash"))) card_suit_chars[4] = { 'c', 'd', 'h', 's' };
-#endif
 const char * const card_entropy_map[52] = {
     "00000", "00001", "00010", "00011", "00100", "00101", "00110", "00111", "01000", "01001", "01010", "01011", "01100",
     "01101", "01110", "01111", "10000", "10001", "10010", "10011", "10100", "10101", "10110", "10111", "11000", "11001",
@@ -900,13 +842,11 @@ typedef enum
     SEL_SETTINGS,
     WARNING_SEEDQR,
     SHOW_CARD_ENCODING,
-    #if defined(v2)
         QR_SCANNING,
         SHOW_MCU_SERIAL,
         WARNING_UPDATE_FW,
         SHOW_SEED_MENU,
         SHOW_BIP84_INFO,
-    #endif
     SEL_ERASE_MODE,
     CONFIRM_WIPE_SD,
     PROCESS_WIPE_SD,
@@ -930,7 +870,6 @@ typedef enum
 // ============================================================================
 // QR Parsing & Validation Logic
 // ============================================================================
-#if defined(v2)
 bool validate_and_load_qr(uint8_t *buffer, int length) {
     
     // --- PRO FIX: Handle CompactQR FIRST, treating it as strictly binary data ---
@@ -1042,45 +981,25 @@ bool validate_and_load_qr(uint8_t *buffer, int length) {
     
     return false;
 }
-#endif
 
 
 void spi_send(uint8_t data) {
-#if defined(v2)
     // --- V2: Hardware SPI3 ---
     SPI3BUF = data;                  // 1. Write output buffer
     while (!SPI3STATbits.SPIRBF);    // 2. Wait TX ends
     (void)SPI3BUF;                   // 3. Fake read to avoid overflow of the RX buffer
 
-#else
-    // --- V1: Bit-banging  ---
-    for (int i = 0; i < 8; i++) {
-        if (data & 0x80) SD_MOSI = 1; else SD_MOSI = 0; // MOSI
-        SD_SCK = 1; // SCK HIGH
-        data <<= 1;
-        SD_SCK = 0; // SCK LOW
-    }
-#endif
 }
 
 // ============================================================================
 // BITMAP GRAPHICS REPLACEMENT
 // ============================================================================
-#if defined(v1)
-const uint16_t __attribute__((section(".bootflash"))) bmp_camera[11]      = { 0x0700, 0x0880, 0xF078, 0x8708, 0x8888, 0x9048, 0x9048, 0x8888, 0x8708, 0x8008, 0xFFF8 };
-const uint16_t __attribute__((section(".bootflash"))) bmp_arrow_up[6]     = { 0x2000, 0x7000, 0xF800, 0x2000, 0x2000, 0x2000 };
-const uint16_t __attribute__((section(".bootflash"))) bmp_arrow_down[6]   = { 0x2000, 0x2000, 0x2000, 0xF800, 0x7000, 0x2000 };
-const uint16_t __attribute__((section(".bootflash")))bmp_arrow_left[5]   = { 0x2000, 0x6000, 0xFC00, 0x6000, 0x2000 };
-const uint16_t __attribute__((section(".bootflash"))) bmp_arrow_right[5]  = { 0x1000, 0x1800, 0xFC00, 0x1800, 0x1000 };
-const uint16_t __attribute__((section(".bootflash"))) bmp_add_symbol[7]   = { 0x1000, 0x1000, 0x1000, 0xFE00, 0x1000, 0x1000, 0x1000 };
-#else
 const uint16_t bmp_camera[11]      = { 0x0700, 0x0880, 0xF078, 0x8708, 0x8888, 0x9048, 0x9048, 0x8888, 0x8708, 0x8008, 0xFFF8 };
 const uint16_t bmp_arrow_up[6]     = { 0x2000, 0x7000, 0xF800, 0x2000, 0x2000, 0x2000 };
 const uint16_t bmp_arrow_down[6]   = { 0x2000, 0x2000, 0x2000, 0xF800, 0x7000, 0x2000 };
 const uint16_t bmp_arrow_left[5]   = { 0x2000, 0x6000, 0xFC00, 0x6000, 0x2000 };
 const uint16_t bmp_arrow_right[5]  = { 0x1000, 0x1800, 0xFC00, 0x1800, 0x1000 };
 const uint16_t bmp_add_symbol[7]   = { 0x1000, 0x1000, 0x1000, 0xFE00, 0x1000, 0x1000, 0x1000 };
-#endif
 
 // Generic 1-bit monochrome renderer
 void draw_bitmap(int x, int y, int w, int h, const uint16_t *bitmap, uint16_t color) {
@@ -1125,44 +1044,6 @@ void print_camera(int x, int y, int safe) {
 // ============================================================================
 
 
-#if defined(v1)
-BOOTFLASH_FUNC void print_cursor_grid(){
-    drawFastHLine(60,105,90,WHITE);
-    drawFastHLine(60,115,90,WHITE);
-    drawFastHLine(60,125,90,WHITE);
-    drawFastVLine(60,105,20,WHITE);
-    drawFastVLine(90,105,20,WHITE);
-    drawFastVLine(120,105,20,WHITE);
-    drawFastVLine(150,105,20,WHITE);
-}
-
-
-BOOTFLASH_FUNC void print_minus_symbol(int x,int y){
-    drawFastHLine(x,y-3,7,WHITE);
-}
-
-BOOTFLASH_FUNC void print_ok(){
-    drawtext(130,107, OK_MSG, ST7735_WHITE, ST7735_WHITE, 1);
-}
-
-
-BOOTFLASH_FUNC void grid_menu1(){
-    print_cursor_grid();
-    print_up_arrow(103,114);
-    print_down_arrow(103,123);
-    print_ok();
-}
-BOOTFLASH_FUNC void grid_menuwr(){
-    print_cursor_grid();
-    print_up_arrow(103,114);
-    print_down_arrow(103,123);
-    print_ok();
-    drawtext(64,107, "LIST", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(122,117, "PAGE+", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(62,117, "PAGE-", ST7735_WHITE, ST7735_WHITE, 1);
-}
-
-#else
 
 void print_cursor_grid(){
     drawFastHLine(60,105,90,WHITE);
@@ -1200,7 +1081,6 @@ void grid_menuwr(){
     drawtext(62,117, "PAGE-", ST7735_WHITE, ST7735_WHITE, 1);
 }
     
-#endif
 
 void print_back(){
     drawtext(64,107, "BACK", ST7735_WHITE, ST7735_WHITE, 1);
@@ -1362,7 +1242,6 @@ int SD_page = 0;
 // ============================================================================
 // Generic Menu Renderer
 // ============================================================================
-#if defined(v2)
 void print_generic_menu(const char* const *options, int n_opt, int sel) {
     for (int i = 0; i < n_opt; i++) {
         uint16_t color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
@@ -1427,73 +1306,6 @@ static size_t u16_to_str_pad(unsigned int n, char *buf, unsigned int width) {
     buf[j] = '\0';
     return (size_t)j;
 }
-#else
-BOOTFLASH_FUNC void print_generic_menu(const char* const *options, int n_opt, int sel) {
-    for (int i = 0; i < n_opt; i++) {
-        uint16_t color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, 10 + i * 10, (char*)options[i], color, ST7735_BLACK, 1);
-    }
-    grid_menu2();
-}
-
-BOOTFLASH_FUNC void main_screen(int sel) {
-    for (int i = 0; i < cMAIN_n_opt; i++) {
-        uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, 5 + i * 10, (char*)menu_main[i], color, ST7735_BLACK, 1);
-    }
-    if(SD_ready)drawtext(10, 118, "SD OK", ST7735_GREEN, ST7735_BLACK, 1);
-    grid_menu1();
-}
-
-BOOTFLASH_FUNC static void u16_to_hex4(uint16_t value, char *buf) {
-    static const char hex[] = "0123456789ABCDEF";
-    buf[0] = hex[(value >> 12) & 0x0F];
-    buf[1] = hex[(value >> 8) & 0x0F];
-    buf[2] = hex[(value >> 4) & 0x0F];
-    buf[3] = hex[value & 0x0F];
-    buf[4] = '\0';
-}
-
-// Minimal base-10 itoa without dependencies
-BOOTFLASH_FUNC static size_t u16_to_str(unsigned int n, char *buf) {
-    char tmp[6]; // Enough for 65535
-    int i = 0;
-    do {
-        tmp[i++] = (char)('0' + (n % 10));
-        n /= 10;
-    } while (n > 0);
-    // Reverse into the destination buffer
-    int j = 0;
-    while (i > 0) {
-        buf[j++] = tmp[--i];
-    }
-    buf[j] = '\0';
-    return (size_t)j;
-}
-
-BOOTFLASH_FUNC static size_t u16_to_str_pad(unsigned int n, char *buf, unsigned int width) {
-    char tmp[6];
-    unsigned int i = 0;
-    unsigned int j = 0;
-
-    do {
-        tmp[i++] = (char)('0' + (n % 10));
-        n /= 10;
-    } while (n > 0);
-
-    while (i < width) {
-        buf[j++] = '0';
-        width--;
-    }
-
-    while (i > 0) {
-        buf[j++] = tmp[--i];
-    }
-
-    buf[j] = '\0';
-    return (size_t)j;
-}
-#endif
     
 
 // --- Helper: Draw Single Character in Text Box (For Delta Rendering) ---
@@ -2323,7 +2135,6 @@ static bool get_current_bip84_result(uint32_t chain, uint32_t address_index, Bit
 }
 
 
-#if defined(v2)
 
 void grid_OK_back(void) {
     print_cursor_grid();
@@ -2338,7 +2149,6 @@ void print_update_fw_warning(void) {
     drawtext(10, 60, "   WITH update.hex file", ST7735_WHITE, ST7735_BLACK, 1);    
     grid_OK_back();
 }
-#endif
 
 static void print_bip84_menu(void)
 {
@@ -2479,7 +2289,6 @@ static int read_entropy_bit(const BYTE data_array[36], int bit_index) {
     return (data_array[byte_index] >> bit_position) & 1;
 }
 
-#if defined(v2) 
 void draw_shared_entropy_building(void) {
     rectan(0, 35, 159, 43, BLACK); 
     int completed_words = bit_count_dice / 11;
@@ -2597,126 +2406,6 @@ static void print_card_input_screen(void) {
     draw_shared_entropy_building();
     grid_keyboard();
 }
-#else
-BOOTFLASH_FUNC void draw_shared_entropy_building(void) {
-    rectan(0, 35, 159, 43, BLACK); 
-    int completed_words = bit_count_dice / 11;
-    int remaining_bits = bit_count_dice % 11;
-    char buf[64];
-
-    // Track the last known state to prevent unnecessary history redraws
-    static int last_completed_words = -1;
-    static bool history_has_purple = false;
-    
-    // Check if the number of completed words changed or if the screen was reset
-    bool words_changed = (completed_words != last_completed_words) || (bit_count_dice == 0);
-    
-    // We redraw history if words changed, OR if we left purple bits in the history last time.
-    bool redraw_history = words_changed || history_has_purple;
-    last_completed_words = completed_words;
-
-    // ---------------------------------------------------------
-    // Row 1: Active bits currently being accumulated
-    // (ALWAYS redraw this row since it changes on every input)
-    // ---------------------------------------------------------
-    if (remaining_bits > 0) {
-        int cursor_x = 1;
-        for (int i = 0; i < remaining_bits; i++) {
-            int abs_idx = completed_words * 11 + i;
-            uint16_t color = (abs_idx >= bit_count_dice - last_input_len) ? ST7735_MAGENTA : ST7735_ORANGE;
-            char single_char[2] = { read_entropy_bit(data_array_256b, abs_idx) ? '1' : '0', '\0' };
-            drawtext(cursor_x, 35, single_char, color, ST7735_BLACK, 1);
-            cursor_x += 6;
-        }
-        // Pad spaces to overwrite any trailing characters
-        char pad_str[24] = {0};
-        for (int p = 0; p < 20 - remaining_bits; p++) pad_str[p] = ' ';
-        drawtext(cursor_x, 35, pad_str, ST7735_BLACK, ST7735_BLACK, 1);
-    } else if (bit_count_dice == 0) {
-        // Draw a solid black row to clear TFT pixels before writing
-        rectan(0, 35, 159, 44, BLACK); 
-        drawtext(1, 35, "WAITING FOR INPUT...", ST7735_GREY, ST7735_BLACK, 1); 
-    } else {
-        // Clears the active row cleanly when bits exactly match a word boundary
-        rectan(0, 35, 159, 44, BLACK); 
-    }
-
-    // ---------------------------------------------------------
-    // Rows 2 to 6: Displaying up to the 5 previous completed words
-    // ---------------------------------------------------------
-    if (redraw_history) {
-        int y_offset = 45;
-        history_has_purple = false; // Reset the flag before drawing
-        
-        // If the only reason to redraw is to clear purple bits, we only need 
-        // to update the first history row (which is the second row overall on the screen, r = 0).
-        int rows_to_draw = words_changed ? 5 : 1;
-        
-        for (int r = 0; r < rows_to_draw; r++) {
-            int word_index = completed_words - 1 - r; 
-            
-            if (word_index >= 0) {
-                // There is a completed word to display for this row
-                int word_val = read_11bit_value(data_array_256b, word_index + 1); 
-                const char* word_str = get_confirmed_word_from_entropy(data_array_256b, word_index + 1);
-
-                int cursor_x = 1;
-                for (int b = 0; b < 11; b++) {
-                    int abs_idx = word_index * 11 + b;
-                    
-                    bool is_purple = (abs_idx >= bit_count_dice - last_input_len);
-                    if (is_purple) {
-                        history_has_purple = true; // Mark that this row contains purple bits
-                    }
-                    uint16_t color = is_purple ? ST7735_MAGENTA : ST7735_GREEN;
-                    
-                    char single_char[2] = { read_entropy_bit(data_array_256b, abs_idx) ? '1' : '0', '\0' };
-                    drawtext(cursor_x, y_offset, single_char, color, ST7735_BLACK, 1);
-                    cursor_x += 6;
-                }
-
-                char dec_str[6];
-                u16_to_str_pad((unsigned int)word_val, dec_str, 4);
-
-                int pos = 0;
-                buf[pos++] = ' ';
-                
-                int d = 0;
-                while (dec_str[d] != '\0') buf[pos++] = dec_str[d++];
-                
-                buf[pos++] = ' ';                
-               
-                int w = 0;
-                while (word_str && word_str[w] != '\0') buf[pos++] = word_str[w++];
-                
-                // Pad with spaces to overwrite ghost characters in shorter words.
-                // Changed from 26 to 15 to prevent TFT line-wrap overlay.
-                while (pos < 15) {
-                    buf[pos++] = ' ';
-                }
-                buf[pos] = '\0';
-
-                drawtext(cursor_x, y_offset, buf, ST7735_GREEN, ST7735_BLACK, 1);
-            } else {
-                // No word exists for this slot, print a solid black row to erase the TFT pixels completely
-                rectan(0, y_offset, 159, y_offset + 9, BLACK);
-            }
-            
-            y_offset += 10;
-        }
-    }
-}
-
-BOOTFLASH_FUNC static void print_card_input_screen(void) {
-    drawtext(1, 5, (size_pointer == cSIZE_24) ? "DRAW CARDS UP TO 256 BITS" : "DRAW CARDS UP TO 128 BITS", ST7735_WHITE, ST7735_BLACK, 1);
-    draw_card_bit_counter();
-    draw_card_selection();
-    
-    draw_shared_entropy_building();
-    grid_keyboard();
-}
-
-#endif
 
 
 
@@ -2923,53 +2612,6 @@ void print_triple_checksum(int word_target) {
     grid_OK_only(); 
 }
 
-#if defined(v1)
-BOOTFLASH_FUNC void print_diceroll_screen(int sel, int sel2){
-
-    // sel: 0 -> 128 bits, 1 -> 256 bits
-
-     char *text_dices = sel ? "ROLL DICE up to 256 bits" : "ROLL DICE up to 128 bits";
-     char *text_coins = sel ? "THROW COINS up to 256 bits" : "THROW COINS up to 128 bits";
-     char *text_bits = sel ? "000/256 bits" : "000/128 bits";
-
-        if (sel2==0){
-            drawtext(1,5, text_coins, ST7735_WHITE, ST7735_BLACK, 1);
-            grid_coins();
-        } else {
-            drawtext(1,5, text_dices, ST7735_WHITE, ST7735_BLACK, 1);
-            grid_dices();
-        }
-        drawtext(45,15, text_bits, ST7735_WHITE, ST7735_BLACK, 1);
-        draw_shared_entropy_building();
-}
-
-BOOTFLASH_FUNC void print_TMR_screen(int size_TMR){
-
-    // sel: 0 -> 128 bits, 1 -> 256 bits
-    drawtext(1,5, "STOP timer to set entropy", ST7735_WHITE, ST7735_BLACK, 1);
-    char *text_TMR_SEED = size_TMR ? "000/256 bits" : "000/128 bits";
-    drawtext(45,15, text_TMR_SEED, ST7735_WHITE, ST7735_BLACK, 1);
-    grid_OK_only();
-}
-
-BOOTFLASH_FUNC void print_child_config_screen(void) {
-    drawtext(1, 10, "CHILD SIZE:", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(80, 10, "BIP85 INDEX:", ST7735_WHITE, ST7735_BLACK, 1);
-
-    uint16_t size_color = (bip85_cursor == 0) ? ST7735_ORANGE : ST7735_WHITE;
-    uint16_t index_color = (bip85_cursor == 1) ? ST7735_ORANGE : ST7735_WHITE;
-
-    const char *size_str = (bip85_size == cSIZE_12) ? "12 WORDS" : "24 WORDS";
-    drawtext(10, 30, (char*)size_str, size_color, ST7735_BLACK, 1);
-
-    char index_str[12];
-    u16_to_str((unsigned int)bip85_index, index_str);
-    rectan(80, 30, 159, 38, BLACK); // clear index area
-    drawtext(100, 30, index_str, index_color, ST7735_BLACK, 1);
-
-    grid_bip85();
-}
-#else
 void print_diceroll_screen(int sel, int sel2){
 
     // sel: 0 -> 128 bits, 1 -> 256 bits
@@ -3015,7 +2657,6 @@ void print_child_config_screen(void) {
 
     grid_bip85();
 }
-#endif
 
 // Unified Obfuscation Configuration Screen
 int obfus_cursor = 0;
@@ -3665,7 +3306,6 @@ void draw_compactqr_code(int size, unsigned char *data){
 }
 
 
-#if defined(v2) 
 void draw_xpub_qr(const char *text) {
     white_screen();
     
@@ -3711,7 +3351,6 @@ void draw_xpub_qr(const char *text) {
         }
     }
 }
-#endif
 
 
 bool check_last_word(BYTE *data, size_t size, char* word_user) {
@@ -3761,14 +3400,12 @@ void redraw_show_seed_with_offset(void) {
     BYTE *c_buf = append_checksum(data_array_256b, 16 + size_pointer*16);
     extract_11bit_groups(c_buf, 16  + size_pointer*16 +1);    
     
-#if defined(v2)
     // Intercept to compute keys in the background while blocking user input.
     // We skip this if navigating BIP85, as it doesn't need BIP84 keys.
     if (!bip84_account_cached && (main_pointer != cMAIN_BIP85)) {
         estado = PRECOMPUTE_BIP84;
         return; 
     }
-#endif
 
     estado = SHOW_SEED;
 }
@@ -4290,25 +3927,11 @@ void sd_send_cmd(uint8_t cmd, uint32_t arg, uint8_t crc) {
 }
 
 uint8_t spi_recv(void) {
-#if defined(v2)
     // --- V2: Hardware SPI3 ---
     SPI3BUF = 0xFF;                  // Send a dummy byte to generate the clock pulses (SCK)
     while (!SPI3STATbits.SPIRBF);    // Wait until the receive buffer is full
     return SPI3BUF;                  // Read and return the incoming data from the SD card
 
-#else
-    // --- V1: Original Bit-banging ---
-    uint8_t data = 0;
-
-    for (int i = 0; i < 8; i++) {
-        SD_SCK = 1; // SCK HIGH
-        data <<= 1;
-        if (SD_MISO) data |= 1; // MISO
-        SD_SCK = 0; // SCK LOW
-    }
-
-    return data;
-#endif
 }
 
 uint8_t sd_get_response(void) {
@@ -4334,9 +3957,7 @@ uint8_t sd_get_response(void) {
 static bool sd_is_sdhc = false;
 
 bool sd_init(void) {
-    #if defined(v2) 
         SPI3BRG = 0x0004;     // SLOW speed for initialization (sd_init)
-    #endif
     // 74+ clocks with CS held high
     SD_CS = 1;
     for (int i = 0; i < 10; i++) spi_send(0xFF); // 80 clocks
@@ -4426,11 +4047,9 @@ bool sd_init(void) {
         }
     }
     
-    #if defined(v2)
         // Switch SPI3 back to high speed for data transfers
         SPI3BRG = 1; 
 
-    #endif
 
     return true;
 }
@@ -4839,10 +4458,8 @@ void transition_to_sd_block(int sd_ptr) {
 // Helper to transition to the MAIN screen
 void transition_to_main(void) {
     black_screen();
-#if defined(v2)
     // Invalidate the cache when returning to the main menu to prevent stale sessions
     bip84_account_cached = false; 
-#endif
     main_screen(main_pointer);
     estado = MAIN;
 }
@@ -4891,13 +4508,11 @@ void print_settings_screen(int sel) {
     
     drawtext(1, 10, text_seedqr, color_seedqr, ST7735_BLACK, 1);
 
-#if defined(v2)
     uint16_t color_serial = (sel == cSETTINGS_MCU_SERIAL) ? ST7735_ORANGE : ST7735_WHITE;
     drawtext(1, 20, "MCU SERIAL NUMBER", color_serial, ST7735_BLACK, 1);
     
     uint16_t color_fw = (sel == cSETTINGS_UPDATE_FW) ? ST7735_ORANGE : ST7735_WHITE;
     drawtext(1, 30, "UPDATE FIRMWARE", color_fw, ST7735_BLACK, 1);
-#endif
     
     grid_menu2(); 
 }
@@ -4911,7 +4526,6 @@ void print_seedqr_warning(void) {
     
 }
 
-#if defined(v2)
 void print_mcu_serial_screen(void) {
     char hex_buf[5];
     uint16_t parts[4];
@@ -4935,7 +4549,6 @@ void print_mcu_serial_screen(void) {
     
     grid_OK_only();
 }
-#endif
 
 void apply_1word_xor(int word_idx, int size) {
     BYTE xor_mask[36] = {0};
@@ -5096,7 +4709,7 @@ void print_card_encoding_screen(void) {
     char decks_str[30] = "DECKS NEEDED: ";
     char num[4];
     size_t len = u16_to_str((unsigned int)card_decks_needed, num);
-    int pos = 14; // Longitud de "DECKS NEEDED: "
+    int pos = 14; // Length of "DECKS NEEDED: "
     
     for (size_t i = 0; i < len; i++) {
         decks_str[pos++] = num[i];
@@ -5700,7 +5313,6 @@ int main ( void ){
     LED_LCD =1;
     A0_LCD=0;
     LED = 0;
-    #if defined(v2)
         // --- SPI1 Configuration (TFT LCD) ---
         SPI1CON = 0x10000120; // Off, Master Mode, 8-bit
         SPI1CON = 0x10008120; // On (ON = 1)
@@ -5710,12 +5322,6 @@ int main ( void ){
         SPI3CON = 0x10000120; // Off, Master Mode, 8-bit
         SPI3CON = 0x10008120; // On (ON = 1)
         SPI3BRG = 0x0004;     // SLOW speed for initialization (sd_init)
-    #else
-        // --- Old board (v1) ---
-        SPI1CON = 0x10000120;
-        SPI1CON = 0x10008120;
-        SPI1BRG = 1;
-    #endif
     LED_LCD =1;
     SD_CS =1;
 
@@ -5746,7 +5352,6 @@ int main ( void ){
     tmr1_init();
 
 
-    #if defined(v2)
     /*// --- RIPEMD160 TEST ---
     const uint8_t test_msg[] = "hello";
     
@@ -5807,7 +5412,6 @@ int main ( void ){
     //black_screen();
     //draw_xpub_qr("[89aa9c70/84h/0h/0h]xpub6C1WhE68AB95vTj1iM3Bpsu6jwuuKN8D2Z3mGaKNE8xxMHS2ehyN65V6md1KzaDREgcuRDs7AmfvNKFZ6sSykKyxHZDFFWXqVkKL8iss6SD");
     //delay_ms(3000);
-    #endif
  
 
     int BT1_ST= 1;
@@ -6033,13 +5637,13 @@ int main ( void ){
                         if (main_pointer > 0) {
                             main_pointer--;
                         }
-                        main_screen(main_pointer); // <--- Actualizado
+                        main_screen(main_pointer); // <--- Updated
                         break;
                     case DOWN_BT:                        
                         if (main_pointer < (cMAIN_n_opt-1)) {
                             main_pointer++;
                         }
-                        main_screen(main_pointer); // <--- Actualizado
+                        main_screen(main_pointer); // <--- Updated
                         break;
 
                     case LEFT_BT:
@@ -6998,14 +6602,12 @@ int main ( void ){
                             } else {
                                 transition_to_size();
                             }
-#if defined(v2)
                         } else if (selinput_pointer==cQRSCAN) {
                             black_screen();
                             drawtext(10, 10, "READY TO SCAN", ST7735_YELLOW, ST7735_BLACK, 1);
                             //drawtext(10, 60, "BACK TO CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
                             estado = QR_SCANNING;
                         
-#endif                            
                         } else { // cFROMSD
                             black_screen();
                             if (seed_pointer == cSEED_triple && main_pointer == cMAIN_create) {
@@ -7689,7 +7291,6 @@ int main ( void ){
                         break;
                 }
                 break;
-#if defined(v2)
             case PRECOMPUTE_BIP84:
                 // Perform the heavy calculation (shows progress bar)
                 precompute_bip84_account();
@@ -7707,26 +7308,14 @@ int main ( void ){
                 // Flush any accidental button presses made while waiting
                 pulsed_bt = NONE;
                 break;
-#endif
             case SHOW_SEED:
                 switch (pulsed_bt) {
                     case OK_BT:
-#if defined(v2)
                         bip84_address_index = 0;
                         bip84_extended_key_page = 0;
                         //bip84_account_cached = false;
                         black_screen();
                         print_bip84_menu();
-#else
-                        if (!seedqr_enabled) break; //QR disabled
-                        white_screen();
-                        {
-                            BYTE *qr_buf = append_checksum(data_array_256b, 16 + size_pointer*16);
-                            draw_QRSEED(qr_buf, 16 + size_pointer*16 +1);
-                            free(qr_buf);
-                        }
-                        estado = SHOW_QRSEED;
-#endif
                         break;
                     case BACK_BT:
                         break;
@@ -7770,7 +7359,6 @@ int main ( void ){
                         break;
                 }
                 break;
-#if defined(v2)
             case SHOW_SEED_MENU:
                 switch (pulsed_bt) {
                     case OK_BT:
@@ -7880,13 +7468,11 @@ int main ( void ){
                         break;
                 }
                 break;
-#endif
            case SHOW_QRSEED:
                 switch (pulsed_bt) {
                     case OK_BT:
                         break;
                     case BACK_BT:
-#if defined(v2)
                         if (bip84_qr_return_to_info) {
                             bip84_qr_return_to_info = false;
                             print_bip84_info_screen();
@@ -7898,21 +7484,18 @@ int main ( void ){
                             print_bip84_menu();
                             break;
                         }
-#endif
                         redraw_show_seed_with_offset();
                         break;
                     case UP_BT:
                     case DOWN_BT:
                         break;
                     case LEFT_BT:
-#if defined(v2)
                         if (bip84_qr_return_to_menu) {
                             bip84_qr_return_to_menu = false;
                             black_screen();
                             print_bip84_menu();
                             break;
                         }
-#endif
                         redraw_show_seed_with_offset();
                         break;
                     case RIGHT_BT:
@@ -8087,7 +7670,6 @@ int main ( void ){
                                 print_settings_screen(settings_pointer);
                             }
                         }
-#if defined(v2)
                     else if (settings_pointer == cSETTINGS_MCU_SERIAL) {
                         print_mcu_serial_screen();
                         estado = SHOW_MCU_SERIAL;
@@ -8097,7 +7679,6 @@ int main ( void ){
                         print_update_fw_warning();
                         estado = WARNING_UPDATE_FW;
                     }
-#endif
                     break;
                 case BACK_BT:
                     transition_to_main();
@@ -8122,7 +7703,6 @@ int main ( void ){
                 estado = SEL_SETTINGS;
             }
             break;
-#if defined(v2)
             case SHOW_MCU_SERIAL:
                 if (pulsed_bt == OK_BT || pulsed_bt == BACK_BT) {
                     black_screen();
@@ -8301,7 +7881,6 @@ int main ( void ){
                         break;
                 }
                 break;
-#endif    
             case END_MODE:
                 switch (pulsed_bt) {
                     case OK_BT:
