@@ -533,14 +533,7 @@ void draw_hex16(unsigned int x, unsigned int y, uint16_t numero, int N, unsigned
 static void process_bip85_derivation(void) {
     char mnemonic_str[250]; 
     get_mnemonic_string(mnemonic_str);
-    
-    // Convert the entire mnemonic string to lowercase per BIP39 standard
-    for (int i = 0; mnemonic_str[i] != '\0'; i++) {
-        if (mnemonic_str[i] >= 'A' && mnemonic_str[i] <= 'Z') {
-            mnemonic_str[i] = mnemonic_str[i] + ('a' - 'A');
-        }
-    }
-    
+   
     uint8_t seed[64];
     PBKDF2_HMAC_SHA512(mnemonic_str, "mnemonic", 2048, seed, 64);
     
@@ -1834,7 +1827,7 @@ static char *add_char(char *text, int letter_index, size_t capacity) {
         return text;
     }
 
-    text[len] = (char)('A' + letter_index);
+    text[len] = (char)('a' + letter_index);
     text[len + 1] = '\0';
     return text;
 }
@@ -1875,8 +1868,8 @@ static void get_valid_next_letters(const char *prefix, bool *valid_letters) {
         int cmp = strncmp(ptr, prefix, prefix_len);
         if (cmp == 0) {
             char next_char = ptr[prefix_len];
-            if (next_char >= 'A' && next_char <= 'Z') {
-                valid_letters[next_char - 'A'] = true;
+            if (next_char >= 'a' && next_char <= 'z') {
+                valid_letters[next_char - 'a'] = true;
             }
         } else if (cmp > 0) {
             break; // Dictionary is sorted, we can stop
@@ -2213,7 +2206,7 @@ void print_keyboard(int index, bool word_found, bool *valid_letters){
     int current_index = 0;
     uint16_t color;
 
-    for (letra = 'A'; letra <= 'Z'; letra++) {
+    for (letra = 'a'; letra <= 'z'; letra++) {
         letter_text[0] = letra;
         letter_text[1] = '\0';
         
@@ -4266,8 +4259,8 @@ int main ( void ){
                                 }else if (main_pointer==cMAIN_BIP85) {
                                     drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
                                     black_screen();
-                                    drawtext(30, 30, "COMPUTING CHILD", ST7735_WHITE, ST7735_BLACK, 1);
-                                    drawtext(30, 45, "MNEMONIC...", ST7735_WHITE, ST7735_BLACK, 1);
+                                    drawtext(30, 20, "COMPUTING CHILD", ST7735_WHITE, ST7735_BLACK, 1);
+                                    drawtext(30, 35, "MNEMONIC...", ST7735_WHITE, ST7735_BLACK, 1);
                                     estado = PROCESS_BIP85;
                                     break;
                                 }else if (main_pointer==cMAIN_MNEM2CARD) {

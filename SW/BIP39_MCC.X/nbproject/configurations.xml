@@ -172,7 +172,6 @@
       <itemPath>../src/SSS/memzero.c</itemPath>
       <itemPath>../src/main.c</itemPath>
       <itemPath>../src/sha512.c</itemPath>
-      <itemPath>../src/EFF_short.c</itemPath>
     </logicalFolder>
   </logicalFolder>
   <sourceRootList>
