@@ -791,6 +791,10 @@ void print_back(){
     drawtext(64,107, "BACK", ST7735_WHITE, ST7735_WHITE, 1);
 }
 
+void print_end(){
+    drawtext(67,107, "END", ST7735_WHITE, ST7735_WHITE, 1);
+}
+
 void grid_menu2(){
     print_cursor_grid();
     print_up_arrow(103,114);
@@ -933,6 +937,11 @@ void grid_coins(){              // Heads tails
 void grid_OK_only(){
     print_cursor_grid();
     print_ok();
+}
+
+void grid_end_only(){
+    print_cursor_grid();
+    print_end();
 }
 
 void version_display(){
@@ -4006,36 +4015,40 @@ int main ( void ){
             case PROCESS_WIPE_SD: {
                 uint32_t current_sector = 0;
                 uint8_t zero_buf[512] = {0};
+                grid_end_only();
                 
-                // Ensure card is ready before blind loop
                 if (!SD_ready) SD_ready = sd_init();
                 
-                while(1) {
-                    SYS_Tasks(); // Keep MCU watchdog/tasks happy during the long wipe
+                //drawtext(10, 105, "PRESS BACK TO CANCEL", ST7735_ORANGE, ST7735_BLACK, 1);
 
-                    // Blink LED while wiping (toggle every 256 sectors to avoid slowing down)
+                while(1) {
+                    SYS_Tasks(); 
+
+                    if (BT1 == 0) {
+                        LED = 0; 
+                        drawtext(10, 90, "WIPE CANCELLED     ", ST7735_YELLOW, ST7735_BLACK, 1);
+                        while(BT1 == 0) SYS_Tasks(); 
+                        break;
+                    }
+
                     if ((current_sector % 256) == 0) {
                         LED = 1 - LED; 
                     }
 
-                    // sd_write_block returns false if we hit the end of the SD capacity or an error
                     if (!sd_write_block(current_sector, zero_buf)) {
-                        LED = 0; // Ensure LED is turned off when finished
+                        LED = 0; 
                         drawtext(10, 90, "WIPE FINISHED/ERROR", ST7735_GREEN, ST7735_BLACK, 1);
                         break; 
                     }
                     
                     current_sector++;
 
-                    // Update UI every 1000 sectors
                     if ((current_sector % 1000) == 0) {
                         char progress_txt[32] = "Erased: ";
                         char mb_str[10];
                         
-                        // 1 Sector = 512 bytes. 2048 sectors = 1MB.
                         uint32_t mb_erased = (current_sector / 2048); 
                         
-                        // Using u16_to_str format matching the rest of the file
                         size_t len = u16_to_str((unsigned int)mb_erased, mb_str);
                         int pos = 8; 
                         for(size_t i = 0; i < len; i++) progress_txt[pos++] = mb_str[i];
@@ -4050,10 +4063,10 @@ int main ( void ){
                     }
                 }
                 
-                grid_OK_only(); // Render OK button map at the bottom
-                estado = END_MODE; // Wait for OK button to return to the main menu
+                grid_OK_only(); 
+                estado = END_MODE; 
                 break;
-            }         
+            }     
             case SEL_SIZE:        /////  SCREEN     2   /////////////
                 switch (pulsed_bt) {
                     case OK_BT:
@@ -4259,8 +4272,8 @@ int main ( void ){
                                 }else if (main_pointer==cMAIN_BIP85) {
                                     drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
                                     black_screen();
-                                    drawtext(30, 20, "COMPUTING CHILD", ST7735_WHITE, ST7735_BLACK, 1);
-                                    drawtext(30, 35, "MNEMONIC...", ST7735_WHITE, ST7735_BLACK, 1);
+                                    drawtext(30, 25, "COMPUTING CHILD", ST7735_WHITE, ST7735_BLACK, 1);
+                                    drawtext(30, 40, "MNEMONIC...", ST7735_WHITE, ST7735_BLACK, 1);
                                     estado = PROCESS_BIP85;
                                     break;
                                 }else if (main_pointer==cMAIN_MNEM2CARD) {
