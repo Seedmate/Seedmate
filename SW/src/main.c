@@ -24,7 +24,7 @@
  *   - Security-sensitive data should be handled carefully at all times
  *
  * Author:      Seedmate
- * Date:        01/10/2026
+ * Date:        25/10/2026
  * Version:     v1.8                               
  * License
  * 
@@ -78,7 +78,6 @@
 #define SCREEN_HEIGHT 128
 
 
-#if defined(v1) 
     #define cVersion "v1.8"
 
     #define SD_SCK    PORTBbits.RB7
@@ -99,41 +98,7 @@
     #define BT4       PORTBbits.RB3   // Button 4
     #define BT5       PORTBbits.RB11  // Button 5
     #define BT6       PORTBbits.RB6   // Button 6
-#endif
 
-#if defined(v2) 
-    #define cVersion "v1.7+"
-
-    #include "crypto/ripemd160.h"
-    #include "crypto/bignum.h"
-    #include "crypto/bip32.h"
-    #include "crypto/secp256k1.h"       
-    #include "crypto/segwit_addr.h"     
-    
-    typedef struct {
-        char address[90];
-        char fingerprint[9]; 
-        char xpub[112];
-        char zpub[112];
-    } BitcoinBip84Result;
-
-    //SD
-    #define SD_CS     PORTBbits.RB5
-
-    // Pin mapping
-    #define LED       PORTAbits.RA2   // CPU activity led
-
-    // LCD
-    #define LED_LCD   PORTBbits.RB10  // TFT backlight control
-
-    // Buttons
-    #define BT1       PORTBbits.RB2   // Button 1
-    #define BT2       PORTCbits.RC0  // Button 2
-    #define BT_OK     PORTCbits.RC1  // Button 3
-    #define BT4       PORTBbits.RB3   // Button 4
-    #define BT5       PORTCbits.RC2  // Button 5
-    #define BT6       PORTAbits.RA4   // Button 6
-#endif
 
 #define cMAIN_n_opt 10
 #define cSEED_n_opt 6
@@ -144,23 +109,12 @@
 #define cQR_n_opt 2
 #define cSDBLOCK_n_opt 8
 #define cERASE_n_opt 2
-#if defined(v2)
-    #define cSELINPUT_n_opt 3
-#else
     #define cSELINPUT_n_opt 2
-#endif
 #define cDICE_MODE_n_opt 2
 #define cHASH_MODE_n_opt 2
 #define cRESOURCE_n_opt 5
-#if defined(v2)
-    #define cSETTINGS_n_opt 2
-#else
     #define cSETTINGS_n_opt 1
-#endif
 #define cSETTINGS_SEEDQR 0
-#if defined(v2)
-    #define cSETTINGS_MCU_SERIAL 1
-#endif
 #define cEND_OF_LINE 150
 #define cENTROPY_BITS12W 127
 #define cENTROPY_BITS24W 255
@@ -187,14 +141,6 @@ int settings_pointer = 0;
 #define cRESOURCE_wordlist 3
 #define cRESOURCE_BINlist 4
 
-#if defined(v2)
-#define cBIP84_RECEIVE 0
-#define cBIP84_CHANGE 1
-#define cBIP84_SEEDQR 2
-#define cBIP84_FINGERPRINT 3
-#define cBIP84_XPUB 4
-#define cBIP84_n_opt 5
-#endif
 
 #define cOBFUS_SHIFT 0
 #define cOBFUS_NOT 1
@@ -215,9 +161,6 @@ int settings_pointer = 0;
 
 #define cKEYBOARD 0
 #define cFROMSD 1
-#if defined(v2)
-    #define cQRSCAN 2
-#endif
 #define cSD_CHECKSUM_ADDR 64
 #define cSD_SIZE_ADDR 65
 #define cSD_XOR_ADDR 66 // Key storage offset
@@ -265,15 +208,8 @@ const char* const menu_resource[] = {"TUTORIAL", "BACKUP TOOL", "DICE TESTER", "
 const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB","1 WORD XOR","HOW TO"}; 
 const char* const menu_erase[]    = {"ERASE SECTOR", "WIPE ALL CARD"};
 
-#if defined(v2)
-const char* const menu_bip84[]    = {"RECEIVE ADDRESS", "CHANGE ADDRESS", "SEEDQR", "FINGERPRINT", "XPUB"};
-#endif
 
-#if defined(v2)
-const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD", "QR SCAN"};
-#else
 const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD"};
-#endif
 
 int erase_pointer = 0;
 int main_pointer = 0;
@@ -287,17 +223,6 @@ int bip85_size = cSIZE_12;
 int bip85_index = 0;
 int bip85_cursor = 0;
 
-#if defined(v2)
-int bip84_menu_pointer = 0;
-uint32_t bip84_address_index = 0;
-int bip84_extended_key_page = 0;
-bool bip84_qr_return_to_menu = false;
-
-bool bip84_account_cached = false;
-HDNode bip84_account_node;
-uint32_t bip84_master_fingerprint = 0;
-uint32_t bip84_account_parent_fingerprint = 0;
-#endif
 
 // XOR Globals moved from main()
 int xor_pointer = 0;
@@ -745,12 +670,6 @@ typedef enum
     SEL_SETTINGS,
     WARNING_SEEDQR,
     SHOW_CARD_ENCODING,
-    #if defined(v2)
-        QR_SCANNING,
-        SHOW_MCU_SERIAL,
-        SHOW_SEED_MENU,
-        SHOW_BIP84_INFO,
-    #endif
     SEL_ERASE_MODE,
     PROCESS_WIPE_SD,
     END_MODE // Final
@@ -773,119 +692,9 @@ typedef enum
 // ============================================================================
 // QR Parsing & Validation Logic
 // ============================================================================
-#if defined(v2)
-bool validate_and_load_qr(uint8_t *buffer, int length) {
-    
-    // --- FIX FOR ISSUE 2: Remove trailing whitespace/newlines ---
-    while (length > 0 && (buffer[length - 1] == '\r' || 
-                          buffer[length - 1] == '\n' || 
-                          buffer[length - 1] == ' '  || 
-                          buffer[length - 1] == '\0')) {
-        length--;
-    }
-    
-    buffer[length] = '\0';
-    
-    // --- FIX FOR ISSUE 1: Proper 16/32 byte Compact SeedQR handling ---
-    if (length == 16 || length == 32) {
-        size_pointer = (length == 16) ? cSIZE_12 : cSIZE_24;
-        
-        for (int i = 0; i < 36; i++) {
-            data_array_256b[i] = 0;
-        }
-        
-        for (int i = 0; i < length; i++) {
-            data_array_256b[i] = buffer[i];
-        }
-        
-        return true;
-    }
-    
-    // 2. Check if standard SeedQR (48 or 96 numeric digits)
-    bool is_numeric = true;
-    for (int i = 0; i < length; i++) {
-        if (buffer[i] < '0' || buffer[i] > '9') { 
-            is_numeric = false; 
-            break; 
-        }
-    }
-    
-    if (is_numeric && (length == 48 || length == 96)) {
-        int words = length / 4;
-        size_pointer = (words == 12) ? cSIZE_12 : cSIZE_24;
-        for (int i = 0; i < 36; i++) data_array_256b[i] = 0;
-        
-        int last_val = 0; // Fix: Track the last word index
-        
-        for (int w = 0; w < words; w++) {
-            int val = (buffer[w*4]-'0')*1000 + (buffer[w*4+1]-'0')*100 + (buffer[w*4+2]-'0')*10 + (buffer[w*4+3]-'0');
-            if (val > 2047) return false;
-            
-            write_11bit_value(data_array_256b, w+1, val);
-            
-            if (w == words - 1) {
-                last_val = val;
-            }
-        }
-        
-        // Fix: Use the tracked value instead of calling read_11bit_value
-        const char *last_word = get_word(last_val); 
-        return matches_last_word_checksum(data_array_256b, (char *)last_word, size_pointer);
-    }
-    
-    // 3. Check pure text sequence (Space/Newline separated)
-    int word_count = 0;
-    int last_val = 0; // Fix: Track the last word index
-    for (int i = 0; i < 36; i++) data_array_256b[i] = 0;
-    
-    char tmp_word[16];
-    int char_idx = 0;
-    for (int i = 0; i <= length; i++) {
-        if (buffer[i] == ' ' || buffer[i] == '\r' || buffer[i] == '\n' || buffer[i] == '\0') {
-            if (char_idx > 0) {
-                tmp_word[char_idx] = '\0';
-                int idx = find_word_index(tmp_word);
-                if (idx == -1) return false; // Not in BIP39 dictionary
-                word_count++;
-                if (word_count > 24) return false;
-                
-                write_11bit_value(data_array_256b, word_count, idx);
-                last_val = idx; // Fix: Save the index
-                
-                char_idx = 0;
-            }
-        } else {
-            if (char_idx < 15) {
-                char c = buffer[i];
-                if (c >= 'A' && c <= 'Z') c = c + ('a' - 'A'); // lowercase
-                tmp_word[char_idx++] = c;
-            } else {
-                return false; // Word is suspiciously long
-            }
-        }
-    }
-    
-    if (word_count == 12 || word_count == 24) {
-        size_pointer = (word_count == 12) ? cSIZE_12 : cSIZE_24;
-        
-        // Fix: Use the tracked value instead of calling read_11bit_value
-        const char *last_word = get_word(last_val); 
-        return matches_last_word_checksum(data_array_256b, (char *)last_word, size_pointer);
-    }
-    
-    return false;
-}
-#endif
 
 
 void spi_send(uint8_t data) {
-#if defined(v2)
-    // --- V2: Hardware SPI3 ---
-    SPI3BUF = data;                  // 1. Write output buffer
-    while (!SPI3STATbits.SPIRBF);    // 2. Wait TX ends
-    (void)SPI3BUF;                   // 3. Fake read to avoid overflow of the RX buffer
-
-#else
     // --- V1: Bit-banging  ---
     for (int i = 0; i < 8; i++) {
         if (data & 0x80) SD_MOSI = 1; else SD_MOSI = 0; // MOSI
@@ -893,7 +702,6 @@ void spi_send(uint8_t data) {
         data <<= 1;
         SD_SCK = 0; // SCK LOW
     }
-#endif
 }
 
 // ============================================================================
@@ -1214,185 +1022,6 @@ static size_t u16_to_str_pad(unsigned int n, char *buf, unsigned int width) {
     return (size_t)j;
 }
 
-#if defined(v2)
-static void draw_bip84_wrapped_text(const char *text, int x, int y,
-                                    int line_length, int line_count)
-{
-    char line[32];
-    size_t text_length = strlen(text);
-    size_t offset = 0;
-
-    for (int line_index = 0; line_index < line_count && offset < text_length; line_index++) {
-        size_t remaining = text_length - offset;
-        size_t copy_length = (remaining < (size_t)line_length) ? remaining : (size_t)line_length;
-
-        memcpy(line, &text[offset], copy_length);
-        line[copy_length] = '\0';
-        drawtext(x, y + (line_index * 9), line, ST7735_WHITE, ST7735_BLACK, 1);
-        offset += copy_length;
-    }
-}
-
-// Curve definition for the seed
-#ifndef SECP256K1_NAME
-#define SECP256K1_NAME "secp256k1"
-#endif
-
-// 1. Native Fingerprint calculation using your local sha256 and ripemd160
-static uint32_t hdnode_fingerprint(HDNode *node) {
-    uint8_t sha256_pub[32];
-    uint8_t hash160[20];
-    SHA256_CTX ctx; // Fixed: Using your original context name
-    
-    hdnode_fill_public_key(node);
-    
-    sha256_init(&ctx);
-    sha256_update(&ctx, node->public_key, 33);
-    sha256_final(&ctx, sha256_pub);
-    
-    ripemd160(sha256_pub, 32, hash160);
-    
-    return ((uint32_t)hash160[0] << 24) | (hash160[1] << 16) | (hash160[2] << 8) | hash160[3];
-}
-
-// 2. Temporary placeholder to avoid Base58 dependencies
-static void hdnode_serialize_public(const HDNode *node, uint32_t fingerprint, uint32_t version, char *str, size_t strsize) {
-    // True extended key serialization requires Base58Check encoding.
-    // For now, return a safe dummy string so you can test the SegWit address compilation.
-    strncpy(str, "REQUIRES BASE58 ADAPTATION", strsize);
-    str[strsize - 1] = '\0';
-}
-
-static bool get_current_bip84_result(uint32_t chain, uint32_t address_index, BitcoinBip84Result *result)
-{
-    // 1. LAZY EVALUATION & CACHING: Compute account node only if not cached
-    if (!bip84_account_cached) {
-        // Show a loading message since PBKDF2 will take a few seconds
-        drawtext(1, 50, "CALCULATING KEYS...", ST7735_YELLOW, ST7735_BLACK, 1);
-
-        char mnemonic_str[250];
-        get_mnemonic_string(mnemonic_str);
-
-        // Convert the entire mnemonic string to lowercase per BIP39 standard
-        for (int i = 0; mnemonic_str[i] != '\0'; i++) {
-            if (mnemonic_str[i] >= 'A' && mnemonic_str[i] <= 'Z') {
-                mnemonic_str[i] = mnemonic_str[i] + ('a' - 'A');
-            }
-        }
-
-        // Generate the master seed
-        uint8_t seed[64];
-        PBKDF2_HMAC_SHA512(mnemonic_str, "mnemonic", 2048, seed, 64);
-
-        HDNode root;
-        if (!hdnode_from_seed(seed, 64, SECP256K1_NAME, &root)) return false;
-
-        // Store Master Fingerprint
-        bip84_master_fingerprint = hdnode_fingerprint(&root);
-
-        // Derive path m/84'/0'
-        bip84_account_node = root;
-        if (!hdnode_private_ckd(&bip84_account_node, 84 | 0x80000000)) return false; 
-        if (!hdnode_private_ckd(&bip84_account_node, 0  | 0x80000000)) return false; 
-
-        // Store parent fingerprint for account-level xpub/zpub
-        bip84_account_parent_fingerprint = hdnode_fingerprint(&bip84_account_node);
-
-        // Derive Account path: m/84'/0'/0'
-        if (!hdnode_private_ckd(&bip84_account_node, 0  | 0x80000000)) return false; 
-        
-        // Mark as successfully cached
-        bip84_account_cached = true;
-        
-        // Clear the loading message area
-        rectan(0, 50, 159, 60, BLACK);
-    }
-
-    // 2. FILL RESULT FROM CACHE
-    u16_to_hex4((bip84_master_fingerprint >> 16) & 0xFFFF, result->fingerprint);
-    u16_to_hex4(bip84_master_fingerprint & 0xFFFF, result->fingerprint + 4);
-
-    // Clone the cached account node so we don't mutate the global variable
-    HDNode node = bip84_account_node;
-
-    // Serialize account-level Extended Public Keys (XPUB and ZPUB)
-    hdnode_serialize_public(&node, bip84_account_parent_fingerprint, 0x0488B21E, result->xpub, sizeof(result->xpub));
-    hdnode_serialize_public(&node, bip84_account_parent_fingerprint, 0x04B24746, result->zpub, sizeof(result->zpub));
-
-    // 3. FAST DERIVATION: Derive only the external/internal chain and the final index
-    if (!hdnode_private_ckd(&node, chain)) return false;         // 0 = Receive, 1 = Change
-    if (!hdnode_private_ckd(&node, address_index)) return false; // Address Index
-
-    hdnode_fill_public_key(&node);
-
-    // 4. HASHING & ENCODING
-    uint8_t sha256_pub[32];
-    uint8_t hash160[20];
-    
-    SHA256_CTX ctx;
-    sha256_init(&ctx);
-    sha256_update(&ctx, node.public_key, 33);
-    sha256_final(&ctx, sha256_pub);
-    
-    ripemd160(sha256_pub, 32, hash160);
-
-    // Encode as a Native SegWit Bech32 address ("bc1q...")
-    if (!segwit_addr_encode(result->address, "bc", 0, hash160, 20)) return false;
-
-    return true;
-}
-static void print_bip84_menu(void)
-{
-    black_screen();
-    print_generic_menu(menu_bip84, cBIP84_n_opt, bip84_menu_pointer);
-    estado = SHOW_SEED_MENU;
-}
-
-static void print_bip84_info_screen(void)
-{
-    BitcoinBip84Result result;
-    const char *title;
-    const char *value;
-    char index_text[12];
-
-    black_screen();
-
-    if (bip84_menu_pointer == cBIP84_RECEIVE ||
-        bip84_menu_pointer == cBIP84_CHANGE) {
-        uint32_t chain = (bip84_menu_pointer == cBIP84_RECEIVE) ? 0u : 1u;
-        bool derived = get_current_bip84_result(chain, bip84_address_index, &result);
-        title = (chain == 0u) ? "RECEIVE ADDRESS" : "CHANGE ADDRESS";
-        drawtext(1, 5, (char *)title, ST7735_ORANGE, ST7735_BLACK, 1);
-        drawtext(1, 15, "INDEX:", ST7735_WHITE, ST7735_BLACK, 1);
-        u16_to_str((unsigned int)bip84_address_index, index_text);
-        drawtext(45, 15, index_text, ST7735_CYAN, ST7735_BLACK, 1);
-        if (derived) {
-            draw_bip84_wrapped_text(result.address, 1, 30, 25, 6);
-        } else {
-            drawtext(1, 30, "DERIVATION ERROR", ST7735_RED, ST7735_BLACK, 1);
-        }
-    } else if (bip84_menu_pointer == cBIP84_FINGERPRINT) {
-        if (get_current_bip84_result(0, 0, &result)) {
-            drawtext(1, 5, "MASTER FINGERPRINT", ST7735_ORANGE, ST7735_BLACK, 1);
-            drawtext(1, 30, result.fingerprint, ST7735_CYAN, ST7735_BLACK, 2);
-        } else {
-            drawtext(1, 5, "FINGERPRINT ERROR", ST7735_RED, ST7735_BLACK, 1);
-        }
-    } else {
-        if (get_current_bip84_result(0, 0, &result)) {
-            value = (bip84_extended_key_page == 0) ? result.xpub : result.zpub;
-            title = (bip84_extended_key_page == 0) ? "XPUB" : "ZPUB";
-            drawtext(1, 5, (char *)title, ST7735_ORANGE, ST7735_BLACK, 1);
-            draw_bip84_wrapped_text(value, 1, 18, 25, 7);
-        } else {
-            drawtext(1, 5, "KEY DERIVATION ERROR", ST7735_RED, ST7735_BLACK, 1);
-        }
-    }
-
-    grid_menu2();
-    estado = SHOW_BIP84_INFO;
-}
-#endif
 
 
 
@@ -2473,54 +2102,6 @@ void draw_compactqr_code(int size, unsigned char *data){
 }
 
 
-#if defined(v2) 
-void draw_xpub_qr(const char *text) {
-    white_screen();
-    // Version 6 has 41x41 modules. 
-    // We use a local scale of 2 to fit the 160x128 screen bounds.
-    int local_scale = 2; 
-
-    // Dynamic buffer allocation for Version 6
-    uint8_t qrcodeData[qrcode_getBufferSize(6)];
-    QRCode qrcode;
-
-    // Initialize the QR code: Version 6, ECC_LOW (Level L)
-    qrcode_initText(&qrcode, qrcodeData, 6, ECC_LOW, text);
-
-    int qr_size = qrcode.size;
-    int img_size = qr_size * local_scale;
-    
-    // Center the QR code on the screen
-    int x_offset = (SCREEN_WIDTH - img_size) / 2;
-    int y_offset = (SCREEN_HEIGHT - img_size) / 2;
-
-    // 1. Draw the white background and the required 4-module "Quiet Zone"
-    int margin = 8 * local_scale; 
-    fillRect(
-        x_offset - margin, 
-        y_offset - margin, 
-        img_size + (2 * margin), 
-        img_size + (2 * margin), 
-        ST7735_WHITE
-    );
-
-    // 2. Iterate and draw ONLY the black modules to maximize SPI performance
-    for (int y = 0; y < qr_size; y++) {
-        for (int x = 0; x < qr_size; x++) {
-            if (qrcode_getModule(&qrcode, x, y)) {
-                fillRect(
-                    x_offset + (x * local_scale), 
-                    y_offset + (y * local_scale), 
-                    local_scale, 
-                    local_scale, 
-                    ST7735_BLACK
-                );
-            }
-        }
-    }
-}
-
-#endif
 
 
 bool check_last_word(BYTE *data, size_t size, char* word_user) {
@@ -3095,13 +2676,6 @@ void sd_send_cmd(uint8_t cmd, uint32_t arg, uint8_t crc) {
 }
 
 uint8_t spi_recv(void) {
-#if defined(v2)
-    // --- V2: Hardware SPI3 ---
-    SPI3BUF = 0xFF;                  // Send a dummy byte to generate the clock pulses (SCK)
-    while (!SPI3STATbits.SPIRBF);    // Wait until the receive buffer is full
-    return SPI3BUF;                  // Read and return the incoming data from the SD card
-
-#else
     // --- V1: Original Bit-banging ---
     uint8_t data = 0;
 
@@ -3113,7 +2687,6 @@ uint8_t spi_recv(void) {
     }
 
     return data;
-#endif
 }
 
 uint8_t sd_get_response(void) {
@@ -3139,9 +2712,6 @@ uint8_t sd_get_response(void) {
 static bool sd_is_sdhc = false;
 
 bool sd_init(void) {
-    #if defined(v2) 
-        SPI3BRG = 0x0004;     // SLOW speed for initialization (sd_init)
-    #endif
     // 74+ clocks with CS held high
     SD_CS = 1;
     for (int i = 0; i < 10; i++) spi_send(0xFF); // 80 clocks
@@ -3231,11 +2801,6 @@ bool sd_init(void) {
         }
     }
     
-    #if defined(v2)
-        // Switch SPI3 back to high speed for data transfers
-        SPI3BRG = 1; 
-
-    #endif
 
     return true;
 }
@@ -3689,10 +3254,6 @@ void print_settings_screen(int sel) {
     
     drawtext(1, 10, text_seedqr, color_seedqr, ST7735_BLACK, 1);
 
-#if defined(v2)
-    uint16_t color_serial = (sel == cSETTINGS_MCU_SERIAL) ? ST7735_ORANGE : ST7735_WHITE;
-    drawtext(1, 20, "MCU SERIAL NUMBER", color_serial, ST7735_BLACK, 1);
-#endif
     
     grid_menu2(); 
 }
@@ -3706,31 +3267,6 @@ void print_seedqr_warning(void) {
     
 }
 
-#if defined(v2)
-void print_mcu_serial_screen(void) {
-    char hex_buf[5];
-    uint16_t parts[4];
-    int x_pos = 20;
-
-    black_screen();
-    drawtext(10, 30, "MCU SERIAL NUMBER:", ST7735_ORANGE, ST7735_BLACK, 1);
-    
-    // The PIC32MM uses UDID1 to UDID4. We extract 64 bits using UDID2 and UDID1.
-    parts[0] = (uint16_t)((UDID2 >> 16) & 0xFFFF);
-    parts[1] = (uint16_t)(UDID2 & 0xFFFF);
-    parts[2] = (uint16_t)((UDID1 >> 16) & 0xFFFF);
-    parts[3] = (uint16_t)(UDID1 & 0xFFFF);
-    
-    // Draw the chunks consecutively
-    for (int i = 0; i < 4; i++) {
-        u16_to_hex4(parts[i], hex_buf);
-        drawtext(x_pos, 60, hex_buf, ST7735_CYAN, ST7735_BLACK, 1);
-        x_pos += 26; // Advance cursor (4 chars * 6px + 2px spacing)
-    }
-    
-    grid_OK_only();
-}
-#endif
 
 void apply_1word_xor(int word_idx, int size) {
     BYTE xor_mask[36] = {0};
@@ -3941,22 +3477,10 @@ int main ( void ){
     LED_LCD =1;
     A0_LCD=0;
     LED = 0;
-    #if defined(v2)
-        // --- SPI1 Configuration (TFT LCD) ---
-        SPI1CON = 0x10000120; // Off, Master Mode, 8-bit
-        SPI1CON = 0x10008120; // On (ON = 1)
-        SPI1BRG = 1;          // Fast speed for the display
-
-        // --- SPI3 Configuration (SD Card) ---
-        SPI3CON = 0x10000120; // Off, Master Mode, 8-bit
-        SPI3CON = 0x10008120; // On (ON = 1)
-        SPI3BRG = 0x0004;     // SLOW speed for initialization (sd_init)
-    #else
         // --- Old board (v1) ---
         SPI1CON = 0x10000120;
         SPI1CON = 0x10008120;
         SPI1BRG = 1;
-    #endif
     LED_LCD =1;
     SD_CS =1;
 
@@ -3987,66 +3511,6 @@ int main ( void ){
     tmr1_init();
 
 
-    #if defined(v2)
-    /*// --- RIPEMD160 TEST ---
-    const uint8_t test_msg[] = "hello";
-    
-    // Expected strict mathematical result for "hello"
-    //uint8_t expected_hash[20] = {
-    //    0x10, 0x8f, 0x07, 0xb8, 0x38, 0x24, 0x12, 0x61, 0x2c, 0x04,
-    //    0x8d, 0x07, 0xd1, 0x3f, 0x81, 0x41, 0x18, 0x44, 0x5a, 0xcd
-    //};
-    uint8_t test_hash[20];
-
-    // Execute the algorithm
-    ripemd160(test_msg, 5, test_hash);
-
-    // Verify if the MCU calculated exactly the same hash
-    //if (memcmp(test_hash, expected_hash, 20) == 0) {
-    //    drawtext(10, 50, "RIPEMD160 OK!", ST7735_GREEN, ST7735_BLACK, 2);
-    //} else {
-    //    drawtext(10, 50, "RIPEMD FAIL!", ST7735_RED, ST7735_BLACK, 2);
-    //}
-    
-    // Wait 3 seconds to read the screen before loading the main menu
-    //delay_ms(3000); 
-    //black_screen();
-    // --- END TEST ---*/
-    
-    
-    
-    
-    
-    // ==========================================
-    // --- UART2 FRAME CONFIGURATION ---
-    // ==========================================
-    U2MODE = 0x0000; // Clear register first
-
-    // 1. Data bits and Parity (PDSEL)
-    // 0 = 8-bit data, no parity
-    U2MODEbits.PDSEL = 0; 
-
-    // 2. Stop bits (STSEL)
-    // 0 = 1 Stop bit
-    U2MODEbits.STSEL = 0; 
-
-    // 3. Flow Control (UEN)
-    // 0 = TX and RX pins are enabled and used; CTS and RTS pins are controlled by port latches (Flow control disabled)
-    U2MODEbits.UEN = 0;
-
-    // 4. Baud rate
-    U2BRG = 155; // 9600 bps at 24 MHz (Change to 51 if your clock is 8 MHz)
-
-    // 5. Enable module and pins
-    U2STAbits.UTXEN = 1; // Enable TX
-    U2STAbits.URXEN = 1; // Enable RX
-    U2MODEbits.ON = 1;   // Turn on UART2
-
-    //test QR XPUB
-    //black_screen();
-    //draw_xpub_qr("[89aa9c70/84h/0h/0h]xpub6C1WhE68AB95vTj1iM3Bpsu6jwuuKN8D2Z3mGaKNE8xxMHS2ehyN65V6md1KzaDREgcuRDs7AmfvNKFZ6sSykKyxHZDFFWXqVkKL8iss6SD");
-    //delay_ms(3000);
-    #endif
  
 
     int BT1_ST= 1;
@@ -4235,13 +3699,13 @@ int main ( void ){
                         if (main_pointer > 0) {
                             main_pointer--;
                         }
-                        main_screen(main_pointer); // <--- Actualizado
+                        main_screen(main_pointer); // <--- Updated
                         break;
                     case DOWN_BT:                        
                         if (main_pointer < (cMAIN_n_opt-1)) {
                             main_pointer++;
                         }
-                        main_screen(main_pointer); // <--- Actualizado
+                        main_screen(main_pointer); // <--- Updated
                         break;
 
                     case LEFT_BT:
@@ -5135,14 +4599,6 @@ int main ( void ){
                             } else {
                                 transition_to_size();
                             }
-#if defined(v2)
-                        } else if (selinput_pointer==cQRSCAN) {
-                            black_screen();
-                            drawtext(10, 10, "READY TO SCAN", ST7735_YELLOW, ST7735_BLACK, 1);
-                            //drawtext(10, 60, "BACK TO CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
-                            estado = QR_SCANNING;
-                        
-#endif                            
                         } else { // cFROMSD
                             black_screen();
                             if (seed_pointer == cSEED_triple && main_pointer == cMAIN_create) {
@@ -5824,12 +5280,6 @@ int main ( void ){
             case SHOW_SEED:
                 switch (pulsed_bt) {
                     case OK_BT:
-#if defined(v2)
-                        bip84_address_index = 0;
-                        bip84_extended_key_page = 0;
-                        bip84_account_cached = false;
-                        print_bip84_menu();
-#else
                         if (!seedqr_enabled) break; //QR disabled
                         white_screen();
                         {
@@ -5837,7 +5287,6 @@ int main ( void ){
                             draw_QRSEED(qr_buf, 16 + size_pointer*16 +1);                            
                         }
                         estado = SHOW_QRSEED;
-#endif
                         break;
                     case BACK_BT:
                         break;
@@ -5886,107 +5335,17 @@ int main ( void ){
                         break;
                 }
                 break;
-#if defined(v2)
-            case SHOW_SEED_MENU:
-                switch (pulsed_bt) {
-                    case OK_BT:
-                        if (bip84_menu_pointer == cBIP84_SEEDQR) {
-                            if (!seedqr_enabled) {
-                                black_screen();
-                                drawtext(1, 20, "SEEDQR DISABLED", ST7735_RED, ST7735_BLACK, 1);
-                                grid_OK_only();
-                                break;
-                            }
-
-                            white_screen();
-                            {
-                                BYTE *qr_buf = append_checksum(data_array_256b, 16 + size_pointer * 16);
-                                draw_QRSEED(qr_buf, 16 + size_pointer * 16 + 1);
-                                free(qr_buf);
-                            }
-                            bip84_qr_return_to_menu = true;
-                            estado = SHOW_QRSEED;
-                        } else {
-                            print_bip84_info_screen();
-                        }
-                        break;
-                    case BACK_BT:
-                        redraw_show_seed_with_offset();
-                        break;
-                    case UP_BT:
-                        if (bip84_menu_pointer > 0) {
-                            bip84_menu_pointer--;
-                        }
-                        print_bip84_menu();
-                        break;
-                    case DOWN_BT:
-                        if (bip84_menu_pointer < (cBIP84_n_opt - 1)) {
-                            bip84_menu_pointer++;
-                        }
-                        print_bip84_menu();
-                        break;
-                    default:
-                        break;
-                }
-                break;
-            case SHOW_BIP84_INFO:
-                switch (pulsed_bt) {
-                    case BACK_BT:
-                        print_bip84_menu();
-                        break;
-                    case UP_BT:
-                        if (bip84_menu_pointer == cBIP84_RECEIVE ||
-                            bip84_menu_pointer == cBIP84_CHANGE) {
-                            if (bip84_address_index > 0) {
-                                bip84_address_index--;
-                            }
-                            print_bip84_info_screen();
-                        }
-                        break;
-                    case DOWN_BT:
-                        if (bip84_menu_pointer == cBIP84_RECEIVE ||
-                            bip84_menu_pointer == cBIP84_CHANGE) {
-                            bip84_address_index++;
-                            print_bip84_info_screen();
-                        }
-                        break;
-                    case LEFT_BT:
-                    case RIGHT_BT:
-                        if (bip84_menu_pointer == cBIP84_XPUB) {
-                            bip84_extended_key_page = !bip84_extended_key_page;
-                            print_bip84_info_screen();
-                        }
-                        break;
-                    default:
-                        break;
-                }
-                break;
-#endif
            case SHOW_QRSEED:
                 switch (pulsed_bt) {
                     case OK_BT:
                         break;
                     case BACK_BT:
-#if defined(v2)
-                        if (bip84_qr_return_to_menu) {
-                            bip84_qr_return_to_menu = false;
-                            print_bip84_menu();
-                            break;
-                        }
-#endif
                         redraw_show_seed_with_offset();
                         break;
                     case UP_BT:
                     case DOWN_BT:
                         break;
                     case LEFT_BT:
-#if defined(v2)
-                        if (bip84_qr_return_to_menu) {
-                            bip84_qr_return_to_menu = false;
-                            print_bip84_menu();
-                            break;
-                        }
-#endif
                         redraw_show_seed_with_offset();
                         break;
                     case RIGHT_BT:
@@ -6161,12 +5520,6 @@ int main ( void ){
                                 print_settings_screen(settings_pointer);
                             }
                         }
-#if defined(v2)
-                    else if (settings_pointer == cSETTINGS_MCU_SERIAL) {
-                        print_mcu_serial_screen();
-                        estado = SHOW_MCU_SERIAL;
-                    }
-#endif
                     break;      
                 case BACK_BT:
                     transition_to_main();
@@ -6191,148 +5544,6 @@ int main ( void ){
                 estado = SEL_SETTINGS;
             }
             break;
-#if defined(v2)
-            case SHOW_MCU_SERIAL:
-                if (pulsed_bt == OK_BT || pulsed_bt == BACK_BT) {
-                    black_screen();
-                    print_settings_screen(settings_pointer);
-                    estado = SEL_SETTINGS;
-                }
-                break;
-            case QR_SCANNING:
-                switch (pulsed_bt) {
-                    case OK_BT: {
-                        // 1. Clear hardware errors and flush the UART buffer before triggering
-                        if (U2STAbits.OERR) {
-                            U2STAbits.OERR = 0; 
-                        }
-                        while (U2STAbits.URXDA) {
-                            (void)U2RXREG; 
-                        }
-
-                        // 2. Send the trigger command to the scanner
-                        uint8_t trigger_cmd[] = {0x7E, 0x00, 0x08, 0x01, 0x00, 0x02, 0x01, 0xAB, 0xCD};
-                        for (int i = 0; i < sizeof(trigger_cmd); i++) {
-                            while (U2STAbits.UTXBF); 
-                            U2TXREG = trigger_cmd[i]; 
-                        }
-                        
-                        drawtext(10, 30, "SCANNING...    ", ST7735_GREEN, ST7735_BLACK, 1);
-                        
-                        uint8_t rx_buf[2048];
-                        int rx_len = 0;
-                        uint32_t timeout = 100000;
-
-                        // 3. Wait for the response
-                        while (timeout > 0 && rx_len < sizeof(rx_buf) - 1) {
-                            if (U2STAbits.URXDA) {               
-                                rx_buf[rx_len++] = U2RXREG; 
-                                
-                                if (rx_len > 16) {
-                                    timeout = 100000; // Time to stop waiting after qr code has already been detected
-                                } else {
-                                    timeout = 8500000; //Time to detect a QR code
-                                }
-                            }
-                            timeout--;
-                        }
-
-                        bool success = false;
-                        //char str_buf[8]; 
-
-
-                        // Draw Total RX Length
-                        //drawtext(0, 0, "RX LEN:", ST7735_WHITE, ST7735_BLACK, 1);
-                        //u16_to_str((unsigned int)rx_len, str_buf);
-                        //drawtext(45, 0, str_buf, ST7735_WHITE, ST7735_BLACK, 1);
-
-                        // 4. Analyze data if we received anything
-                        if (rx_len > 0) {
-                            uint8_t scan_resp[] = {0x02, 0x00, 0x00, 0x01, 0x00, 0x33, 0x31};
-                            int data_start = 0;
-
-                            // Check for the module's start echo
-                            if (rx_len >= 7 && memcmp(rx_buf, scan_resp, 7) == 0) {
-                                data_start = 7;
-                            } 
-
-                            int payload_len = rx_len - data_start;
-
-                            // Draw Payload Length
-                            //drawtext(0, 10, "PAY LEN:", ST7735_WHITE, ST7735_BLACK, 1);
-                            //u16_to_str((unsigned int)payload_len, str_buf);
-                            //drawtext(50, 10, str_buf, ST7735_WHITE, ST7735_BLACK, 1);
-
-                            // Draw ONLY the header/echo
-                            //drawtext(0, 20, "HDR:", ST7735_YELLOW, ST7735_BLACK, 1);
-                            //int cur_x = 25;
-                            //for (int i = 0; i < data_start; i++) {
-                            //    u16_to_hex4((uint16_t)rx_buf[i], str_buf);
-                                // Skip the first two '00' chars from u16_to_hex4 output
-                            //    drawtext(cur_x, 20, &str_buf[2], ST7735_YELLOW, ST7735_BLACK, 1);
-                            //    cur_x += 14; 
-                            //}
-
-                            if (payload_len > 0) {
-                                //drawtext(0, 30, "PAY:", ST7735_CYAN, ST7735_BLACK, 1);
-
-                                //cur_x = 25;
-                                //int cur_y = 30;
-
-                                // Loop through ALL payload bytes and print them with screen wrapping
-                                //for (int i = 0; i < payload_len; i++) {
-                                //    u16_to_hex4((uint16_t)rx_buf[data_start + i], str_buf);
-                                    // Skip the first two '00' chars
-                                //    drawtext(cur_x, cur_y, &str_buf[2], ST7735_CYAN, ST7735_BLACK, 1);
-
-                                //    cur_x += 14; 
-
-                                    // Screen wrap logic for 160px screen width
-                                //    if (cur_x > 140) { 
-                                //        cur_x = 25;
-                                //        cur_y += 10;
-                                //    }
-                                //}
-
-                                // Move Y cursor down after payload printing is done
-                                //cur_y += 12;
-
-                                // Execute validation
-                                bool valid_res = validate_and_load_qr(&rx_buf[data_start], payload_len);
-
-                                // Print validation result
-                                //drawtext(0, cur_y, "VAL RES:", ST7735_WHITE, ST7735_BLACK, 1);
-                                if (valid_res) {
-                                    drawtext(10, 40, "OK!", ST7735_GREEN, ST7735_BLACK, 1);
-                                    delay_ms(500); 
-                                    redraw_show_seed_with_offset();
-                                    success = true;
-                                } else {
-                                    drawtext(10, 40, "NO SEED or BAD CHECKSUM", ST7735_RED, ST7735_BLACK, 1);
-                                }
-                            } else {
-                                drawtext(10, 40, "NO QR DETECTED", ST7735_RED, ST7735_BLACK, 1);
-                            }
-                        } else {
-                            drawtext(10, 40, "NO RESPONSE FROM SENSOR", ST7735_RED, ST7735_BLACK, 1);
-                        }
-
-                        // 5. Keep the debug info on screen for 5 seconds before clearing
-                        if (!success) {
-                            delay_ms(1000); 
-                            black_screen();
-                            drawtext(10, 10, "READY TO SCAN", ST7735_YELLOW, ST7735_BLACK, 1);
-                        }
-                        break;
-                    }
-                    case BACK_BT:
-                        transition_to_input(selinput_pointer);
-                        break;
-                    default:
-                        break;
-                }
-                break;
-#endif    
             case END_MODE:
                 switch (pulsed_bt) {
                     case OK_BT:
