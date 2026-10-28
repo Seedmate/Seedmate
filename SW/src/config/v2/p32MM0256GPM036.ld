@@ -308,7 +308,7 @@ SECTIONS
 
 .text :
   {
-    *(.text .text.*)   /* 
+    *(.text .text.*)    
     *(.stub .gnu.linkonce.t.*)
     KEEP (*(.text.*personality*))
     *(.mips16.fn.*)

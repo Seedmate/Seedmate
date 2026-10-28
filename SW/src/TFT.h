@@ -81,13 +81,7 @@
 #define fx  90  
 #define px  30
 
-#if defined(v1) 
-    #define A0_LCD    PORTBbits.RB5   //A0 LCD    
-#endif
-
-#if defined(v2) 
-    #define A0_LCD    PORTCbits.RC3   //A0 LCD    
-#endif
+#define A0_LCD    PORTCbits.RC3   // A0 LCD
 
 #define R_LCD     PORTBbits.RB4   //RST LCD
 

@@ -117,7 +117,7 @@
     #define BT6       PORTAbits.RA4   // Button 6
 
     // ============================================================================
-    // Bootloader Shared Memory Flags (v2 only)
+    // Bootloader Shared Memory Flags
     // ============================================================================
     #define UPDATE_FLAG_ADDR ((volatile uint32_t *)0x80007F00)
     #define MAGIC_WORD_UPDATE 0x55AA1234
@@ -145,9 +145,6 @@
     #define cSETTINGS_MCU_SERIAL 1
     #define cSETTINGS_UPDATE_FW 2
     #define cSETTINGS_MCU_SERIAL 1
-
-    // Macro to easily move functions to the bootloader flash on v1 hardware
-    #define BOOTFLASH_FUNC
 
 #define cEND_OF_LINE 150
 #define cENTROPY_BITS12W 127
