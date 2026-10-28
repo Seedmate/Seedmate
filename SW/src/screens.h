@@ -30,6 +30,7 @@ extern const char* const menu_resource[];
 extern const char* const menu_obfus[];
 extern const char* const menu_erase[];
 extern const char* const menu_bip84[];
+extern const char* const menu_sign[];
 extern const char* const menu_input[];
 
 // Drawing functions

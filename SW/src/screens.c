@@ -49,7 +49,8 @@ const char* const menu_sss[]      = {"SPLIT", "MERGE"};
 const char* const menu_resource[] = {"TUTORIAL", "BACKUP TOOL", "DICE TESTER", "PRINT WORDLIST", "BINARY WORDLIST"};
 const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB","1 WORD XOR","HOW TO"}; 
 const char* const menu_erase[]    = {"ERASE SECTOR", "WIPE ALL CARD"};
-const char* const menu_bip84[] = {"RECEIVE ADDRESS", "CHANGE ADDRESS", "SEEDQR", "FINGERPRINT", "XPUB", "PASSPHRASE"};
+const char* const menu_bip84[] = {"RECEIVE ADDRESS", "CHANGE ADDRESS", "SEEDQR", "FINGERPRINT", "XPUB", "PASSPHRASE", "SIGN"};
+const char* const menu_sign[]     = {"FROM QR", "FROM SD"};
 const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD", "QR SCAN"};
 
 void draw_hex16(unsigned int x, unsigned int y, uint16_t numero, int N, unsigned int color, unsigned int bg, unsigned int size) {

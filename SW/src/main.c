@@ -187,6 +187,7 @@ int bip85_index = 0;
 int bip85_cursor = 0;
 
 int bip84_menu_pointer = 0;
+static int sign_menu_pointer = 0;
 uint32_t bip84_address_index = 0;
 int bip84_extended_key_page = 0;
 bool bip84_qr_return_to_menu = false;
@@ -726,6 +727,7 @@ typedef enum
         WARNING_UPDATE_FW,
         SHOW_SEED_MENU,
         SHOW_BIP84_INFO,
+        SIGN_MENU,
     SEL_ERASE_MODE,
     CONFIRM_WIPE_SD,
     PROCESS_WIPE_SD,
@@ -1697,6 +1699,12 @@ static void print_bip84_menu(void)
     
     estado = SHOW_SEED_MENU;
     estado = SHOW_SEED_MENU;
+}
+
+static void print_sign_menu(void)
+{
+    print_generic_menu(menu_sign, cSIGN_n_opt, sign_menu_pointer);
+    estado = SIGN_MENU;
 }
 
 static void print_bip84_info_screen(void)
@@ -3480,13 +3488,161 @@ static void psbt_view_amount_line(int y, const char *label, bool known, uint64_t
     drawtext(5, y, line, color, ST7735_BLACK, 1);
 }
 
-// Page 0: totals and fee
+// Who owns an input or output, checked against the loaded seed
+typedef enum {
+    PSBT_OWNER_NO_INFO,     // No BIP32 derivation in the PSBT
+    PSBT_OWNER_OTHER,       // Derivations present, none with our fingerprint
+    PSBT_OWNER_FP_ONLY,     // Our fingerprint, but a path outside our BIP84 account
+    PSBT_OWNER_VERIFIED,    // Key and script derived from our BIP84 account
+    PSBT_OWNER_MISMATCH     // Our fingerprint and path, but a different key or script
+} psbt_owner_t;
+
+static bool psbt_fp_is_mine(uint32_t fingerprint) {
+    return bip84_account_cached && fingerprint == bip84_master_fingerprint;
+}
+
+// m/84'/0'/0'/chain/index with chain 0 (receive) or 1 (change)
+static bool psbt_is_bip84_path(const psbt_keypath_t *kp) {
+    return kp->path_len == 5 &&
+           psbt_path_element(kp, 0) == (84 | PSBT_HARDENED) &&
+           psbt_path_element(kp, 1) == PSBT_HARDENED &&
+           psbt_path_element(kp, 2) == PSBT_HARDENED &&
+           psbt_path_element(kp, 3) <= 1 &&
+           psbt_path_element(kp, 4) < PSBT_HARDENED;
+}
+
+// Derives the path's key from the cached account and checks that it is the
+// key in the PSBT and that the script is the P2WPKH paying to it
+static bool psbt_bip84_key_matches(const psbt_keypath_t *kp, const uint8_t *script, uint32_t script_len) {
+    if (kp->key_len != 33 || psbt_script_type(script, script_len) != PSBT_SCRIPT_P2WPKH) return false;
+
+    HDNode node = (psbt_path_element(kp, 3) == 0) ? bip84_receive_node_cache : bip84_change_node_cache;
+    bool match = hdnode_private_ckd(&node, psbt_path_element(kp, 4)) != 0;
+    if (match) {
+        hdnode_fill_public_key(&node);
+        match = memcmp(node.public_key, kp->key, 33) == 0;
+    }
+    if (match) {
+        uint8_t sha256_pub[32];
+        uint8_t hash160[20];
+        SHA256_CTX ctx;
+        sha256_init(&ctx);
+        sha256_update(&ctx, node.public_key, 33);
+        sha256_final(&ctx, sha256_pub);
+        ripemd160(sha256_pub, 32, hash160);
+        match = memcmp(hash160, &script[2], 20) == 0;
+    }
+    memzero(&node, sizeof(node));   // Holds a private key
+    return match;
+}
+
+// Classifies an input (is_input) or output and returns in 'shown' the
+// derivation to display: ours if present, else the first one
+static psbt_owner_t psbt_check_owner(const psbt_t *psbt, bool is_input, uint32_t index,
+                                     const uint8_t *script, uint32_t script_len, psbt_keypath_t *shown) {
+    psbt_keypath_t kp;
+    bool any = false;
+
+    for (uint32_t n = 0;
+         is_input ? psbt_input_keypath(psbt, index, n, &kp) : psbt_output_keypath(psbt, index, n, &kp);
+         n++) {
+        if (!any) {
+            *shown = kp;
+            any = true;
+        }
+        if (!psbt_fp_is_mine(kp.fingerprint)) continue;
+
+        *shown = kp;
+        if (!psbt_is_bip84_path(&kp)) return PSBT_OWNER_FP_ONLY;
+        return psbt_bip84_key_matches(&kp, script, script_len) ? PSBT_OWNER_VERIFIED : PSBT_OWNER_MISMATCH;
+    }
+    return any ? PSBT_OWNER_OTHER : PSBT_OWNER_NO_INFO;
+}
+
+// Ownership line at y and, when there is one, the derivation path below it
+static void psbt_view_owner(int y, psbt_owner_t owner, const psbt_keypath_t *kp, bool is_output) {
+    char text[PSBT_PATH_STR_LEN];
+
+    switch (owner) {
+        case PSBT_OWNER_NO_INFO:
+            drawtext(5, y, is_output ? "EXTERNAL" : "NO KEY INFO", ST7735_WHITE, ST7735_BLACK, 1);
+            return;
+        case PSBT_OWNER_OTHER:
+            strcpy(text, "OTHER FP ");
+            psbt_format_fingerprint(kp->fingerprint, &text[9]);
+            drawtext(5, y, text, ST7735_YELLOW, ST7735_BLACK, 1);
+            break;
+        case PSBT_OWNER_FP_ONLY:
+            drawtext(5, y, "MY FP, PATH NOT CHECKED", ST7735_YELLOW, ST7735_BLACK, 1);
+            break;
+        case PSBT_OWNER_VERIFIED:
+            if (!is_output) {
+                strcpy(text, "MINE (VERIFIED)");
+            } else {
+                strcpy(text, (psbt_path_element(kp, 3) == 1) ? "CHANGE (VERIFIED)" : "MINE, RECEIVE (VERIFIED)");
+            }
+            drawtext(5, y, text, ST7735_GREEN, ST7735_BLACK, 1);
+            break;
+        default:
+            drawtext(5, y, "KEY MISMATCH! NOT YOURS", ST7735_RED, ST7735_BLACK, 1);
+            break;
+    }
+    psbt_format_path(kp, text);
+    draw_bip84_wrapped_text(text, 5, y + 10, PSBT_VIEW_LINE_CHARS, 2);
+}
+
+// "MULTISIG m-OF-n" at y and up to 6 key fingerprints below, ours in green
+static void psbt_view_multisig(int y, const psbt_t *psbt, bool is_input, uint32_t index,
+                               const uint8_t *witness_script, uint32_t witness_len,
+                               const uint8_t *redeem_script, uint32_t redeem_len) {
+    uint8_t m, n;
+    char line[24];
+    char num[4];
+    psbt_keypath_t kp;
+
+    if (!psbt_multisig_info(witness_script, witness_len, &m, &n) &&
+        !psbt_multisig_info(redeem_script, redeem_len, &m, &n)) {
+        return;
+    }
+    strcpy(line, "MULTISIG ");
+    fast_itoa(m, num);
+    strcat(line, num);
+    strcat(line, "-OF-");
+    fast_itoa(n, num);
+    strcat(line, num);
+    drawtext(5, y, line, ST7735_CYAN, ST7735_BLACK, 1);
+
+    for (uint32_t k = 0; k < 6; k++) {
+        bool found = is_input ? psbt_input_keypath(psbt, index, k, &kp) : psbt_output_keypath(psbt, index, k, &kp);
+        if (!found) break;
+        psbt_format_fingerprint(kp.fingerprint, line);
+        drawtext(1 + (k % 3) * 54, y + 10 + (k / 3) * 10, line,
+                 psbt_fp_is_mine(kp.fingerprint) ? ST7735_GREEN : ST7735_WHITE, ST7735_BLACK, 1);
+    }
+}
+
+// Page 0: totals, fee, our fingerprint, locktime/RBF and warnings
 static void psbt_view_summary(const psbt_t *psbt) {
     char line[32];
     char num[12];
     uint64_t sum_in, sum_out, fee;
     bool totals_ok = psbt_get_totals(psbt, &sum_in, &sum_out);
     bool fee_ok = psbt_get_fee(psbt, &fee);
+    uint32_t my_inputs = 0, signed_inputs = 0, odd_sighash = 0;
+    psbt_input_t in;
+    psbt_keypath_t kp;
+
+    for (uint32_t i = 0; i < psbt->input_count; i++) {
+        if (!psbt_get_input(psbt, i, &in)) continue;
+        if (in.finalized || in.partial_sig_count > 0) signed_inputs++;
+        if (in.has_sighash && in.sighash != PSBT_SIGHASH_ALL) odd_sighash++;
+        for (uint32_t n = 0; psbt_input_keypath(psbt, i, n, &kp); n++) {
+            if (psbt_fp_is_mine(kp.fingerprint)) {
+                my_inputs++;
+                break;
+            }
+        }
+    }
 
     drawtext(5, 5, "TRANSACTION SUMMARY", ST7735_YELLOW, ST7735_BLACK, 1);
 
@@ -3496,18 +3652,64 @@ static void psbt_view_summary(const psbt_t *psbt) {
     strcat(line, "  OUTPUTS: ");
     fast_itoa(psbt->output_count, num);
     strcat(line, num);
-    drawtext(5, 22, line, ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 17, line, ST7735_WHITE, ST7735_BLACK, 1);
 
-    psbt_view_amount_line(40, "IN:  ", totals_ok, sum_in, ST7735_WHITE);
-    psbt_view_amount_line(52, "OUT: ", true, sum_out, ST7735_WHITE);
-    psbt_view_amount_line(70, "FEE: ", fee_ok, fee, ST7735_ORANGE);
-    if (!fee_ok) {
-        drawtext(5, 82, "MISSING UTXO DATA", ST7735_RED, ST7735_BLACK, 1);
+    psbt_view_amount_line(29, "IN:  ", totals_ok, sum_in, ST7735_WHITE);
+    psbt_view_amount_line(39, "OUT: ", true, sum_out, ST7735_WHITE);
+    psbt_view_amount_line(49, "FEE: ", fee_ok, fee, fee_ok ? ST7735_ORANGE : ST7735_RED);
+
+    // Inputs carrying our master fingerprint
+    strcpy(line, "MY FP ");
+    psbt_format_fingerprint(bip84_master_fingerprint, &line[6]);
+    strcat(line, " IN ");
+    fast_itoa(my_inputs, num);
+    strcat(line, num);
+    strcat(line, "/");
+    fast_itoa(psbt->input_count, num);
+    strcat(line, num);
+    drawtext(5, 61, line, (my_inputs == psbt->input_count) ? ST7735_GREEN :
+                          (my_inputs > 0) ? ST7735_YELLOW : ST7735_RED, ST7735_BLACK, 1);
+
+    // Locktime: block height or UNIX time, and replace-by-fee signaling
+    if (psbt->locktime == 0) {
+        strcpy(line, "LOCK: NONE");
+    } else {
+        strcpy(line, (psbt->locktime < PSBT_LOCKTIME_THRESHOLD) ? "LOCK: BLK " : "LOCK: T ");
+        fast_itoa(psbt->locktime, num);
+        strcat(line, num);
+    }
+    if (psbt_signals_rbf(psbt)) strcat(line, " RBF");
+    drawtext(5, 71, line, ST7735_WHITE, ST7735_BLACK, 1);
+
+    // Global xpubs (multisig coordinators include all of them)
+    uint32_t xpubs = 0;
+    bool my_xpub = false;
+    while (psbt_global_xpub(psbt, xpubs, &kp)) {
+        if (psbt_fp_is_mine(kp.fingerprint)) my_xpub = true;
+        xpubs++;
+    }
+    if (xpubs > 0) {
+        strcpy(line, "XPUBS: ");
+        fast_itoa(xpubs, num);
+        strcat(line, num);
+        strcat(line, my_xpub ? " (MINE IN)" : " (NOT MINE)");
+        drawtext(5, 81, line, my_xpub ? ST7735_WHITE : ST7735_YELLOW, ST7735_BLACK, 1);
+    }
+
+    if (odd_sighash > 0) {
+        drawtext(5, 93, "WARNING: SIGHASH NOT ALL", ST7735_RED, ST7735_BLACK, 1);
+    }
+    if (signed_inputs > 0) {
+        strcpy(line, "ALREADY SIGNED: ");
+        fast_itoa(signed_inputs, num);
+        strcat(line, num);
+        drawtext(5, 103, line, ST7735_CYAN, ST7735_BLACK, 1);
     }
 }
 
 static void psbt_view_input(const psbt_t *psbt, uint32_t index) {
     psbt_input_t in;
+    psbt_keypath_t kp;
     char line[32];
     char num[12];
     char text[PSBT_ADDRESS_MAX_LEN];
@@ -3524,28 +3726,49 @@ static void psbt_view_input(const psbt_t *psbt, uint32_t index) {
         drawtext(5, 22, "READ ERROR", ST7735_RED, ST7735_BLACK, 1);
         return;
     }
-
-    drawtext(5, 20, "TXID:", ST7735_CYAN, ST7735_BLACK, 1);
-    psbt_format_txid(in.prev_txid, text);
-    draw_bip84_wrapped_text(text, 5, 30, PSBT_VIEW_LINE_CHARS, 3);
-
-    strcpy(line, "VOUT: ");
-    fast_itoa(in.prev_vout, num);
-    strcat(line, num);
-    drawtext(5, 60, line, ST7735_WHITE, ST7735_BLACK, 1);
-
-    psbt_view_amount_line(74, "AMT: ", in.has_amount, in.amount, ST7735_WHITE);
     if (in.has_amount) {
-        drawtext(5, 86, in.amount_from_witness ? "SRC: WITNESS_UTXO" : "SRC: NON_WITNESS_UTXO",
-                 ST7735_CYAN, ST7735_BLACK, 1);
-        strcpy(line, "TYPE: ");
-        strcat(line, psbt_script_type_name(psbt_script_type(in.script, in.script_len)));
-        drawtext(5, 98, line, ST7735_CYAN, ST7735_BLACK, 1);
+        strcpy(line, psbt_script_type_name(psbt_script_type(in.script, in.script_len)));
+        drawtext(90, 5, line, ST7735_CYAN, ST7735_BLACK, 1);
     }
+
+    // Shortened outpoint: first and last 8 txid chars, then ":vout"
+    psbt_format_txid(in.prev_txid, text);
+    memcpy(line, text, 8);
+    memcpy(&line[8], "...", 3);
+    memcpy(&line[11], &text[56], 8);
+    line[19] = ':';
+    fast_itoa(in.prev_vout, &line[20]);
+    drawtext(5, 15, line, ST7735_CYAN, ST7735_BLACK, 1);
+
+    psbt_view_amount_line(25, "AMT: ", in.has_amount, in.amount, ST7735_WHITE);
+    if (in.has_amount) {
+        drawtext(5, 35, in.amount_from_witness ? "UTXO: WITNESS ONLY" : "UTXO: FULL PREV TX",
+                 ST7735_CYAN, ST7735_BLACK, 1);
+    }
+
+    psbt_owner_t owner = psbt_check_owner(psbt, true, index, in.script, in.script_len, &kp);
+    psbt_view_owner(45, owner, &kp, false);
+
+    // Signing state and sighash, e.g. "SIGS:1 SIGHASH:ALL" (fits one line)
+    if (in.finalized) {
+        strcpy(line, "FINAL");
+    } else {
+        strcpy(line, "SIGS:");
+        fast_itoa(in.partial_sig_count > 99 ? 99 : in.partial_sig_count, num);
+        strcat(line, num);
+    }
+    bool odd_sighash = in.has_sighash && in.sighash != PSBT_SIGHASH_ALL;
+    strcat(line, " SIGHASH:");
+    strcat(line, in.has_sighash ? psbt_sighash_name(in.sighash) : "ALL");
+    drawtext(5, 77, line, odd_sighash ? ST7735_RED : ST7735_WHITE, ST7735_BLACK, 1);
+
+    psbt_view_multisig(88, psbt, true, index, in.witness_script, in.witness_script_len,
+                       in.redeem_script, in.redeem_script_len);
 }
 
 static void psbt_view_output(const psbt_t *psbt, uint32_t index) {
     psbt_output_t out;
+    psbt_keypath_t kp;
     char line[32];
     char num[12];
     char addr[PSBT_ADDRESS_MAX_LEN];
@@ -3562,16 +3785,19 @@ static void psbt_view_output(const psbt_t *psbt, uint32_t index) {
         drawtext(5, 22, "READ ERROR", ST7735_RED, ST7735_BLACK, 1);
         return;
     }
+    strcpy(line, psbt_script_type_name(psbt_script_type(out.script, out.script_len)));
+    drawtext(90, 5, line, ST7735_CYAN, ST7735_BLACK, 1);
 
-    psbt_view_amount_line(20, "AMT: ", true, out.amount, ST7735_WHITE);
+    psbt_view_amount_line(15, "AMT: ", true, out.amount, ST7735_WHITE);
 
-    strcpy(line, "TYPE: ");
-    strcat(line, psbt_script_type_name(psbt_script_type(out.script, out.script_len)));
-    drawtext(5, 32, line, ST7735_CYAN, ST7735_BLACK, 1);
-
-    drawtext(5, 48, "TO:", ST7735_CYAN, ST7735_BLACK, 1);
     psbt_view_address(out.script, out.script_len, addr);
-    draw_bip84_wrapped_text(addr, 5, 58, PSBT_VIEW_LINE_CHARS, 4);
+    draw_bip84_wrapped_text(addr, 5, 27, PSBT_VIEW_LINE_CHARS, 3);
+
+    psbt_owner_t owner = psbt_check_owner(psbt, false, index, out.script, out.script_len, &kp);
+    psbt_view_owner(59, owner, &kp, true);
+
+    psbt_view_multisig(88, psbt, false, index, out.witness_script, out.witness_script_len,
+                       out.redeem_script, out.redeem_script_len);
 }
 
 // Parses a PSBT and lets the user page through summary, inputs and outputs.
@@ -3622,20 +3848,16 @@ static void show_psbt_details(const uint8_t *data, uint32_t len) {
 
 void scan_ur_animated_qr(void) {
     black_screen();
-    drawtext(10, 10, "DIAGNOSTIC MODE", ST7735_YELLOW, ST7735_BLACK, 1);
-    drawtext(10, 110, "PRESS BACK TO CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(10, 10, "SCANNING PSBT", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(10, 105, "PRESS BACK TO CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
+    // Same progress bar outline as precompute_bip84_account()
+    rectan(9, 120, 151, 125, WHITE);
 
     init_bytewords_lookup();
     fountain_init();
 
     uint32_t trigger_timeout = 200000;
-    char burst_buffer[MAX_UR_PAYLOAD_LEN * 2 + 50]; 
-    char num_buf[6];
-    char status_str[32];
-
-    // Telemetry counters for Test 1 (Frame CRC filter) and Test 2 (crc32_update self-test)
-    uint32_t bw_crc_ok_count = 0;
-    uint32_t bw_crc_err_count = 0;
+    char burst_buffer[MAX_UR_PAYLOAD_LEN * 2 + 50];
 
     // Clear OERR flag and flush buffer ONLY once at startup
     if (U2STAbits.OERR) U2STAbits.OERR = 0;
@@ -3728,7 +3950,7 @@ void scan_ur_animated_qr(void) {
                             }
                         }
 
-                        // TEST 1 & TEST 2: INDIVIDUAL FRAME BYTEWORDS CRC-32 VERIFICATION
+                        // Per-frame Bytewords CRC-32 verification
                         if (!decode_error && decoded_len > 4) {
                             uint32_t bw_data_len = decoded_len - 4;
                             
@@ -3742,22 +3964,10 @@ void scan_ur_animated_qr(void) {
                             uint32_t calc_bw_crc = crc32_update(0xFFFFFFFFU, decoded_bytes, bw_data_len) ^ 0xFFFFFFFFU;
 
                             if (calc_bw_crc == expected_bw_crc) {
-                                bw_crc_ok_count++;
                                 decoded_len = bw_data_len;
                             } else {
-                                bw_crc_err_count++;
                                 decode_error = true; // Reject corrupted UART frame before it pollutes Fountain XOR
                             }
-
-                            // Display live Bytewords CRC telemetry on line Y=32
-                            rectan(10, 32, 159, 43, BLACK);
-                            strcpy(status_str, "BW OK:");
-                            fast_itoa(bw_crc_ok_count, num_buf);
-                            strcat(status_str, num_buf);
-                            strcat(status_str, " ERR:");
-                            fast_itoa(bw_crc_err_count, num_buf);
-                            strcat(status_str, num_buf);
-                            drawtext(10, 32, status_str, (bw_crc_err_count > 0) ? ST7735_RED : ST7735_CYAN, ST7735_BLACK, 1);
                         } else {
                             decode_error = true;
                         }
@@ -3784,20 +3994,13 @@ void scan_ur_animated_qr(void) {
                                     
                                     bool complete = fountain_process_frame(cbor_seq, cbor_total, cbor_msg_len, cbor_checksum, fragment_data, frag_len);
                                     
-                                    // PROBE 2: MEMORY LEAK MONITORING (MIXED COUNT)
-                                    rectan(10, 45, 159, 105, BLACK);
-                                    strcpy(status_str, "PURE: ");
-                                    fast_itoa(fountain_get_pure_count(), num_buf);
-                                    strcat(status_str, num_buf);
-                                    strcat(status_str, "/");
-                                    fast_itoa(cbor_total, num_buf);
-                                    strcat(status_str, num_buf);
-                                    drawtext(10, 45, status_str, ST7735_GREEN, ST7735_BLACK, 1);
-                                    
-                                    strcpy(status_str, "MIXED BUF: ");
-                                    fast_itoa(fountain_get_mixed_count(), num_buf);
-                                    strcat(status_str, num_buf);
-                                    drawtext(10, 60, status_str, ST7735_ORANGE, ST7735_BLACK, 1);
+                                    // Progress = recovered fragments / total fragments
+                                    if (cbor_total > 0) {
+                                        uint32_t pure = fountain_get_pure_count();
+                                        if (pure > cbor_total) pure = cbor_total;
+                                        uint32_t fill = (140u * pure) / cbor_total;
+                                        if (fill > 0) rectan(10, 121, 10 + fill, 124, ST7735_GREEN);
+                                    }
 
                                     if (complete) {
                                         uint32_t crc = 0xFFFFFFFFU;
@@ -3868,6 +4071,8 @@ void scan_ur_animated_qr(void) {
 
                                             if (BT1 == 0) break;
                                             rectan(5, 62, 159, 112, BLACK);
+                                            drawtext(10, 105, "PRESS BACK TO CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
+                                            rectan(10, 121, 150, 124, BLACK); // Restart the progress bar
                                             fountain_init();
                                         }
                                     }
@@ -3895,86 +4100,9 @@ void scan_ur_animated_qr(void) {
     }
 
     if (psbt_recovered) {
-        black_screen();
-        drawtext(5, 5, "SUCCESS! PSBT REBUILT", ST7735_GREEN, ST7735_BLACK, 1);
-        
-        int cursor_x = 5;
-        int cursor_y = 25;
-        uint32_t total_bytes = 0;
-        uint32_t bytes_printed = 0;
-        
-        uint32_t final_total = fountain_get_total_parts();
-        
-        uint8_t sd_sector_buffer[512];
-        uint32_t export_bytes_written = 0;
-
-        // 1. Clear the 512-byte block buffer with zeros
-        for (int i = 0; i < 512; i++) {
-            sd_sector_buffer[i] = 0;
-        }
-        
-        for (uint32_t i = 0; i < final_total; i++) {
-            uint8_t *part_data = fountain_get_part(i);
-            uint32_t part_len = fountain_get_part_length(i);
-            
-            
-            for (uint32_t j = 0; j < part_len; j++) {
-                if (total_bytes >= expected_msg_len) break; // Drop XOR padding
-                
-                if (export_bytes_written < 512) {
-                    sd_sector_buffer[export_bytes_written] = part_data[j];
-                }  
-                export_bytes_written++;
-
-                if (bytes_printed >= 100 && bytes_printed < 200) {
-                    char hex_str[3];
-                    byte_to_hex(part_data[j], hex_str);
-                    drawtext(cursor_x, cursor_y, hex_str, ST7735_WHITE, ST7735_BLACK, 1);
-                    
-                    cursor_x += 18;
-                    if (cursor_x > 140) {
-                        cursor_x = 5;
-                        cursor_y += 12;
-                    }
-                    
-  
-                }                
-                bytes_printed++;
-                total_bytes++;
-            }
-        }
-        
-        char size_str[32];
-        strcpy(size_str, "SIZE: ");
-        fast_itoa(total_bytes, num_buf);
-        strcat(size_str, num_buf);
-        strcat(size_str, " BYTES");
-        drawtext(5, 110, size_str, ST7735_YELLOW, ST7735_BLACK, 1);
-        
-        // --- EXPORT RECOVERED PSBT TO SD CARD BLOCK (WITHOUT OBFUSCATION) ---
-        // Assuming the PSBT fits within a single 512-byte SD sector block.
-
-
-        // 3. Write the block directly to the selected SD sector slot
-        uint32_t target_sector = 6;
-
-        if (sd_write_block(target_sector, sd_sector_buffer)) {
-            // Success feedback on TFT screen
-            drawtext(70, 20 + (10 ), "PSBT WRITE OK", ST7735_GREEN, ST7735_BLACK, 1);
-        } else {
-            // Error feedback on TFT screen
-            drawtext(70, 20 + (10 ), "SD WRITE ERR", ST7735_RED, ST7735_BLACK, 1);
-        }
-        // --------------------------------------------------------------------
-        
-        drawtext(5, 118, "OK=VIEW TX  BACK=EXIT", ST7735_WHITE, ST7735_BLACK, 1);
-        while (BT1 == 1 && BT_OK == 1) SYS_Tasks(); // Wait for OK or BACK
-
-        if (BT_OK == 0) {
-            // The part buffer becomes one contiguous message (no extra RAM)
-            uint8_t *psbt_msg = fountain_assemble_message(expected_msg_len);
-            show_psbt_details(psbt_msg, expected_msg_len);
-        }
+        // The part buffer becomes one contiguous message (no extra RAM)
+        uint8_t *psbt_msg = fountain_assemble_message(expected_msg_len);
+        show_psbt_details(psbt_msg, expected_msg_len);
     }
     
     while (BT1 == 0) SYS_Tasks(); // Wait for button release
@@ -4312,9 +4440,7 @@ int main ( void ){
                         } else {
                             transition_to_main();
                         }*/
-                        
-                        scan_ur_animated_qr();
-                        
+
                         //test_bytewords_to_screen();
                         
                         //test_prng_to_screen();
@@ -6126,6 +6252,9 @@ int main ( void ){
                             }
                             bip84_qr_return_to_menu = true;
                             estado = SHOW_QRSEED;
+                        } else if (bip84_menu_pointer == cBIP84_SIGN) {
+                            black_screen();
+                            print_sign_menu();
                         } else {
                             print_bip84_info_screen();
                         }
@@ -6144,6 +6273,40 @@ int main ( void ){
                             bip84_menu_pointer++;
                         }
                         print_bip84_menu();
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case SIGN_MENU:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        if (sign_menu_pointer == cSIGN_QR) {
+                            scan_ur_animated_qr();
+                        } else {
+                            // TODO: read the PSBT from the SD card
+                            black_screen();
+                            drawtext(1, 20, "NOT IMPLEMENTED YET", ST7735_RED, ST7735_BLACK, 1);
+                            delay_ms(1500);
+                        }
+                        black_screen();
+                        print_sign_menu();
+                        break;
+                    case BACK_BT:
+                        black_screen();
+                        print_bip84_menu();
+                        break;
+                    case UP_BT:
+                        if (sign_menu_pointer > 0) {
+                            sign_menu_pointer--;
+                        }
+                        print_sign_menu();
+                        break;
+                    case DOWN_BT:
+                        if (sign_menu_pointer < (cSIGN_n_opt - 1)) {
+                            sign_menu_pointer++;
+                        }
+                        print_sign_menu();
                         break;
                     default:
                         break;

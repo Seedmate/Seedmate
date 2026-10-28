@@ -53,7 +53,12 @@
 #define cBIP84_FINGERPRINT 3
 #define cBIP84_XPUB 4
 #define cBIP84_PASSPHRASE 5
-#define cBIP84_n_opt 6
+#define cBIP84_SIGN 6
+#define cBIP84_n_opt 7
+
+#define cSIGN_QR 0
+#define cSIGN_SD 1
+#define cSIGN_n_opt 2
 #define cOBFUS_SHIFT 0
 #define cOBFUS_NOT 1
 #define cOBFUS_ADD 2

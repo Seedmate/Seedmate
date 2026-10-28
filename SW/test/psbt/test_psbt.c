@@ -7,6 +7,8 @@
 #include "test_vectors.h"
 
 static int failures = 0;
+static const uint8_t P2WPKH_SCRIPT[22] = {0x00, 0x14, 0x75, 0x1e, 0x76, 0xe8, 0x19, 0x91, 0x96, 0xd4, 0x54,
+                                         0x94, 0x1c, 0x45, 0xd1, 0xb3, 0xa3, 0x23, 0xf1, 0x43, 0x3b, 0xd6};
 #define CHECK(cond) do { if (!(cond)) { printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); failures++; } } while (0)
 
 static void check_address(const uint8_t *script, uint32_t len, const char *expected) {
@@ -86,6 +88,97 @@ static void test_fountain_assemble(void) {
     CHECK(fountain_assemble_message(total * frag + 1) == NULL); // Longer than the parts
 }
 
+static void check_path(const psbt_keypath_t *kp, const char *expected) {
+    char s[PSBT_PATH_STR_LEN];
+    psbt_format_path(kp, s);
+    if (strcmp(s, expected) != 0) {
+        printf("FAIL path: got %s expected %s\n", s, expected);
+        failures++;
+    }
+}
+
+// Derivations, sighash, partial sigs, finalized inputs, multisig, RBF
+static void test_metadata(void) {
+    psbt_t p;
+    psbt_input_t in;
+    psbt_output_t out;
+    psbt_keypath_t kp;
+    uint8_t m = 0, n = 0;
+    char fp[9];
+
+    CHECK(psbt_parse(v4, sizeof(v4), &p) == PSBT_OK);
+    CHECK(psbt_signals_rbf(&p));
+    CHECK(p.locktime == 850000);
+
+    // Global xpub
+    CHECK(psbt_global_xpub(&p, 0, &kp) && kp.key_len == 78 && kp.fingerprint == 0x73C5DA0A);
+    check_path(&kp, "m/84'/0'/0'");
+    CHECK(!psbt_global_xpub(&p, 1, &kp));
+
+    // Input 0: own single-sig key, explicit SIGHASH_ALL
+    CHECK(psbt_get_input(&p, 0, &in));
+    CHECK(in.keypath_count == 1 && in.has_sighash && in.sighash == PSBT_SIGHASH_ALL);
+    CHECK(!in.finalized && in.partial_sig_count == 0 && in.witness_script == NULL);
+    CHECK(psbt_input_keypath(&p, 0, 0, &kp) && kp.key_len == 33 && kp.key[0] == 0x03 && kp.key[1] == 0x30);
+    CHECK(kp.fingerprint == 0x73C5DA0A && kp.path_len == 5);
+    CHECK(psbt_path_element(&kp, 0) == (84 | PSBT_HARDENED) && psbt_path_element(&kp, 3) == 0);
+    check_path(&kp, "m/84'/0'/0'/0/0");
+    CHECK(!psbt_input_keypath(&p, 0, 1, &kp));
+
+    // Input 1: 2-of-3 multisig, one signature, non-default sighash
+    CHECK(psbt_get_input(&p, 1, &in));
+    CHECK(in.keypath_count == 3 && in.partial_sig_count == 1);
+    CHECK(in.has_sighash && strcmp(psbt_sighash_name(in.sighash), "NONE|ACP") == 0);
+    CHECK(psbt_multisig_info(in.witness_script, in.witness_script_len, &m, &n) && m == 2 && n == 3);
+    CHECK(psbt_input_keypath(&p, 1, 2, &kp) && kp.fingerprint == 0x22222222);
+    check_path(&kp, "m/48'/0'/0'/2'/0/0");
+    CHECK(!psbt_input_keypath(&p, 1, 3, &kp));
+
+    // Input 2: already finalized, no derivations
+    CHECK(psbt_get_input(&p, 2, &in));
+    CHECK(in.finalized && in.keypath_count == 0 && !in.has_sighash);
+    CHECK(!psbt_input_keypath(&p, 2, 0, &kp));
+
+    // Outputs: external, own change, multisig change
+    CHECK(psbt_get_output(&p, 0, &out) && out.keypath_count == 0 && out.witness_script == NULL);
+    CHECK(psbt_get_output(&p, 1, &out) && out.keypath_count == 1);
+    CHECK(psbt_output_keypath(&p, 1, 0, &kp) && kp.fingerprint == 0x73C5DA0A && kp.key[1] == 0x02);
+    check_path(&kp, "m/84'/0'/0'/1/0");
+    CHECK(psbt_get_output(&p, 2, &out) && out.keypath_count == 3);
+    CHECK(psbt_multisig_info(out.witness_script, out.witness_script_len, &m, &n) && m == 2 && n == 3);
+    CHECK(psbt_output_keypath(&p, 2, 1, &kp) && kp.fingerprint == 0x11111111);
+    check_path(&kp, "m/48'/0'/0'/2'/1/0");
+
+    // Amounts still add up with all the extra fields: 130000 in, 120000 out
+    uint64_t fee;
+    CHECK(psbt_get_fee(&p, &fee) && fee == 10000);
+
+    // The device test PSBT parses and carries the expected derivations
+    CHECK(psbt_parse(abandon, sizeof(abandon), &p) == PSBT_OK);
+    CHECK(psbt_input_keypath(&p, 0, 0, &kp) && kp.fingerprint == 0x73C5DA0A);
+    CHECK(psbt_output_keypath(&p, 1, 0, &kp));
+    check_path(&kp, "m/84'/0'/0'/1/0");
+
+    // RBF: v1 uses 0xFFFFFFFD, v2 uses final sequences
+    CHECK(psbt_parse(v1, sizeof(v1), &p) == PSBT_OK && psbt_signals_rbf(&p));
+    CHECK(psbt_parse(v2, sizeof(v2), &p) == PSBT_OK && !psbt_signals_rbf(&p));
+
+    // Helpers
+    psbt_format_fingerprint(0x73C5DA0A, fp);
+    CHECK(strcmp(fp, "73C5DA0A") == 0);
+    CHECK(strcmp(psbt_sighash_name(PSBT_SIGHASH_ALL), "ALL") == 0);
+    CHECK(strcmp(psbt_sighash_name(0x42), "UNKNOWN") == 0);
+    CHECK(!psbt_multisig_info(P2WPKH_SCRIPT, sizeof(P2WPKH_SCRIPT), &m, &n));
+
+    // A path too long for the buffer is cut with "..."
+    uint8_t long_path[4 * 12];
+    memset(long_path, 0xFF, sizeof(long_path));
+    psbt_keypath_t big = { NULL, 0, 0, long_path, 12 };
+    char s[PSBT_PATH_STR_LEN];
+    psbt_format_path(&big, s);
+    CHECK(strlen(s) < PSBT_PATH_STR_LEN && strcmp(s + strlen(s) - 3, "...") == 0);
+}
+
 int main(void) {
     psbt_t p;
     psbt_input_t in;
@@ -133,6 +226,7 @@ int main(void) {
     check_btc(UINT64_MAX, "184467440737.09551615");
 
     test_fountain_assemble();
+    test_metadata();
 
     printf(failures ? "\n%d FAILURE(S)\n" : "\nALL TESTS PASSED\n", failures);
     return failures != 0;
