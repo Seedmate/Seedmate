@@ -80,6 +80,7 @@
 #include "app_defs.h"
 #include "app_state.h"
 #include "screens.h"
+#include "psbt.h"
 
 
 
@@ -3444,6 +3445,181 @@ static uint32_t crc32_update(uint32_t crc, const uint8_t *data, size_t length) {
     return crc;
 }
 
+// ============================================================================
+// PSBT VIEWER (test screen; to be moved to screens.c once the flow is final)
+// ============================================================================
+#define PSBT_VIEW_LINE_CHARS 26     // 160 px / 6 px per char at text size 1
+
+// Writes the address of an output script, or a short description when the
+// script has no address form.
+static void psbt_view_address(const uint8_t *script, uint32_t len, char *out) {
+    psbt_script_type_t type = psbt_script_type(script, len);
+    uint8_t payload[21];
+
+    if (psbt_segwit_address(script, len, "bc", out, PSBT_ADDRESS_MAX_LEN)) return;
+
+    if (type == PSBT_SCRIPT_P2PKH || type == PSBT_SCRIPT_P2SH) {
+        payload[0] = (type == PSBT_SCRIPT_P2PKH) ? 0x00 : 0x05;   // Mainnet versions
+        memcpy(&payload[1], (type == PSBT_SCRIPT_P2PKH) ? &script[3] : &script[2], 20);
+        if (base58_encode_check(payload, sizeof(payload), out, PSBT_ADDRESS_MAX_LEN) > 0) return;
+    }
+    strcpy(out, (type == PSBT_SCRIPT_OP_RETURN) ? "OP_RETURN DATA" : "NON-STANDARD SCRIPT");
+}
+
+static void psbt_view_amount_line(int y, const char *label, bool known, uint64_t sats, uint16_t color) {
+    char line[PSBT_BTC_STR_LEN + 12];
+    strcpy(line, label);
+    if (known) {
+        char btc[PSBT_BTC_STR_LEN];
+        psbt_format_btc(sats, btc);
+        strcat(line, btc);
+        strcat(line, " BTC");
+    } else {
+        strcat(line, "UNKNOWN");
+    }
+    drawtext(5, y, line, color, ST7735_BLACK, 1);
+}
+
+// Page 0: totals and fee
+static void psbt_view_summary(const psbt_t *psbt) {
+    char line[32];
+    char num[12];
+    uint64_t sum_in, sum_out, fee;
+    bool totals_ok = psbt_get_totals(psbt, &sum_in, &sum_out);
+    bool fee_ok = psbt_get_fee(psbt, &fee);
+
+    drawtext(5, 5, "TRANSACTION SUMMARY", ST7735_YELLOW, ST7735_BLACK, 1);
+
+    strcpy(line, "INPUTS: ");
+    fast_itoa(psbt->input_count, num);
+    strcat(line, num);
+    strcat(line, "  OUTPUTS: ");
+    fast_itoa(psbt->output_count, num);
+    strcat(line, num);
+    drawtext(5, 22, line, ST7735_WHITE, ST7735_BLACK, 1);
+
+    psbt_view_amount_line(40, "IN:  ", totals_ok, sum_in, ST7735_WHITE);
+    psbt_view_amount_line(52, "OUT: ", true, sum_out, ST7735_WHITE);
+    psbt_view_amount_line(70, "FEE: ", fee_ok, fee, ST7735_ORANGE);
+    if (!fee_ok) {
+        drawtext(5, 82, "MISSING UTXO DATA", ST7735_RED, ST7735_BLACK, 1);
+    }
+}
+
+static void psbt_view_input(const psbt_t *psbt, uint32_t index) {
+    psbt_input_t in;
+    char line[32];
+    char num[12];
+    char text[PSBT_ADDRESS_MAX_LEN];
+
+    strcpy(line, "INPUT ");
+    fast_itoa(index + 1, num);
+    strcat(line, num);
+    strcat(line, "/");
+    fast_itoa(psbt->input_count, num);
+    strcat(line, num);
+    drawtext(5, 5, line, ST7735_YELLOW, ST7735_BLACK, 1);
+
+    if (!psbt_get_input(psbt, index, &in)) {
+        drawtext(5, 22, "READ ERROR", ST7735_RED, ST7735_BLACK, 1);
+        return;
+    }
+
+    drawtext(5, 20, "TXID:", ST7735_CYAN, ST7735_BLACK, 1);
+    psbt_format_txid(in.prev_txid, text);
+    draw_bip84_wrapped_text(text, 5, 30, PSBT_VIEW_LINE_CHARS, 3);
+
+    strcpy(line, "VOUT: ");
+    fast_itoa(in.prev_vout, num);
+    strcat(line, num);
+    drawtext(5, 60, line, ST7735_WHITE, ST7735_BLACK, 1);
+
+    psbt_view_amount_line(74, "AMT: ", in.has_amount, in.amount, ST7735_WHITE);
+    if (in.has_amount) {
+        drawtext(5, 86, in.amount_from_witness ? "SRC: WITNESS_UTXO" : "SRC: NON_WITNESS_UTXO",
+                 ST7735_CYAN, ST7735_BLACK, 1);
+        strcpy(line, "TYPE: ");
+        strcat(line, psbt_script_type_name(psbt_script_type(in.script, in.script_len)));
+        drawtext(5, 98, line, ST7735_CYAN, ST7735_BLACK, 1);
+    }
+}
+
+static void psbt_view_output(const psbt_t *psbt, uint32_t index) {
+    psbt_output_t out;
+    char line[32];
+    char num[12];
+    char addr[PSBT_ADDRESS_MAX_LEN];
+
+    strcpy(line, "OUTPUT ");
+    fast_itoa(index + 1, num);
+    strcat(line, num);
+    strcat(line, "/");
+    fast_itoa(psbt->output_count, num);
+    strcat(line, num);
+    drawtext(5, 5, line, ST7735_YELLOW, ST7735_BLACK, 1);
+
+    if (!psbt_get_output(psbt, index, &out)) {
+        drawtext(5, 22, "READ ERROR", ST7735_RED, ST7735_BLACK, 1);
+        return;
+    }
+
+    psbt_view_amount_line(20, "AMT: ", true, out.amount, ST7735_WHITE);
+
+    strcpy(line, "TYPE: ");
+    strcat(line, psbt_script_type_name(psbt_script_type(out.script, out.script_len)));
+    drawtext(5, 32, line, ST7735_CYAN, ST7735_BLACK, 1);
+
+    drawtext(5, 48, "TO:", ST7735_CYAN, ST7735_BLACK, 1);
+    psbt_view_address(out.script, out.script_len, addr);
+    draw_bip84_wrapped_text(addr, 5, 58, PSBT_VIEW_LINE_CHARS, 4);
+}
+
+// Parses a PSBT and lets the user page through summary, inputs and outputs.
+// OK = next page, UP = previous page, BACK = exit.
+static void show_psbt_details(const uint8_t *data, uint32_t len) {
+    psbt_t psbt;
+    psbt_status_t status = psbt_parse(data, len, &psbt);
+
+    if (status != PSBT_OK) {
+        char reason[24];
+        strcpy(reason, psbt_status_name(status));   // drawtext() takes a non-const string
+        black_screen();
+        drawtext(5, 5, "PSBT PARSE ERROR", ST7735_RED, ST7735_BLACK, 1);
+        drawtext(5, 20, reason, ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 110, "BACK=EXIT", ST7735_WHITE, ST7735_BLACK, 1);
+        while (BT1 == 0) SYS_Tasks();   // Release the key that opened us
+        while (BT1 == 1) SYS_Tasks();
+        return;
+    }
+
+    uint32_t page_count = 1 + psbt.input_count + psbt.output_count;
+    uint32_t page = 0;
+
+    while (1) {
+        black_screen();
+        if (page == 0) {
+            psbt_view_summary(&psbt);
+        } else if (page <= psbt.input_count) {
+            psbt_view_input(&psbt, page - 1);
+        } else {
+            psbt_view_output(&psbt, page - 1 - psbt.input_count);
+        }
+        drawtext(5, 118, "OK=NEXT UP=PREV BACK=EXIT", ST7735_WHITE, ST7735_BLACK, 1);
+
+        while (BT_OK == 0 || BT1 == 0 || BT5 == 0) SYS_Tasks();   // Wait for release
+        delay_ms(30);
+        while (BT_OK == 1 && BT1 == 1 && BT5 == 1) SYS_Tasks();   // Wait for a press
+        delay_ms(30);
+
+        if (BT1 == 0) break;
+        if (BT_OK == 0) {
+            page = (page + 1) % page_count;
+        } else if (BT5 == 0) {
+            page = (page == 0) ? page_count - 1 : page - 1;
+        }
+    }
+}
+
 void scan_ur_animated_qr(void) {
     black_screen();
     drawtext(10, 10, "DIAGNOSTIC MODE", ST7735_YELLOW, ST7735_BLACK, 1);
@@ -3791,7 +3967,14 @@ void scan_ur_animated_qr(void) {
         }
         // --------------------------------------------------------------------
         
-        while (BT1 == 1) SYS_Tasks(); // Wait for user to press back
+        drawtext(5, 118, "OK=VIEW TX  BACK=EXIT", ST7735_WHITE, ST7735_BLACK, 1);
+        while (BT1 == 1 && BT_OK == 1) SYS_Tasks(); // Wait for OK or BACK
+
+        if (BT_OK == 0) {
+            // The part buffer becomes one contiguous message (no extra RAM)
+            uint8_t *psbt_msg = fountain_assemble_message(expected_msg_len);
+            show_psbt_details(psbt_msg, expected_msg_len);
+        }
     }
     
     while (BT1 == 0) SYS_Tasks(); // Wait for button release

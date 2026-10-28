@@ -24,4 +24,10 @@ uint32_t fountain_get_total_parts(void);
 uint32_t fountain_get_pure_count(void);
 uint32_t fountain_get_mixed_count(void);
 
+// Joins all recovered parts into one contiguous message of msg_len bytes,
+// in place inside the part buffer (no extra RAM). Returns NULL if decoding
+// is not complete or msg_len does not fit. Afterwards the individual parts
+// are no longer valid: call fountain_init() before decoding again.
+uint8_t* fountain_assemble_message(uint32_t msg_len);
+
 #endif // FOUNTAIN_H

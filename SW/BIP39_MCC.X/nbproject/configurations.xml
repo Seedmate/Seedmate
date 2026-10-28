@@ -46,6 +46,7 @@
       <itemPath>../src/SPI.h</itemPath>
       <itemPath>../src/TFT.h</itemPath>
       <itemPath>../src/screens.h</itemPath>
+      <itemPath>../src/psbt.h</itemPath>
       <itemPath>../src/app_defs.h</itemPath>
       <itemPath>../src/app_state.h</itemPath>
       <itemPath>../src/sha256.h</itemPath>
@@ -135,6 +136,7 @@
       <itemPath>../src/SSS/memzero.c</itemPath>
       <itemPath>../src/main.c</itemPath>
       <itemPath>../src/screens.c</itemPath>
+      <itemPath>../src/psbt.c</itemPath>
       <itemPath>../src/sha512.c</itemPath>
       <itemPath>../src/EFF_short.c</itemPath>
       <itemPath>../src/bytewords.c</itemPath>

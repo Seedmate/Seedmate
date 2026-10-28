@@ -179,6 +179,25 @@ uint32_t fountain_get_pure_count(void) {
     return pure_count;
 }
 
+uint8_t* fountain_assemble_message(uint32_t msg_len) {
+    if (!fountain_is_complete() || msg_len > sizeof(pure_parts)) return NULL;
+
+    // Part i lives at offset i * MAX_PAYLOAD_LEN and is moved to dst <= that
+    // offset, so moving parts in order never overwrites unread data.
+    uint8_t *base = &pure_parts[0][0];
+    uint32_t dst = 0;
+    for (uint32_t i = 0; i < total_expected && dst < msg_len; i++) {
+        uint32_t len = pure_lengths[i];
+        if (len > msg_len - dst) len = msg_len - dst;   // Drop final padding
+        memmove(base + dst, pure_parts[i], len);
+        dst += len;
+    }
+    if (dst != msg_len) return NULL;
+
+    memset(has_pure, 0, sizeof(has_pure));   // Parts are no longer valid
+    return base;
+}
+
 uint32_t fountain_get_mixed_count(void) {
     return mixed_count;
 }
