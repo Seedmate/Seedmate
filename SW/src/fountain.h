@@ -30,4 +30,9 @@ uint32_t fountain_get_mixed_count(void);
 // are no longer valid: call fountain_init() before decoding again.
 uint8_t* fountain_assemble_message(uint32_t msg_len);
 
+// Lends the part buffer as scratch RAM while no QR is being decoded (for
+// example to load a PSBT from the SD card). Invalidates the decoder state:
+// call fountain_init() before decoding again. *size gets the buffer size.
+uint8_t* fountain_scratch_buffer(uint32_t *size);
+
 #endif // FOUNTAIN_H

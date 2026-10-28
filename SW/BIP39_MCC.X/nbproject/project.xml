@@ -10,7 +10,6 @@
             <make-dep-projects/>
             <sourceRootList>
                 <sourceRootElem>../src</sourceRootElem>
-                <sourceRootElem>../../../SW_address_compila/SW/src/crypto</sourceRootElem>
             </sourceRootList>
             <confList>
                 <confElem>

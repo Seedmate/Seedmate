@@ -81,6 +81,7 @@
 #include "app_state.h"
 #include "screens.h"
 #include "psbt.h"
+#include "sd_files.h"
 
 
 
@@ -2885,6 +2886,14 @@ bool sd_write_block(uint32_t sector, const uint8_t *buffer) {
 // For SDHC, 'sector' is passed as a direct argument.
 // For SDSC, the argument is byte address = sector * 512.
 bool sd_read_block(uint32_t sector, uint8_t *buffer) {
+    return sd_read_partial(sector, 0, 512, buffer);
+}
+
+// Reads 'count' bytes at 'offset' inside one sector. The rest of the sector
+// is clocked out and dropped, so no 512-byte buffer is needed. dst == NULL
+// discards the data too.
+bool sd_read_partial(uint32_t sector, uint32_t offset, uint32_t count, uint8_t *dst) {
+    if (offset > 512 || count > 512 - offset) return false;
     uint32_t arg = sd_is_sdhc ? sector : (sector * 512);
 
     SD_CS = 0;
@@ -2902,8 +2911,10 @@ bool sd_read_block(uint32_t sector, uint8_t *buffer) {
 
     if (token != 0xFE) { SD_CS = 1; spi_send(0xFF); return false; }
 
-    // Read 512 bytes
-    for (int i = 0; i < 512; i++) buffer[i] = spi_recv();
+    for (uint32_t i = 0; i < 512; i++) {
+        uint8_t b = spi_recv();
+        if (dst != NULL && i >= offset && i - offset < count) dst[i - offset] = b;
+    }
 
     // Read CRC (two bytes, safe to ignore here)
     spi_recv(); spi_recv();
@@ -3844,6 +3855,150 @@ static void show_psbt_details(const uint8_t *data, uint32_t len) {
             page = (page == 0) ? page_count - 1 : page - 1;
         }
     }
+}
+
+// ============================================================================
+// PSBT from SD card: file picker and loader (binary .PSB or base64 .TXT)
+// ============================================================================
+
+#define PSBT_SD_LIST_ROWS 9
+static const char *const psbt_sd_exts[] = {"PSB", "TXT"};
+
+// Waits until no key is held, then for OK, BACK, UP or DOWN
+static int psbt_wait_key(void) {
+    while (BT_OK == 0 || BT1 == 0 || BT5 == 0 || BT4 == 0) SYS_Tasks();
+    delay_ms(30);
+    while (BT_OK == 1 && BT1 == 1 && BT5 == 1 && BT4 == 1) SYS_Tasks();
+    delay_ms(30);
+    if (BT1 == 0) return BACK_BT;
+    if (BT_OK == 0) return OK_BT;
+    return (BT5 == 0) ? UP_BT : DOWN_BT;
+}
+
+static void psbt_sd_message(char *title, char *detail) {
+    black_screen();
+    drawtext(5, 5, title, ST7735_RED, ST7735_BLACK, 1);
+    drawtext(5, 20, detail, ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 118, "PRESS ANY KEY", ST7735_WHITE, ST7735_BLACK, 1);
+    psbt_wait_key();
+}
+
+// Reads file 'name' (file_size bytes) into buf. Binary PSBTs are copied as
+// they are; base64 text is decoded on the fly. Returns the PSBT length, or 0
+// with a reason in err (at least 24 chars).
+static uint32_t psbt_sd_load(const char *name, uint32_t file_size, uint8_t *buf, uint32_t buf_size, char *err) {
+    char chunk[64];
+    uint32_t len = 0;
+    int32_t got;
+
+    if (!sd_files_open(name)) {
+        strcpy(err, "CANNOT OPEN FILE");
+        return 0;
+    }
+    got = sd_files_read(chunk, sizeof(chunk));
+    if (got <= 0) {
+        strcpy(err, (got < 0) ? "SD READ ERROR" : "EMPTY FILE");
+        return 0;
+    }
+
+    // Binary: the file is the PSBT itself
+    if (got >= 5 && memcmp(chunk, "psbt\xff", 5) == 0) {
+        if (file_size > buf_size) {
+            strcpy(err, "PSBT TOO BIG");
+            return 0;
+        }
+        memcpy(buf, chunk, (uint32_t)got);
+        len = (uint32_t)got;
+        while ((got = sd_files_read(&buf[len], buf_size - len)) > 0) len += (uint32_t)got;
+        if (got < 0) {
+            strcpy(err, "SD READ ERROR");
+            return 0;
+        }
+        return len;
+    }
+
+    // Base64 text, possibly after a UTF-8 BOM and whitespace
+    uint32_t start = 0;
+    if (got >= 3 && (uint8_t)chunk[0] == 0xEF && (uint8_t)chunk[1] == 0xBB && (uint8_t)chunk[2] == 0xBF) start = 3;
+    while (start < (uint32_t)got && (chunk[start] == ' ' || chunk[start] == '\r' || chunk[start] == '\n')) start++;
+    if ((uint32_t)got - start < 7 || memcmp(&chunk[start], "cHNidP8", 7) != 0) {
+        strcpy(err, "NOT A PSBT FILE");
+        return 0;
+    }
+
+    psbt_base64_t b64;
+    psbt_base64_init(&b64);
+    bool ok = psbt_base64_feed(&b64, &chunk[start], (uint32_t)got - start, buf, buf_size, &len);
+    while (ok && (got = sd_files_read(chunk, sizeof(chunk))) > 0) {
+        ok = psbt_base64_feed(&b64, chunk, (uint32_t)got, buf, buf_size, &len);
+    }
+    if (got < 0) {
+        strcpy(err, "SD READ ERROR");
+        return 0;
+    }
+    if (!ok || !psbt_base64_finish(&b64)) {
+        strcpy(err, (len >= buf_size) ? "PSBT TOO BIG" : "BAD BASE64 TEXT");
+        return 0;
+    }
+    return len;
+}
+
+// Lists .PSB/.TXT files in the SD root and shows the selected PSBT.
+// OK = open, UP/DOWN = move, BACK = exit.
+static void load_psbt_from_sd(void) {
+    char name[SD_FILES_NAME_LEN];
+    char line[32];
+    char num[12];
+    char err[24];
+    uint32_t size, count = 0, sel = 0;
+
+    black_screen();
+    drawtext(5, 5, "READING SD CARD...", ST7735_YELLOW, ST7735_BLACK, 1);
+    if (!sd_files_mount()) {
+        psbt_sd_message("SD CARD ERROR", "NO CARD OR NOT FAT16");
+        return;
+    }
+    while (count < 99 && sd_files_find(count, psbt_sd_exts, 2, name, &size)) count++;
+    if (count == 0) {
+        psbt_sd_message("NO PSBT FILES", "NEED .PSB OR .TXT FILE");
+        return;
+    }
+
+    while (1) {
+        black_screen();
+        drawtext(5, 5, "SELECT PSBT FILE", ST7735_YELLOW, ST7735_BLACK, 1);
+        uint32_t first = sel - sel % PSBT_SD_LIST_ROWS;
+        for (uint32_t i = 0; i < PSBT_SD_LIST_ROWS && first + i < count; i++) {
+            if (!sd_files_find(first + i, psbt_sd_exts, 2, name, &size)) break;
+            strcpy(line, name);
+            strcat(line, " ");
+            fast_itoa(size, num);
+            strcat(line, num);
+            strcat(line, "B");
+            drawtext(5, 17 + i * 10, line, (first + i == sel) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+        }
+        drawtext(5, 118, "OK=OPEN UP/DN BACK=EXIT", ST7735_WHITE, ST7735_BLACK, 1);
+
+        int key = psbt_wait_key();
+        if (key == BACK_BT) break;
+        if (key == UP_BT) {
+            sel = (sel == 0) ? count - 1 : sel - 1;
+        } else if (key == DOWN_BT) {
+            sel = (sel + 1) % count;
+        } else if (sd_files_find(sel, psbt_sd_exts, 2, name, &size)) {
+            black_screen();
+            drawtext(5, 5, "LOADING PSBT...", ST7735_YELLOW, ST7735_BLACK, 1);
+            uint32_t buf_size;
+            uint8_t *buf = fountain_scratch_buffer(&buf_size);
+            uint32_t len = psbt_sd_load(name, size, buf, buf_size, err);
+            if (len == 0) {
+                psbt_sd_message("LOAD ERROR", err);
+            } else {
+                show_psbt_details(buf, len);
+            }
+        }
+    }
+    while (BT1 == 0) SYS_Tasks();   // Do not let BACK reach the menu state machine
 }
 
 void scan_ur_animated_qr(void) {
@@ -6284,10 +6439,7 @@ int main ( void ){
                         if (sign_menu_pointer == cSIGN_QR) {
                             scan_ur_animated_qr();
                         } else {
-                            // TODO: read the PSBT from the SD card
-                            black_screen();
-                            drawtext(1, 20, "NOT IMPLEMENTED YET", ST7735_RED, ST7735_BLACK, 1);
-                            delay_ms(1500);
+                            load_psbt_from_sd();
                         }
                         black_screen();
                         print_sign_menu();

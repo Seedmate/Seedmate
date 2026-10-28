@@ -36,7 +36,7 @@
         </logicalFolder>
       </logicalFolder>
       <logicalFolder name="f1" displayName="crypto" projectFiles="true">
-        <itemPath>../../../SW_address_compila/SW/src/crypto/ripemd160.h</itemPath>
+        <itemPath>../src/crypto/ripemd160.h</itemPath>
         <itemPath>../src/crypto/bignum.h</itemPath>
         <itemPath>../src/crypto/bip32.h</itemPath>
         <itemPath>../src/crypto/secp256k1.h</itemPath>
@@ -47,6 +47,10 @@
       <itemPath>../src/TFT.h</itemPath>
       <itemPath>../src/screens.h</itemPath>
       <itemPath>../src/psbt.h</itemPath>
+      <itemPath>../src/sd_files.h</itemPath>
+      <itemPath>../../bootloader/src/pff.h</itemPath>
+      <itemPath>../../bootloader/src/pffconf.h</itemPath>
+      <itemPath>../../bootloader/src/diskio.h</itemPath>
       <itemPath>../src/app_defs.h</itemPath>
       <itemPath>../src/app_state.h</itemPath>
       <itemPath>../src/sha256.h</itemPath>
@@ -121,7 +125,7 @@
         </logicalFolder>
       </logicalFolder>
       <logicalFolder name="f1" displayName="crypto" projectFiles="true">
-        <itemPath>../../../SW_address_compila/SW/src/crypto/ripemd160.c</itemPath>
+        <itemPath>../src/crypto/ripemd160.c</itemPath>
         <itemPath>../src/crypto/bignum.c</itemPath>
         <itemPath>../src/crypto/bip32.c</itemPath>
         <itemPath>../src/crypto/secp256k1.c</itemPath>
@@ -137,6 +141,8 @@
       <itemPath>../src/main.c</itemPath>
       <itemPath>../src/screens.c</itemPath>
       <itemPath>../src/psbt.c</itemPath>
+      <itemPath>../src/sd_files.c</itemPath>
+      <itemPath>../src/pff_app.c</itemPath>
       <itemPath>../src/sha512.c</itemPath>
       <itemPath>../src/EFF_short.c</itemPath>
       <itemPath>../src/bytewords.c</itemPath>
@@ -147,7 +153,6 @@
   </logicalFolder>
   <sourceRootList>
     <Elem>../src</Elem>
-    <Elem>../../../SW_address_compila/SW/src/crypto</Elem>
   </sourceRootList>
   <projectmakefile>Makefile</projectmakefile>
   <confs>

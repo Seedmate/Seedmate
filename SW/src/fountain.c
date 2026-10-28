@@ -198,6 +198,12 @@ uint8_t* fountain_assemble_message(uint32_t msg_len) {
     return base;
 }
 
+uint8_t* fountain_scratch_buffer(uint32_t *size) {
+    memset(has_pure, 0, sizeof(has_pure));   // Parts are no longer valid
+    *size = sizeof(pure_parts);
+    return &pure_parts[0][0];
+}
+
 uint32_t fountain_get_mixed_count(void) {
     return mixed_count;
 }

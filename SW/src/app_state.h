@@ -65,5 +65,6 @@ int read_11bit_value(const BYTE data_array[36], int index);
 const char* get_confirmed_word_from_entropy(const BYTE data_array[36], int index);
 bool sd_init(void);
 bool sd_read_block(uint32_t sector, uint8_t *buffer);
+bool sd_read_partial(uint32_t sector, uint32_t offset, uint32_t count, uint8_t *dst);
 
 #endif // APP_STATE_H

@@ -179,6 +179,42 @@ static void test_metadata(void) {
     CHECK(strlen(s) < PSBT_PATH_STR_LEN && strcmp(s + strlen(s) - 3, "...") == 0);
 }
 
+// Decodes text in chunks of 'step' chars; returns the decoded length or -1
+static int32_t b64_decode(const char *text, uint32_t step, uint8_t *out, uint32_t out_size) {
+    psbt_base64_t b;
+    uint32_t len = 0, total = (uint32_t)strlen(text);
+    psbt_base64_init(&b);
+    for (uint32_t i = 0; i < total; i += step) {
+        uint32_t n = (total - i < step) ? total - i : step;
+        if (!psbt_base64_feed(&b, &text[i], n, out, out_size, &len)) return -1;
+    }
+    return psbt_base64_finish(&b) ? (int32_t)len : -1;
+}
+
+static void test_base64(void) {
+    uint8_t out[600];
+    psbt_t p;
+
+    // Line-wrapped text, any chunking, decodes to the binary PSBT
+    for (uint32_t step = 1; step <= 70; step += 3) {
+        CHECK(b64_decode(abandon_b64, step, out, sizeof(out)) == (int32_t)sizeof(abandon));
+        CHECK(memcmp(out, abandon, sizeof(abandon)) == 0);
+    }
+    CHECK(psbt_parse(out, sizeof(abandon), &p) == PSBT_OK);
+
+    // Padding variants
+    CHECK(b64_decode("TWE=", 4, out, sizeof(out)) == 2 && out[0] == 'M' && out[1] == 'a');
+    CHECK(b64_decode("TQ==", 4, out, sizeof(out)) == 1 && out[0] == 'M');
+    CHECK(b64_decode("TWFu", 2, out, sizeof(out)) == 3 && memcmp(out, "Man", 3) == 0);
+
+    // Errors: bad char, incomplete group, data after padding, overflow
+    CHECK(b64_decode("TW-u", 4, out, sizeof(out)) == -1);
+    CHECK(b64_decode("TWF", 4, out, sizeof(out)) == -1);
+    CHECK(b64_decode("TQ==TWFu", 4, out, sizeof(out)) == -1);
+    CHECK(b64_decode("TWFuTWFu", 8, out, 5) == -1);
+    CHECK(b64_decode("TWFuTWFu", 8, out, 6) == 6);
+}
+
 int main(void) {
     psbt_t p;
     psbt_input_t in;
@@ -227,6 +263,7 @@ int main(void) {
 
     test_fountain_assemble();
     test_metadata();
+    test_base64();
 
     printf(failures ? "\n%d FAILURE(S)\n" : "\nALL TESTS PASSED\n", failures);
     return failures != 0;
