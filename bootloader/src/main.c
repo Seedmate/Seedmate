@@ -18,6 +18,7 @@
 #include <xc.h>
 #include "pff.h"
 #include "diskio.h"
+#include "hex_flash.h"
 
 // --- Pin mapping for LED activity ---
 #define LED       PORTAbits.RA2
@@ -63,19 +64,10 @@ FATFS fs;
 uint8_t asciiBuffer[2048]; // Increased buffer for safety
 uint8_t hexRec[200];
 
-// Double Word Buffering for PIC32MM Flash
-uint32_t ext_addr = 0;     // Extended address from Type 02/04 records
-uint32_t dw_addr = 0;
-uint32_t dw_data[2] = {0xFFFFFFFF, 0xFFFFFFFF};
-bool dw_pending = false;
-
 // --- Function Prototypes ---
 void delay_ms(unsigned int milliseconds);
 void blink_error_and_jump(int blinks);
 void JumpToApp(void);
-void EraseFlash(void);
-void FlushDoubleWord(void);
-void WriteHexRecord2Flash(uint8_t* HexRecord);
 void ConvertAsciiToHex(uint8_t* asciiRec, uint8_t* hexRec);
 
 // =========================================================================
@@ -178,7 +170,8 @@ int main(void)
     // FILE FOUND! STARTING FLASH PROCESS
     // =========================================================================
     
-    EraseFlash();
+    hexflash_status_t flash_status = hexflash_begin();
+    if (flash_status != HEXFLASH_OK) blink_error_and_jump(flash_status);
 
     record.status = REC_NOT_FOUND;
     uint32_t led_counter = 0;
@@ -214,7 +207,8 @@ int main(void)
                                 end_of_file_found = true;
                             }
                             
-                            WriteHexRecord2Flash(hexRec);
+                            flash_status = hexflash_write_record(hexRec);
+                            if (flash_status != HEXFLASH_OK) blink_error_and_jump(flash_status);
                         }
                         record.status = REC_FLASHED;
                     }
@@ -248,124 +242,6 @@ int main(void)
     return (EXIT_FAILURE);
 }
 
-// ============================================================================
-// NVM / FLASH PROGRAMMING LOGIC (PIC32MM BAREMETAL)
-// ============================================================================
-
-void EraseFlash(void)
-{
-    // Block Erase the program Flash page by page
-    for (uint32_t addr = APP_FLASH_BASE_ADDRESS; addr <= APP_FLASH_END_ADDRESS; addr += FLASH_PAGE_SIZE)
-    {
-        NVMADDR = addr & 0x1FFFFFFF; // Convert Virtual to Physical Address
-        NVMCON = 0x4004;             // WREN = 1, Page Erase = 4
-        
-        __builtin_disable_interrupts();
-        NVMKEY = 0xAA996655;         
-        NVMKEY = 0x556699AA;
-        NVMCONSET = 0x8000;          
-        while (NVMCONbits.WR);       
-        NVMCONCLR = 0x4000;          
-        __builtin_enable_interrupts();
-    }
-}
-
-void FlushDoubleWord(void)
-{
-    // Write 64-bits (8 bytes) to flash if data is pending
-    if (dw_pending) {
-        NVMADDR = dw_addr & 0x1FFFFFFF;
-        NVMDATA0 = dw_data[0];
-        NVMDATA1 = dw_data[1];
-        
-        NVMCON = 0x4002;            
-        
-        __builtin_disable_interrupts();
-        NVMKEY = 0xAA996655;         
-        NVMKEY = 0x556699AA;
-        NVMCONSET = 0x8000;          
-        while (NVMCONbits.WR);       
-        NVMCONCLR = 0x4000;          
-        __builtin_enable_interrupts();
-        
-        if (NVMCON & 0x3000) blink_error_and_jump(6); // Hardware Error
-        
-        // Reset buffer
-        dw_data[0] = 0xFFFFFFFF;
-        dw_data[1] = 0xFFFFFFFF;
-        dw_pending = false;
-    }
-}
-
-void WriteHexRecord2Flash(uint8_t* HexRecord)
-{
-    uint8_t RecDataLen = HexRecord[0];
-    uint32_t RecAddress = (HexRecord[1] << 8) | HexRecord[2];
-    uint8_t RecType = HexRecord[3];
-    uint8_t* Data = &HexRecord[4];
-    
-    // Hex Record checksum check
-    uint8_t Checksum = 0;
-    for (uint8_t i = 0; i < RecDataLen + 5; i++) {
-        Checksum += HexRecord[i];
-    }   
-    if (Checksum != 0) blink_error_and_jump(5); 
-    
-    if (RecType == DATA_RECORD) 
-    {
-        uint32_t basePhysAddr = (RecAddress + ext_addr) & 0x1FFFFFFF;
-        uint32_t physBase = APP_FLASH_BASE_ADDRESS & 0x1FFFFFFF;
-        uint32_t physEnd  = APP_FLASH_END_ADDRESS & 0x1FFFFFFF;
-        
-        for (int i = 0; i < RecDataLen; i++) 
-        {
-            uint32_t current_byte_addr = basePhysAddr + i;
-            
-            if ((current_byte_addr >= physBase) && (current_byte_addr <= physEnd)) 
-            {
-                if (dw_pending && (current_byte_addr & 0xFFFFFFF8) != dw_addr) {
-                    FlushDoubleWord();
-                }
-                
-                if (!dw_pending) {
-                    dw_addr = current_byte_addr & 0xFFFFFFF8;
-                    dw_pending = true;
-                }
-                
-                uint8_t offset = current_byte_addr & 0x7; 
-                
-                // CASTEO a uint32_t para evitar Undefined Behavior en el bit de signo
-                if (offset < 4) {
-                    dw_data[0] &= ~((uint32_t)0xFF << (offset * 8));
-                    dw_data[0] |= ((uint32_t)Data[i] << (offset * 8));
-                } else {
-                    dw_data[1] &= ~((uint32_t)0xFF << ((offset - 4) * 8));
-                    dw_data[1] |= ((uint32_t)Data[i] << ((offset - 4) * 8));
-                }
-                
-                if (offset == 7) {
-                    FlushDoubleWord();
-                }
-            }
-        }
-    }
-    else if (RecType == EXT_SEG_ADRS_RECORD) 
-    {
-        FlushDoubleWord();
-        ext_addr = (((uint32_t)Data[0] << 8) | (uint32_t)Data[1]) << 4;
-    }
-    else if (RecType == EXT_LIN_ADRS_RECORD) 
-    {
-        FlushDoubleWord();
-        // CASTEO para evitar números negativos en memoria alta
-        ext_addr = (((uint32_t)Data[0] << 8) | (uint32_t)Data[1]) << 16;
-    }
-    else if (RecType == END_OF_FILE_RECORD) 
-    {
-        FlushDoubleWord();
-        ext_addr = 0;
-    }
-}
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
