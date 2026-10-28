@@ -306,8 +306,9 @@ SECTIONS
     KEEP(*(.startup))
   } > kseg0_program_mem
 
-  .text :
+.text :
   {
+    *(.text .text.*)   /* 
     *(.stub .gnu.linkonce.t.*)
     KEEP (*(.text.*personality*))
     *(.mips16.fn.*)
@@ -315,6 +316,7 @@ SECTIONS
     *(.gnu.warning)
     . = ALIGN(4) ;
   } >kseg0_program_mem
+  
   .init   :
   {
     KEEP (*crti.o(.init))
