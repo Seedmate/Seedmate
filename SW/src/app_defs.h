@@ -54,7 +54,10 @@
 #define cBIP84_XPUB 4
 #define cBIP84_PASSPHRASE 5
 #define cBIP84_SIGN 6
-#define cBIP84_n_opt 7
+#define cBIP84_MODE 7           // Toggles single sig / multisig
+#define cBIP84_DESCRIPTOR 8     // Multisig menu only
+#define cBIP84_n_opt 8          // Single sig menu: options 0..7 in order
+#define cBIP84_MULTI_n_opt 7    // Multisig menu: no address options
 
 #define cSIGN_QR 0
 #define cSIGN_SD 1
