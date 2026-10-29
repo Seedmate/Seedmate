@@ -83,7 +83,7 @@
 #include "psbt.h"
 #include "sd_files.h"
 #include "ur_encode.h"
-#include "ur_test_psbt.h"
+#include "psbt_sign.h"
 
 
 
@@ -3854,6 +3854,8 @@ static void show_psbt_details(const uint8_t *data, uint32_t len) {
 // ============================================================================
 
 #define PSBT_SD_LIST_ROWS 9
+
+static void psbt_review_and_sign(uint8_t *buf, uint32_t len, uint32_t capacity);
 static const char *const psbt_sd_exts[] = {"PSB", "TXT"};
 
 // Waits until no key is held, then for OK, BACK, UP or DOWN
@@ -3986,7 +3988,7 @@ static void load_psbt_from_sd(void) {
             if (len == 0) {
                 psbt_sd_message("LOAD ERROR", err);
             } else {
-                show_psbt_details(buf, len);
+                psbt_review_and_sign(buf, len, buf_size);
             }
         }
     }
@@ -4042,6 +4044,251 @@ static void show_ur_animated_qr(const uint8_t *psbt, uint32_t len) {
         seq = (seq % ur.seq_len) + 1;
     }
     while (BT1 == 0) SYS_Tasks();   // Do not let BACK reach the menu state machine
+}
+
+// ============================================================================
+// PSBT signing: safety checks, confirmation, signatures and QR export
+// ============================================================================
+
+#define PSBT_HIGH_CHANGE_INDEX 1000     // Change above this index is flagged
+
+typedef struct {
+    uint32_t signable;          // Our verified P2WPKH inputs without a signature yet
+    uint32_t already_signed;    // Our inputs that already carry a signature
+    uint32_t foreign;           // Inputs of other keys (cosigners, other wallets)
+    uint64_t send;              // Outputs that do not come back to us
+    uint64_t change;            // Outputs verified as ours
+    uint64_t fee;
+    const char *refuse;         // Reason not to sign, NULL if signing is allowed
+    bool amounts_unverified;    // Some input amount is not committed by a txid
+    bool high_change_index;
+} psbt_sign_plan_t;
+
+// Coin type 1' (testnet/signet) in a BIP44-style path
+static bool psbt_keypath_is_testnet(const psbt_keypath_t *kp) {
+    return kp->path_len >= 2 && psbt_path_element(kp, 1) == (1 | PSBT_HARDENED);
+}
+
+static bool psbt_is_testnet(const psbt_t *psbt) {
+    psbt_keypath_t kp;
+    for (uint32_t i = 0; i < psbt->input_count; i++) {
+        for (uint32_t n = 0; psbt_input_keypath(psbt, i, n, &kp); n++) {
+            if (psbt_keypath_is_testnet(&kp)) return true;
+        }
+    }
+    for (uint32_t o = 0; o < psbt->output_count; o++) {
+        for (uint32_t n = 0; psbt_output_keypath(psbt, o, n, &kp); n++) {
+            if (psbt_keypath_is_testnet(&kp)) return true;
+        }
+    }
+    for (uint32_t n = 0; psbt_global_xpub(psbt, n, &kp); n++) {
+        if (psbt_keypath_is_testnet(&kp)) return true;
+    }
+    return false;
+}
+
+// Decides whether the PSBT may be signed and gathers what the user confirms
+static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
+    psbt_input_t in;
+    psbt_output_t out;
+    psbt_keypath_t kp;
+
+    memset(plan, 0, sizeof(*plan));
+    if (!bip84_account_cached) {
+        plan->refuse = "SEED NOT LOADED";
+        return;
+    }
+    if (psbt_is_testnet(psbt)) {
+        plan->refuse = "TESTNET NOT SUPPORTED";
+        return;
+    }
+    if (!psbt_get_fee(psbt, &plan->fee)) {
+        plan->refuse = "FEE UNKNOWN";
+        return;
+    }
+
+    for (uint32_t i = 0; i < psbt->input_count; i++) {
+        if (!psbt_get_input(psbt, i, &in)) {
+            plan->refuse = "PSBT READ ERROR";
+            return;
+        }
+        // A full previous tx must hash to the outpoint: otherwise its amount is a lie
+        if (in.prev_tx != NULL && !psbt_prev_tx_matches(&in)) {
+            plan->refuse = "PREV TX MISMATCH";
+            return;
+        }
+        if (in.prev_tx == NULL) plan->amounts_unverified = true;
+
+        psbt_owner_t owner = psbt_check_owner(psbt, true, i, in.script, in.script_len, &kp);
+        if (owner == PSBT_OWNER_MISMATCH) {
+            plan->refuse = "INPUT KEY MISMATCH";
+            return;
+        }
+        if (owner != PSBT_OWNER_VERIFIED) {
+            plan->foreign++;
+        } else if (in.finalized || in.partial_sig_count > 0) {
+            plan->already_signed++;
+        } else if (in.has_sighash && in.sighash != PSBT_SIGHASH_ALL) {
+            plan->refuse = "SIGHASH NOT ALL";
+            return;
+        } else {
+            plan->signable++;
+        }
+    }
+    if (plan->signable == 0) {
+        plan->refuse = "NOTHING TO SIGN";
+        return;
+    }
+
+    for (uint32_t o = 0; o < psbt->output_count; o++) {
+        if (!psbt_get_output(psbt, o, &out)) {
+            plan->refuse = "PSBT READ ERROR";
+            return;
+        }
+        psbt_owner_t owner = psbt_check_owner(psbt, false, o, out.script, out.script_len, &kp);
+        if (owner == PSBT_OWNER_MISMATCH) {
+            plan->refuse = "CHANGE KEY MISMATCH";
+            return;
+        }
+        if (owner == PSBT_OWNER_VERIFIED) {
+            plan->change += out.amount;
+            if (psbt_path_element(&kp, 4) > PSBT_HIGH_CHANGE_INDEX) plan->high_change_index = true;
+        } else {
+            plan->send += out.amount;
+        }
+    }
+}
+
+// Shows what leaves the wallet and asks for OK. Returns true to sign.
+static bool psbt_confirm_signing(const psbt_t *psbt, const psbt_sign_plan_t *plan) {
+    char line[32];
+    char num[12];
+    int y = 63;
+
+    black_screen();
+    drawtext(5, 5, "SIGN TRANSACTION?", ST7735_YELLOW, ST7735_BLACK, 1);
+    psbt_view_amount_line(19, "SEND:   ", true, plan->send, ST7735_WHITE);
+    psbt_view_amount_line(29, "CHANGE: ", true, plan->change, ST7735_CYAN);
+    psbt_view_amount_line(39, "FEE:    ", true, plan->fee, ST7735_ORANGE);
+
+    strcpy(line, "SIGN ");
+    fast_itoa(plan->signable, num);
+    strcat(line, num);
+    strcat(line, " OF ");
+    fast_itoa(psbt->input_count, num);
+    strcat(line, num);
+    strcat(line, " INPUTS");
+    drawtext(5, 51, line, ST7735_GREEN, ST7735_BLACK, 1);
+
+    if (plan->already_signed > 0) {
+        strcpy(line, "ALREADY SIGNED: ");
+        fast_itoa(plan->already_signed, num);
+        strcat(line, num);
+        drawtext(5, y, line, ST7735_CYAN, ST7735_BLACK, 1);
+        y += 10;
+    }
+    if (plan->amounts_unverified) {
+        drawtext(5, y, "AMOUNTS NOT VERIFIED", ST7735_YELLOW, ST7735_BLACK, 1);
+        y += 10;
+    }
+    if (plan->high_change_index) {
+        drawtext(5, y, "HIGH CHANGE INDEX", ST7735_YELLOW, ST7735_BLACK, 1);
+    }
+    drawtext(5, 118, "OK=SIGN  BACK=CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
+
+    int key;
+    do {
+        key = psbt_wait_key();
+    } while (key != OK_BT && key != BACK_BT);
+    return key == OK_BT;
+}
+
+// Signs every unsigned input of ours in place. Returns the new PSBT length,
+// or 0 on error. buf holds the raw PSBT (no CBOR wrapper).
+static uint32_t psbt_sign_inputs(uint8_t *buf, uint32_t len, uint32_t capacity, uint32_t *signed_count) {
+    psbt_t psbt;
+    psbt_input_t in;
+    psbt_keypath_t kp;
+    uint8_t digest[32];
+    uint8_t sig[PSBT_SIG_MAX_LEN];
+    uint8_t pubkey[33];
+    uint32_t sig_len = 0;
+
+    *signed_count = 0;
+    for (uint32_t i = 0; ; i++) {
+        // Every inserted signature moves the maps that follow: parse again
+        if (psbt_parse(buf, len, &psbt) != PSBT_OK) return 0;
+        if (i >= psbt.input_count) break;
+        if (!psbt_get_input(&psbt, i, &in)) return 0;
+        if (in.finalized || in.partial_sig_count > 0) continue;
+        if (psbt_check_owner(&psbt, true, i, in.script, in.script_len, &kp) != PSBT_OWNER_VERIFIED) continue;
+
+        HDNode node = (psbt_path_element(&kp, 3) == 0) ? bip84_receive_node_cache : bip84_change_node_cache;
+        bool ok = hdnode_private_ckd(&node, psbt_path_element(&kp, 4)) != 0;
+        if (ok) {
+            hdnode_fill_public_key(&node);
+            memcpy(pubkey, node.public_key, 33);
+            ok = psbt_sighash_p2wpkh(&psbt, i, &in.script[2], in.amount, PSBT_SIGHASH_ALL, digest) &&
+                 psbt_ecdsa_sign(node.private_key, digest, PSBT_SIGHASH_ALL, sig, &sig_len);
+        }
+        memzero(&node, sizeof(node));   // Holds the private key
+        if (!ok) return 0;
+
+        len = psbt_add_partial_sig(buf, capacity, &psbt, i, pubkey, 33, sig, sig_len);
+        if (len == 0) return 0;
+        (*signed_count)++;
+    }
+    return len;
+}
+
+// Shows a PSBT, then offers to sign it with the loaded seed and returns the
+// signed PSBT as an animated QR. buf has room for 'capacity' bytes.
+static void psbt_review_and_sign(uint8_t *buf, uint32_t len, uint32_t capacity) {
+    psbt_t psbt;
+    psbt_sign_plan_t plan;
+    uint32_t signed_count;
+    char text[32];
+    char num[12];
+
+    show_psbt_details(buf, len);
+    if (psbt_parse(buf, len, &psbt) != PSBT_OK) return;     // The viewer showed the error
+
+    // Drop the CBOR wrapper of QR input so the PSBT can be edited in place
+    if (psbt.buf != buf) {
+        len = psbt.len;
+        memmove(buf, psbt.buf, len);
+        if (psbt_parse(buf, len, &psbt) != PSBT_OK) return;
+    }
+
+    black_screen();
+    drawtext(5, 5, "CHECKING PSBT...", ST7735_YELLOW, ST7735_BLACK, 1);
+    psbt_plan_signing(&psbt, &plan);
+    if (plan.refuse != NULL) {
+        strcpy(text, plan.refuse);
+        psbt_sd_message("CANNOT SIGN", text);
+        return;
+    }
+    if (!psbt_confirm_signing(&psbt, &plan)) return;
+
+    black_screen();
+    drawtext(5, 5, "SIGNING...", ST7735_YELLOW, ST7735_BLACK, 1);
+    len = psbt_sign_inputs(buf, len, capacity, &signed_count);
+    if (len == 0) {
+        psbt_sd_message("SIGNING FAILED", "KEY ERROR OR NO ROOM");
+        return;
+    }
+
+    black_screen();
+    strcpy(text, "SIGNED ");
+    fast_itoa(signed_count, num);
+    strcat(text, num);
+    strcat(text, signed_count == 1 ? " INPUT" : " INPUTS");
+    drawtext(5, 5, text, ST7735_GREEN, ST7735_BLACK, 1);
+    drawtext(5, 25, "SCAN THE NEXT QR", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 35, "WITH YOUR WALLET", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 118, "PRESS ANY KEY", ST7735_WHITE, ST7735_BLACK, 1);
+    psbt_wait_key();
+    show_ur_animated_qr(buf, len);
 }
 
 void scan_ur_animated_qr(void) {
@@ -4300,7 +4547,13 @@ void scan_ur_animated_qr(void) {
     if (psbt_recovered) {
         // The part buffer becomes one contiguous message (no extra RAM)
         uint8_t *psbt_msg = fountain_assemble_message(expected_msg_len);
-        show_psbt_details(psbt_msg, expected_msg_len);
+        if (psbt_msg == NULL) {
+            show_psbt_details(NULL, 0);     // Shows the error
+        } else {
+            uint32_t capacity;
+            (void)fountain_scratch_buffer(&capacity);   // Same buffer; the message starts at its base
+            psbt_review_and_sign(psbt_msg, expected_msg_len, capacity);
+        }
     }
     
     while (BT1 == 0) SYS_Tasks(); // Wait for button release
@@ -4638,10 +4891,6 @@ int main ( void ){
                         } else {
                             transition_to_main();
                         }*/
-
-                        // TEST: animated UR export of a PSBT signed on the PC
-                        // (test/psbt/sign_abandon.py). Scan it with Sparrow.
-                        show_ur_animated_qr(ur_test_signed_psbt, sizeof(ur_test_signed_psbt));
 
                         //test_bytewords_to_screen();
                         
