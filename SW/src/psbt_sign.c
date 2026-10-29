@@ -18,6 +18,8 @@
 
 // Not exported by the trimmed ecdsa.h, but defined in crypto/ecdsa.c
 int scalar_multiply(const ecdsa_curve *curve, const bignum256 *k, curve_point *res);
+int point_multiply(const ecdsa_curve *curve, const bignum256 *k, const curve_point *p, curve_point *res);
+void point_add(const ecdsa_curve *curve, const curve_point *cp1, curve_point *cp2);
 
 // ============================================================================
 // Hash helpers
@@ -254,8 +256,34 @@ static bool ecdsa_sign_rfc6979(const ecdsa_curve *curve, const uint8_t priv_key[
     return ok;
 }
 
-bool psbt_ecdsa_sign(const uint8_t priv_key[32], const uint8_t digest[32], uint8_t sighash_type,
-                     uint8_t *sig, uint32_t *sig_len) {
+// ECDSA verification with the same steps as trezor-crypto's
+// ecdsa_verify_digest(): R' = (z/s) * G + (r/s) * Q, valid if R'.x mod n == r.
+// r, s and z are already reduced mod n.
+static bool ecdsa_verify(const ecdsa_curve *curve, const uint8_t pub_key[33],
+                         const bignum256 *r, const bignum256 *s, const bignum256 *z) {
+    curve_point pub, res;
+    bignum256 u1 = *z, u2 = *s;
+
+    if (!ecdsa_read_pubkey(curve, pub_key, &pub)) return false;
+    if (bn_is_zero(r) || bn_is_zero(s) || !bn_is_less(r, &curve->order) || !bn_is_less(s, &curve->order)) return false;
+
+    bn_inverse(&u2, &curve->order);         // u2 = s^-1
+    bn_multiply(&u2, &u1, &curve->order);   // u1 = z / s
+    bn_mod(&u1, &curve->order);
+    bignum256 rr = *r;
+    bn_multiply(&u2, &rr, &curve->order);   // rr = r / s
+    bn_mod(&rr, &curve->order);
+    if (bn_is_zero(&u1)) return false;      // Digest is zero mod n: never signed
+
+    scalar_multiply(curve, &u1, &res);
+    if (point_multiply(curve, &rr, &pub, &pub) != 0) return false;
+    point_add(curve, &pub, &res);           // Handles points at infinity
+    bn_mod(&res.x, &curve->order);
+    return bn_is_equal(&res.x, r) != 0;
+}
+
+bool psbt_ecdsa_sign(const uint8_t priv_key[32], const uint8_t pub_key[33], const uint8_t digest[32],
+                     uint8_t sighash_type, uint8_t *sig, uint32_t *sig_len, void (*on_verify)(void)) {
     const ecdsa_curve *curve = &secp256k1;
     uint8_t h1[32], extra[32], r_be[32], s_be[32];
     bignum256 z, r, s;
@@ -278,6 +306,11 @@ bool psbt_ecdsa_sign(const uint8_t priv_key[32], const uint8_t digest[32], uint8
         bn_write_be(&r, r_be);
         ok = (r_be[0] & 0x80) == 0;
     }
+
+    // Check the result with the public key before releasing it: a glitched
+    // computation could otherwise produce a signature that leaks the key
+    if (ok && on_verify != NULL) on_verify();
+    ok = ok && ecdsa_verify(curve, pub_key, &r, &s, &z);
 
     if (ok) {
         bn_write_be(&s, s_be);

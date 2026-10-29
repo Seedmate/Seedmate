@@ -49,7 +49,12 @@ bool psbt_prev_tx_matches(const psbt_input_t *in);
 
 // Signs a 32-byte digest. Writes the DER signature followed by sighash_type
 // to sig (PSBT_SIG_MAX_LEN bytes) and its length to sig_len.
-bool psbt_ecdsa_sign(const uint8_t priv_key[32], const uint8_t digest[32], uint8_t sighash_type,
-                     uint8_t *sig, uint32_t *sig_len);
+// The signature is verified against pub_key (33-byte compressed public key
+// of priv_key) before it is returned: if a fault corrupted the computation,
+// or pub_key is not the signing key, nothing is output and false is returned.
+// on_verify (may be NULL) is called between signing and verifying, so the
+// interface can show both steps.
+bool psbt_ecdsa_sign(const uint8_t priv_key[32], const uint8_t pub_key[33], const uint8_t digest[32],
+                     uint8_t sighash_type, uint8_t *sig, uint32_t *sig_len, void (*on_verify)(void));
 
 #endif // PSBT_SIGN_H

@@ -67,6 +67,7 @@
 #include "TFT.h"                        // TFT functions
 #include "sha256.h"
 #include "sha512.h"
+#include "kdf.h"
 //#include "screens.h"
 #include "words_opt.h"
 #include <string.h>
@@ -339,90 +340,18 @@ int card_view_page = 0;
 // ============================================================================
 // BIP85 Derivation Engine
 // ============================================================================
-// -------------------- HMAC-SHA512 --------------------
+// HMAC-SHA512 and PBKDF2 live in kdf.c. This callback keeps the MCU tasks
+// running during the 2048 BIP39 iterations and fills the green progress bar
+// (x = 10..150, y = 121..124) drawn by the caller.
+static void pbkdf2_progress_bar(uint32_t done, uint32_t total) {
+    static uint32_t drawn = 0;          // Bar end already painted (x offset)
+    uint32_t fill = (140u * done) / total;
 
-void HmacSha512(const BYTE *key, size_t keyLen,
-                const BYTE *data, size_t dataLen,
-                BYTE *out) {
-    BYTE k_ipad[BLOCK_SIZE];
-    BYTE k_opad[BLOCK_SIZE];
-    SHA512_HASH innerHash;
-    SHA512_HASH outerHash;
-    Sha512Context ctx;
-
-    if (keyLen > BLOCK_SIZE) {
-        Sha512Initialise(&ctx);
-        Sha512Update(&ctx, key, keyLen);
-        Sha512Finalise(&ctx, &innerHash);
-        key = innerHash.bytes;
-        keyLen = SHA512_SIZE;
-    }
-
-    memset(k_ipad, 0x36, BLOCK_SIZE);
-    memset(k_opad, 0x5c, BLOCK_SIZE);
-
-    for (size_t i = 0; i < keyLen; i++) {
-        k_ipad[i] ^= key[i];
-        k_opad[i] ^= key[i];
-    }
-
-    // Inner hash
-    Sha512Initialise(&ctx);
-    Sha512Update(&ctx, k_ipad, BLOCK_SIZE);
-    Sha512Update(&ctx, data, dataLen);
-    Sha512Finalise(&ctx, &innerHash);
-
-    // Outer hash
-    Sha512Initialise(&ctx);
-    Sha512Update(&ctx, k_opad, BLOCK_SIZE);
-    Sha512Update(&ctx, innerHash.bytes, SHA512_SIZE);
-    Sha512Finalise(&ctx, &outerHash);
-
-    memcpy(out, outerHash.bytes, SHA512_SIZE);
-}
-// -------------------- PBKDF2-HMAC-SHA512 --------------------
-void PBKDF2_HMAC_SHA512(const char *password, const char *salt,
-                        uint32_t iterations, BYTE *output, size_t dkLen) {
-    uint32_t blockCount = (dkLen + SHA512_SIZE - 1) / SHA512_SIZE;
-    BYTE U[SHA512_SIZE];
-    BYTE T[SHA512_SIZE];
-    BYTE saltBlock[32]; 
-    size_t saltLen = strlen(salt);
-
-    for (uint32_t i = 1; i <= blockCount; i++) {
-        memcpy(saltBlock, salt, saltLen);
-        saltBlock[saltLen + 0] = (i >> 24) & 0xFF;
-        saltBlock[saltLen + 1] = (i >> 16) & 0xFF;
-        saltBlock[saltLen + 2] = (i >> 8) & 0xFF;
-        saltBlock[saltLen + 3] = i & 0xFF;
-
-        HmacSha512((const BYTE *)password, strlen(password),
-                   saltBlock, saltLen + 4, U);
-        memcpy(T, U, SHA512_SIZE);
-
-        for (uint32_t j = 2; j <= iterations; j++) {
-            HmacSha512((const BYTE *)password, strlen(password),
-                       U, SHA512_SIZE, U);
-            for (int k = 0; k < SHA512_SIZE; k++) {
-                T[k] ^= U[k];
-            }
-            
-            // Keep the system and watchdog happy during the heavy hash loop
-            if (j % 16 == 0) {
-                SYS_Tasks(); 
-            }
-            
-            // Simple UI Progress Bar at the bottom of the screen
-            if (j % 102 == 0) {
-                int chunk = j / 102; // Yields 1 through 20
-                // Draw progress bar from x=10 to x=150 at y=115
-                rectan(10 + ((chunk - 1) * 7), 121, 10 + (chunk * 7), 124, ST7735_GREEN);
-            }
-        }
-
-        size_t offset = (i - 1) * SHA512_SIZE;
-        size_t toCopy = (dkLen - offset < SHA512_SIZE) ? (dkLen - offset) : SHA512_SIZE;
-        memcpy(output + offset, T, toCopy);
+    SYS_Tasks();
+    if (fill < drawn) drawn = 0;        // A new run started
+    if (fill >= drawn + 7) {            // Repaint in 7 px steps, as before
+        rectan(10 + drawn, 121, 10 + fill, 124, ST7735_GREEN);
+        drawn = fill;
     }
 }
 
@@ -523,12 +452,19 @@ static void add_256_mod_n(uint8_t *out, const uint8_t *a, const uint8_t *b) {
 }
 
 
+// Footer progress for key computations, defined with the BIP84 code below
+static void key_progress_phase(const char *label, uint8_t total_steps);
+static void key_progress_step(void);
+
 static void process_bip85_derivation(void) {
     char mnemonic_str[250]; 
     get_mnemonic_string(mnemonic_str);
    
     uint8_t seed[64];
-    PBKDF2_HMAC_SHA512(mnemonic_str, "mnemonic", 2048, seed, 64);
+    key_progress_phase("1/2 SEED (PBKDF2)", 0);
+    PBKDF2_HMAC_SHA512(mnemonic_str, "mnemonic", 2048, seed, 64, pbkdf2_progress_bar);
+    memzero(mnemonic_str, sizeof(mnemonic_str));
+    key_progress_phase("2/2 BIP85 CHILD KEY", 5);
     
     uint8_t I[64];
     HmacSha512((uint8_t *)"Bitcoin seed", 12, seed, 64, I);
@@ -562,6 +498,8 @@ static void process_bip85_derivation(void) {
         // Proper BIP32 child key addition mod n
         add_256_mod_n(k, I, k); // k_i = (I_L + k_par) % n
         memcpy(c, I + 32, 32);  // c_i = I_R
+        memzero(data, sizeof(data));
+        key_progress_step();
     }
     
     // BIP85 explicitly requires HMAC-SHA512 step here using "bip-entropy-from-k"
@@ -575,6 +513,12 @@ static void process_bip85_derivation(void) {
     }
     
     size_pointer = bip85_size;
+
+    memzero(seed, sizeof(seed));
+    memzero(I, sizeof(I));
+    memzero(k, sizeof(k));
+    memzero(c, sizeof(c));
+    memzero(bip85_hmac_out, sizeof(bip85_hmac_out));
 }
 // ============================================================================
 
@@ -1611,6 +1555,28 @@ static void hdnode_serialize_public(const HDNode *node, uint32_t fingerprint, ui
 
 // BIP39 seed of the loaded mnemonic and passphrase (the slow PBKDF2 draws the
 // green progress bar at the bottom) and its BIP32 root. Wipes the seed.
+// Footer progress while keys are computed (Rule 4): the running phase above
+// a bar. Phase 1 (PBKDF2) fills the bar from inside PBKDF2_HMAC_SHA512;
+// phase 2 advances one step per public key (elliptic curve multiplication).
+static uint8_t key_steps_done;
+static uint8_t key_steps_total;
+
+static void key_progress_phase(const char *label, uint8_t total_steps) {
+    char text[24];
+    strcpy(text, label);
+    rectan(0, 108, 159, 127, BLACK);
+    drawtext(10, 110, text, ST7735_CYAN, ST7735_BLACK, 1);
+    rectan(9, 120, 151, 125, WHITE);
+    key_steps_done = 0;
+    key_steps_total = total_steps;
+}
+
+static void key_progress_step(void) {
+    if (key_steps_total == 0) return;
+    key_steps_done++;
+    rectan(10, 121, 10 + (140u * key_steps_done) / key_steps_total, 124, ST7735_GREEN);
+}
+
 static bool derive_root_with_progress(HDNode *root) {
     char mnemonic_str[250];
     char bip39_salt[250] = "mnemonic";
@@ -1619,11 +1585,8 @@ static bool derive_root_with_progress(HDNode *root) {
     get_mnemonic_string(mnemonic_str);
     strcat(bip39_salt, bip84_passphrase);
 
-    // Progress bar outline over the footer area
-    rectan(0, 110, 159, 127, BLACK);
-    rectan(9, 120, 151, 125, WHITE);
-
-    PBKDF2_HMAC_SHA512(mnemonic_str, bip39_salt, 2048, seed, 64);
+    key_progress_phase("1/2 SEED (PBKDF2)", 0);
+    PBKDF2_HMAC_SHA512(mnemonic_str, bip39_salt, 2048, seed, 64, pbkdf2_progress_bar);
     bool ok = hdnode_from_seed(seed, 64, SECP256K1_NAME, root) != 0;
 
     memzero(seed, sizeof(seed));
@@ -1639,8 +1602,10 @@ static void derive_multisig_account(const HDNode *root) {
     hdnode_private_ckd(&ms_account_node, 0 | 0x80000000);
     hdnode_private_ckd(&ms_account_node, 0 | 0x80000000);
     ms_account_parent_fingerprint = hdnode_fingerprint(&ms_account_node);
+    key_progress_step();
     hdnode_private_ckd(&ms_account_node, 2 | 0x80000000);
     hdnode_fill_public_key(&ms_account_node);
+    key_progress_step();
 
     ms_receive_node_cache = ms_account_node;
     hdnode_private_ckd(&ms_receive_node_cache, 0);
@@ -1656,8 +1621,12 @@ void precompute_bip84_account(void) {
     HDNode root;
     if (!derive_root_with_progress(&root)) return;
 
+    // Three public keys here, two more for the multisig account
+    key_progress_phase("2/2 PUBLIC KEYS", bip84_multisig_mode ? 5 : 3);
+
     // Store Master Fingerprint
     bip84_master_fingerprint = hdnode_fingerprint(&root);
+    key_progress_step();
 
     // Derive path m/84'/0'
     bip84_account_node = root;
@@ -1666,6 +1635,7 @@ void precompute_bip84_account(void) {
 
     // Store parent fingerprint for account-level xpub/zpub
     bip84_account_parent_fingerprint = hdnode_fingerprint(&bip84_account_node);
+    key_progress_step();
 
     // Derive Account path: m/84'/0'/0'
     hdnode_private_ckd(&bip84_account_node, 0  | 0x80000000);
@@ -1673,6 +1643,7 @@ void precompute_bip84_account(void) {
     // Precompute public key and Base58 strings under the loading bar ---
     // Fill the public key for the account node so it can be serialized
     hdnode_fill_public_key(&bip84_account_node);
+    key_progress_step();
 
     // Serialize and cache the XPUB and ZPUB strings globally
     hdnode_serialize_public(&bip84_account_node, bip84_account_parent_fingerprint, 0x0488B21E, bip84_cached_xpub, sizeof(bip84_cached_xpub));
@@ -1698,7 +1669,10 @@ void precompute_bip84_account(void) {
 static void precompute_multisig_account(void) {
     if (ms_account_cached) return;
     HDNode root;
-    if (derive_root_with_progress(&root)) derive_multisig_account(&root);
+    if (derive_root_with_progress(&root)) {
+        key_progress_phase("2/2 PUBLIC KEYS", 2);
+        derive_multisig_account(&root);
+    }
     memzero(&root, sizeof(root));
 }
 
@@ -4219,6 +4193,50 @@ static bool psbt_is_testnet(const psbt_t *psbt) {
     return false;
 }
 
+// Progress screen for long PSBT operations (Rule 4): a title, what is being
+// done right now and the same green bar as the key derivation
+static void psbt_progress_begin(const char *title) {
+    char text[24];
+    strcpy(text, title);
+    black_screen();
+    drawtext(5, 5, text, ST7735_YELLOW, ST7735_BLACK, 1);
+    rectan(9, 120, 151, 125, WHITE);
+}
+
+// Redraws the step lines (any may be NULL) and moves the bar to done/total.
+// what: e.g. "INPUT 2 OF 3"; detail: e.g. a derivation path; step: the action.
+static void psbt_progress_step(const char *what, const char *detail, const char *step,
+                               uint32_t done, uint32_t total) {
+    char text[PSBT_PATH_STR_LEN];
+
+    rectan(0, 20, 159, 72, BLACK);
+    if (what != NULL) {
+        strcpy(text, what);
+        drawtext(5, 25, text, ST7735_WHITE, ST7735_BLACK, 1);
+    }
+    if (detail != NULL) {
+        strcpy(text, detail);
+        draw_bip84_wrapped_text(text, 5, 37, PSBT_VIEW_LINE_CHARS, 2);
+    }
+    if (step != NULL) {
+        strcpy(text, step);
+        drawtext(5, 62, text, ST7735_CYAN, ST7735_BLACK, 1);
+    }
+    uint32_t fill = (total > 0) ? (140u * done) / total : 0;
+    if (fill > 0) rectan(10, 121, 10 + fill, 124, ST7735_GREEN);
+}
+
+// "INPUT 2 OF 3" style label
+static void psbt_count_label(const char *kind, uint32_t index, uint32_t count, char *out) {
+    char num[12];
+    strcpy(out, kind);
+    fast_itoa(index + 1, num);
+    strcat(out, num);
+    strcat(out, " OF ");
+    fast_itoa(count, num);
+    strcat(out, num);
+}
+
 // Decides whether the PSBT may be signed and gathers what the user confirms
 static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
     psbt_input_t in;
@@ -4239,7 +4257,12 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
         return;
     }
 
+    uint32_t checks = psbt->input_count + psbt->output_count;
+    char label[24];
+
     for (uint32_t i = 0; i < psbt->input_count; i++) {
+        psbt_count_label("INPUT ", i, psbt->input_count, label);
+        psbt_progress_step(label, NULL, "PREV TX, AMOUNT, KEYS", i, checks);
         if (!psbt_get_input(psbt, i, &in)) {
             plan->refuse = "PSBT READ ERROR";
             return;
@@ -4284,6 +4307,8 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
     }
 
     for (uint32_t o = 0; o < psbt->output_count; o++) {
+        psbt_count_label("OUTPUT ", o, psbt->output_count, label);
+        psbt_progress_step(label, NULL, "CHANGE KEYS", psbt->input_count + o, checks);
         if (!psbt_get_output(psbt, o, &out)) {
             plan->refuse = "PSBT READ ERROR";
             return;
@@ -4354,9 +4379,27 @@ static bool psbt_confirm_signing(const psbt_t *psbt, const psbt_sign_plan_t *pla
     return key == OK_BT;
 }
 
-// Signs every unsigned input of ours in place. Returns the new PSBT length,
-// or 0 on error. buf holds the raw PSBT (no CBOR wrapper).
-static uint32_t psbt_sign_inputs(uint8_t *buf, uint32_t len, uint32_t capacity, uint32_t *signed_count) {
+// Signs every unsigned input of ours in place, showing each step on screen.
+// to_sign is the number of inputs the plan found (for the progress bar).
+// Returns the new PSBT length, or 0 with the reason in *why.
+// buf holds the raw PSBT (no CBOR wrapper).
+#define PSBT_SIGN_STEPS 5       // Derive, sighash, sign, verify, insert
+
+// Progress shown by the callback that psbt_ecdsa_sign() runs before verifying
+static struct {
+    const char *label;
+    const char *path;
+    uint32_t step;
+    uint32_t total;
+} sign_progress;
+
+static void psbt_show_verifying(void) {
+    psbt_progress_step(sign_progress.label, sign_progress.path, "VERIFYING SIGNATURE",
+                       sign_progress.step, sign_progress.total);
+}
+
+static uint32_t psbt_sign_inputs(uint8_t *buf, uint32_t len, uint32_t capacity, uint32_t to_sign,
+                                 uint32_t *signed_count, const char **why) {
     psbt_t psbt;
     psbt_input_t in;
     psbt_keypath_t kp;
@@ -4364,8 +4407,12 @@ static uint32_t psbt_sign_inputs(uint8_t *buf, uint32_t len, uint32_t capacity, 
     uint8_t sig[PSBT_SIG_MAX_LEN];
     uint8_t pubkey[33];
     uint32_t sig_len = 0;
+    uint32_t step = 0, total = to_sign * PSBT_SIGN_STEPS;
+    char label[24];
+    char path[PSBT_PATH_STR_LEN];
 
     *signed_count = 0;
+    *why = "PSBT READ ERROR";
     for (uint32_t i = 0; ; i++) {
         // Every inserted signature moves the maps that follow: parse again
         if (psbt_parse(buf, len, &psbt) != PSBT_OK) return 0;
@@ -4378,6 +4425,10 @@ static uint32_t psbt_sign_inputs(uint8_t *buf, uint32_t len, uint32_t capacity, 
         if (multi != bip84_multisig_mode || (owner != PSBT_OWNER_VERIFIED && !multi)) continue;
         if (psbt_input_has_sig_from(&psbt, i, kp.key, kp.key_len)) continue;
 
+        psbt_count_label("INPUT ", i, psbt.input_count, label);
+        psbt_format_path(&kp, path);
+        psbt_progress_step(label, path, "DERIVING KEY", step++, total);
+
         // Single sig: .../chain/index at path elements 3 and 4; multisig: 4 and 5
         uint32_t depth = multi ? 4 : 3;
         HDNode node;
@@ -4387,27 +4438,45 @@ static uint32_t psbt_sign_inputs(uint8_t *buf, uint32_t len, uint32_t capacity, 
             node = (psbt_path_element(&kp, depth) == 0) ? bip84_receive_node_cache : bip84_change_node_cache;
         }
         bool ok = hdnode_private_ckd(&node, psbt_path_element(&kp, depth + 1)) != 0;
+        *why = "KEY DERIVATION ERROR";
         if (ok) {
             hdnode_fill_public_key(&node);
             memcpy(pubkey, node.public_key, 33);
             ok = memcmp(pubkey, kp.key, 33) == 0;
+            *why = "DERIVED KEY MISMATCH";
         }
         if (ok) {
+            psbt_progress_step(label, path, "COMPUTING SIGHASH", step++, total);
+            *why = "SIGHASH ERROR";
             if (multi) {
                 ok = psbt_sighash_segwit_v0(&psbt, i, in.witness_script, in.witness_script_len,
                                             in.amount, PSBT_SIGHASH_ALL, digest);
             } else {
                 ok = psbt_sighash_p2wpkh(&psbt, i, &in.script[2], in.amount, PSBT_SIGHASH_ALL, digest);
             }
-            ok = ok && psbt_ecdsa_sign(node.private_key, digest, PSBT_SIGHASH_ALL, sig, &sig_len);
+            if (ok) {
+                psbt_progress_step(label, path, "SIGNING", step++, total);
+                sign_progress.label = label;
+                sign_progress.path = path;
+                sign_progress.step = step++;
+                sign_progress.total = total;
+                *why = "SIGNATURE CHECK FAILED";
+                ok = psbt_ecdsa_sign(node.private_key, pubkey, digest, PSBT_SIGHASH_ALL, sig, &sig_len,
+                                     psbt_show_verifying);
+            }
         }
         memzero(&node, sizeof(node));   // Holds the private key
         if (!ok) return 0;
 
+        psbt_progress_step(label, path, "ADDING TO PSBT", step++, total);
         len = psbt_add_partial_sig(buf, capacity, &psbt, i, pubkey, 33, sig, sig_len);
-        if (len == 0) return 0;
+        if (len == 0) {
+            *why = "NO ROOM IN BUFFER";
+            return 0;
+        }
         (*signed_count)++;
     }
+    psbt_progress_step(NULL, NULL, "DONE", total, total);
     return len;
 }
 
@@ -4430,8 +4499,7 @@ static void psbt_review_and_sign(uint8_t *buf, uint32_t len, uint32_t capacity) 
         if (psbt_parse(buf, len, &psbt) != PSBT_OK) return;
     }
 
-    black_screen();
-    drawtext(5, 5, "CHECKING PSBT...", ST7735_YELLOW, ST7735_BLACK, 1);
+    psbt_progress_begin("CHECKING PSBT");
     psbt_plan_signing(&psbt, &plan);
     if (plan.refuse != NULL) {
         strcpy(text, plan.refuse);
@@ -4440,11 +4508,12 @@ static void psbt_review_and_sign(uint8_t *buf, uint32_t len, uint32_t capacity) 
     }
     if (!psbt_confirm_signing(&psbt, &plan)) return;
 
-    black_screen();
-    drawtext(5, 5, "SIGNING...", ST7735_YELLOW, ST7735_BLACK, 1);
-    len = psbt_sign_inputs(buf, len, capacity, &signed_count);
+    const char *why;
+    psbt_progress_begin("SIGNING TRANSACTION");
+    len = psbt_sign_inputs(buf, len, capacity, plan.signable, &signed_count, &why);
     if (len == 0) {
-        psbt_sd_message("SIGNING FAILED", "KEY ERROR OR NO ROOM");
+        strcpy(text, why);
+        psbt_sd_message("SIGNING FAILED", text);
         return;
     }
 

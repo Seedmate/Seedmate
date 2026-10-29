@@ -42,6 +42,15 @@ Flash guidelines:
 
 After any change that adds code or data, rebuild `Seedmate_v2`, read the memory report (`dist/v2/production/*.map`, "Total ... used") and mention the flash and RAM delta in the summary.
 
+## Rule 4 - Transparency and user control come first
+
+The user must always see what the device is doing and stay in control. This is a priority in both the interface and the flow logic, on the same level as security:
+- Never sign, write to the SD card, export or change anything without an explicit confirmation step that shows what will happen (amounts, destinations, which keys/inputs).
+- Long operations (key derivation, checks, signing, file I/O) show a progress bar plus the step currently running (for example "INPUT 2 OF 3", the derivation path, "SIGNING", "VERIFYING SIGNATURE").
+- When something is refused or fails, say why on screen in plain words ("PREV TX MISMATCH", "SWITCH TO MULTI SIG"); never fail silently or fall back to a different action.
+- Show verified facts and unverified claims differently (colors, "VERIFIED" / "NOT VERIFIED" labels); do not present data from the PSBT as checked when it was not.
+- Every flow can be cancelled with BACK before any irreversible step.
+
 ## Building and checking (no IDE needed)
 
 The project builds from the command line with MPLAB X's `make` and XC32 v5.10 (`-O1 -ffunction-sections -fdata-sections`, linked with `--gc-sections`, no LTO, and `-Werror -Wall`, so any new warning breaks the build). From `BIP39_MCC.X`:

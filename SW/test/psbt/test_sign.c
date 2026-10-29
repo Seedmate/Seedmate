@@ -10,6 +10,11 @@
 #include "ur_test_psbt.h"
 
 static int failures = 0;
+
+// Public key of m/84h/0h/0h/0/0 for "abandon x11 about" (BIP84 test vector)
+static const uint8_t pub_0_0[33] = {
+    0x03, 0x30, 0xd5, 0x4f, 0xd0, 0xdd, 0x42, 0x0a, 0x6e, 0x5f, 0x8d, 0x36, 0x24, 0xf5, 0xf3, 0x48, 0x2c,
+    0xae, 0x35, 0x0f, 0x79, 0xd5, 0xf0, 0x75, 0x3b, 0xf5, 0xbe, 0xef, 0x9c, 0x2d, 0x91, 0xaf, 0x3c};
 #define CHECK(cond) do { if (!(cond)) { printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); failures++; } } while (0)
 
 static void hex32(const char *hex, uint8_t *out) {
@@ -61,10 +66,10 @@ static void test_sign_abandon(void) {
     memcpy(buf, abandon, sizeof(abandon));
     CHECK(psbt_parse(buf, sizeof(abandon), &p) == PSBT_OK);
     CHECK(psbt_get_input(&p, 0, &in) && in.has_amount && in.script_len == 22);
-    CHECK(psbt_input_keypath(&p, 0, 0, &kp) && kp.key_len == 33);
+    CHECK(psbt_input_keypath(&p, 0, 0, &kp) && kp.key_len == 33 && memcmp(kp.key, pub_0_0, 33) == 0);
 
     CHECK(psbt_sighash_p2wpkh(&p, 0, &in.script[2], in.amount, PSBT_SIGHASH_ALL, digest));
-    CHECK(psbt_ecdsa_sign(ur_test_priv_0_0, digest, PSBT_SIGHASH_ALL, sig, &sig_len));
+    CHECK(psbt_ecdsa_sign(ur_test_priv_0_0, pub_0_0, digest, PSBT_SIGHASH_ALL, sig, &sig_len, NULL));
     CHECK(sig_len >= 9 && sig_len <= PSBT_SIG_MAX_LEN && sig[sig_len - 1] == PSBT_SIGHASH_ALL);
 
     uint8_t pubkey[33];
@@ -79,12 +84,24 @@ static void test_sign_abandon(void) {
     // Deterministic: signing again gives the same signature
     uint8_t sig2[PSBT_SIG_MAX_LEN];
     uint32_t sig2_len = 0;
-    CHECK(psbt_ecdsa_sign(ur_test_priv_0_0, digest, PSBT_SIGHASH_ALL, sig2, &sig2_len));
+    CHECK(psbt_ecdsa_sign(ur_test_priv_0_0, pub_0_0, digest, PSBT_SIGHASH_ALL, sig2, &sig2_len, NULL));
     CHECK(sig2_len == sig_len && memcmp(sig, sig2, sig_len) == 0);
 
     // Invalid private keys are refused
     static const uint8_t zero_key[32] = {0};
-    CHECK(!psbt_ecdsa_sign(zero_key, digest, PSBT_SIGHASH_ALL, sig, &sig_len));
+    CHECK(!psbt_ecdsa_sign(zero_key, pub_0_0, digest, PSBT_SIGHASH_ALL, sig, &sig_len, NULL));
+
+    // Verify-after-sign: a signature that does not check out against the
+    // given public key is never released (here the key is another one)
+    uint8_t other_pub[33];
+    memcpy(other_pub, pub_0_0, 33);
+    other_pub[0] ^= 0x01;                       // Same x, opposite y: a valid but different key
+    sig_len = 0;
+    memset(sig, 0xAA, sizeof(sig));
+    CHECK(!psbt_ecdsa_sign(ur_test_priv_0_0, other_pub, digest, PSBT_SIGHASH_ALL, sig, &sig_len, NULL));
+    CHECK(sig_len == 0 && sig[0] == 0xAA);      // Nothing written
+    static const uint8_t bad_pub[33] = {0x05};  // Not a public key at all
+    CHECK(!psbt_ecdsa_sign(ur_test_priv_0_0, bad_pub, digest, PSBT_SIGHASH_ALL, sig, &sig_len, NULL));
 }
 
 // 2-of-3 P2WSH: the firmware must sign exactly like the Python signer
@@ -120,7 +137,7 @@ static void test_sign_multisig(void) {
 
     CHECK(psbt_sighash_segwit_v0(&p, 0, in.witness_script, in.witness_script_len, in.amount,
                                  PSBT_SIGHASH_ALL, digest));
-    CHECK(psbt_ecdsa_sign(ur_test_ms_priv_0_0, digest, PSBT_SIGHASH_ALL, sig, &sig_len));
+    CHECK(psbt_ecdsa_sign(ur_test_ms_priv_0_0, pubkey, digest, PSBT_SIGHASH_ALL, sig, &sig_len, NULL));
     len = psbt_add_partial_sig(buf, sizeof(buf), &p, 0, pubkey, 33, sig, sig_len);
     CHECK(len == sizeof(ur_test_ms_signed_psbt));
     CHECK(memcmp(buf, ur_test_ms_signed_psbt, sizeof(ur_test_ms_signed_psbt)) == 0);
@@ -136,7 +153,7 @@ static void test_low_r_grinding(void) {
     uint32_t retried = 0;
 
     for (int i = 0; i < UR_TEST_GRIND_COUNT; i++) {
-        CHECK(psbt_ecdsa_sign(ur_test_priv_0_0, ur_test_grind_digest[i], PSBT_SIGHASH_ALL, sig, &sig_len));
+        CHECK(psbt_ecdsa_sign(ur_test_priv_0_0, pub_0_0, ur_test_grind_digest[i], PSBT_SIGHASH_ALL, sig, &sig_len, NULL));
         CHECK(sig_len == ur_test_grind_sig_len[i] + 1u);
         CHECK(memcmp(sig, ur_test_grind_sig[i], ur_test_grind_sig_len[i]) == 0);
         CHECK(sig[4] < 0x80 && sig_len <= 72);          // R without the 0x00 pad
