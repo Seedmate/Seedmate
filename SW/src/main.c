@@ -82,6 +82,8 @@
 #include "screens.h"
 #include "psbt.h"
 #include "sd_files.h"
+#include "ur_encode.h"
+#include "ur_test_psbt.h"
 
 
 
@@ -3453,16 +3455,6 @@ static uint32_t read_cbor_int(const uint8_t *buf, uint32_t *idx) {
     return 0;
 }
 
-static uint32_t crc32_update(uint32_t crc, const uint8_t *data, size_t length) {
-    for (size_t i = 0; i < length; i++) {
-        crc ^= data[i];
-        for (int j = 0; j < 8; j++) {
-            if (crc & 1) crc = (crc >> 1) ^ 0xEDB88320;
-            else crc >>= 1;
-        }
-    }
-    return crc;
-}
 
 // ============================================================================
 // PSBT VIEWER (test screen; to be moved to screens.c once the flow is final)
@@ -4001,6 +3993,57 @@ static void load_psbt_from_sd(void) {
     while (BT1 == 0) SYS_Tasks();   // Do not let BACK reach the menu state machine
 }
 
+// ============================================================================
+// PSBT export as an animated "ur:crypto-psbt" QR code
+// ============================================================================
+
+#define UR_QR_VERSION       8       // 49x49 modules: 98 px tall at scale 2
+#define UR_QR_SCALE         2
+#define UR_QR_MAX_FRAGMENT  100     // Bytes per frame; the text fits version 8, ECC L
+#define UR_FRAME_DELAY_MS   150
+
+// Loops over the UR parts of a PSBT until BACK is pressed. The parts are
+// built one at a time on the stack, so RAM use does not depend on the PSBT.
+static void show_ur_animated_qr(const uint8_t *psbt, uint32_t len) {
+    ur_encoder_t ur;
+    char part[UR_PART_MAX_CHARS(UR_QR_MAX_FRAGMENT) + 1];
+    char label[12];
+    char num[6];
+    uint32_t seq = 1;
+
+    if (!ur_encoder_init(&ur, psbt, len, UR_QR_MAX_FRAGMENT)) {
+        psbt_sd_message("QR EXPORT ERROR", "PSBT TOO BIG OR EMPTY");
+        return;
+    }
+
+    while (BT1 == 0) SYS_Tasks();   // Release the key that opened us
+    white_screen();
+    while (1) {
+        if (ur_encoder_part(&ur, seq, part, sizeof(part)) == 0 ||
+            !draw_qr_frame(part, UR_QR_VERSION, UR_QR_SCALE)) {
+            psbt_sd_message("QR EXPORT ERROR", "FRAME DOES NOT FIT");
+            return;
+        }
+
+        // Part counter in the left margin
+        fast_itoa(seq, label);
+        strcat(label, "/");
+        fast_itoa(ur.seq_len, num);
+        strcat(label, num);
+        rectan(0, 56, 29, 66, WHITE);
+        drawtext(1, 58, label, ST7735_BLACK, ST7735_WHITE, 1);
+
+        for (uint32_t t = 0; t < UR_FRAME_DELAY_MS / 10; t++) {
+            if (BT1 == 0) break;
+            delay_ms(10);
+            SYS_Tasks();
+        }
+        if (BT1 == 0) break;
+        seq = (seq % ur.seq_len) + 1;
+    }
+    while (BT1 == 0) SYS_Tasks();   // Do not let BACK reach the menu state machine
+}
+
 void scan_ur_animated_qr(void) {
     black_screen();
     drawtext(10, 10, "SCANNING PSBT", ST7735_YELLOW, ST7735_BLACK, 1);
@@ -4115,8 +4158,8 @@ void scan_ur_animated_qr(void) {
                                                        ((uint32_t)decoded_bytes[bw_data_len + 2] << 8)  |
                                                        ((uint32_t)decoded_bytes[bw_data_len + 3]);
 
-                            // Compute CRC-32 over the frame CBOR data using the MCU's crc32_update
-                            uint32_t calc_bw_crc = crc32_update(0xFFFFFFFFU, decoded_bytes, bw_data_len) ^ 0xFFFFFFFFU;
+                            // Compute CRC-32 over the frame CBOR data using ur_crc32_update()
+                            uint32_t calc_bw_crc = ur_crc32_update(0xFFFFFFFFU, decoded_bytes, bw_data_len) ^ 0xFFFFFFFFU;
 
                             if (calc_bw_crc == expected_bw_crc) {
                                 decoded_len = bw_data_len;
@@ -4170,7 +4213,7 @@ void scan_ur_animated_qr(void) {
                                             if (bytes_checked + part_len > cbor_msg_len) {
                                                 part_len = cbor_msg_len - bytes_checked;
                                             }
-                                            crc = crc32_update(crc, part_data, part_len);
+                                            crc = ur_crc32_update(crc, part_data, part_len);
                                             bytes_checked += part_len;
                                             if (bytes_checked >= cbor_msg_len) break;
                                         }
@@ -4595,6 +4638,10 @@ int main ( void ){
                         } else {
                             transition_to_main();
                         }*/
+
+                        // TEST: animated UR export of a PSBT signed on the PC
+                        // (test/psbt/sign_abandon.py). Scan it with Sparrow.
+                        show_ur_animated_qr(ur_test_signed_psbt, sizeof(ur_test_signed_psbt));
 
                         //test_bytewords_to_screen();
                         

@@ -11,4 +11,8 @@ void init_bytewords_lookup(void);
 // Returns -1 if the character pair is invalid.
 int decode_bytewords_pair(char c1, char c2);
 
+// Writes the 2 uppercase characters of a byte's minimal Bytewords form to out.
+// Needs no lookup table (the RAM table is only for decoding).
+void encode_bytewords_pair(uint8_t value, char *out);
+
 #endif // BYTEWORDS_H

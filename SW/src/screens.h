@@ -90,6 +90,7 @@ void draw_seedqr(const char *text);
 void draw_url_qr(const char *text);
 void draw_compactqr_code(int size, unsigned char *data);
 void draw_xpub_qr(const char *text);
+bool draw_qr_frame(const char *text, uint8_t version, int scale);
 void draw_QRSEED(const unsigned char *data, size_t size);
 void draw_bip84_wrapped_text(const char *text, int x, int y, int line_length, int line_count);
 void main_screen(int sel);

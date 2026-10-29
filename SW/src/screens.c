@@ -898,6 +898,29 @@ void draw_compactqr_code(int size, unsigned char *data){
 
 }
 
+// Draws text as a QR code of a fixed version, centered, painting every
+// module (white and black). Frames of an animated QR therefore replace each
+// other without clearing the screen, which avoids flicker. The caller paints
+// the white quiet zone once. Returns false if the text does not fit.
+bool draw_qr_frame(const char *text, uint8_t version, int scale) {
+    uint8_t qrcodeData[qrcode_getBufferSize(version)];
+    QRCode qrcode;
+
+    if (qrcode_initText(&qrcode, qrcodeData, version, ECC_LOW, text) < 0) return false;
+
+    int img_size = qrcode.size * scale;
+    int x_offset = (SCREEN_WIDTH - img_size) / 2;
+    int y_offset = (SCREEN_HEIGHT - img_size) / 2;
+
+    for (int y = 0; y < qrcode.size; y++) {
+        for (int x = 0; x < qrcode.size; x++) {
+            fillRect(x_offset + x * scale, y_offset + y * scale, scale, scale,
+                     qrcode_getModule(&qrcode, x, y) ? ST7735_BLACK : ST7735_WHITE);
+        }
+    }
+    return true;
+}
+
 void draw_xpub_qr(const char *text) {
     white_screen();
     

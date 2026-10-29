@@ -94,3 +94,8 @@ int decode_bytewords_pair(char c1, char c2) {
     
     return (int)val;
 }
+
+void encode_bytewords_pair(uint8_t value, char *out) {
+    out[0] = bytewords_minimal[value][0];
+    out[1] = bytewords_minimal[value][1];
+}

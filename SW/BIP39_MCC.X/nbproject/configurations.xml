@@ -48,6 +48,8 @@
       <itemPath>../src/screens.h</itemPath>
       <itemPath>../src/psbt.h</itemPath>
       <itemPath>../src/sd_files.h</itemPath>
+      <itemPath>../src/ur_encode.h</itemPath>
+      <itemPath>../src/ur_test_psbt.h</itemPath>
       <itemPath>../../bootloader/src/pff.h</itemPath>
       <itemPath>../../bootloader/src/pffconf.h</itemPath>
       <itemPath>../../bootloader/src/diskio.h</itemPath>
@@ -143,6 +145,7 @@
       <itemPath>../src/psbt.c</itemPath>
       <itemPath>../src/sd_files.c</itemPath>
       <itemPath>../src/pff_app.c</itemPath>
+      <itemPath>../src/ur_encode.c</itemPath>
       <itemPath>../src/sha512.c</itemPath>
       <itemPath>../src/EFF_short.c</itemPath>
       <itemPath>../src/bytewords.c</itemPath>
