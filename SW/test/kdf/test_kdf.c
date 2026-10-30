@@ -12,11 +12,17 @@ static int failures = 0;
 static uint32_t progress_calls, progress_last, progress_total;
 static int progress_monotonic;
 
-static void on_progress(uint32_t done, uint32_t total) {
+static bool on_progress(uint32_t done, uint32_t total) {
     if (done <= progress_last) progress_monotonic = 0;
     progress_last = done;
     progress_total = total;
     progress_calls++;
+    return true;
+}
+
+// Cancels a quarter of the way through
+static bool cancel_early(uint32_t done, uint32_t total) {
+    return done < total / 4;
 }
 
 int main(void) {
@@ -46,7 +52,7 @@ int main(void) {
         progress_calls = progress_last = progress_total = 0;
         progress_monotonic = 1;
         memset(out, 0, sizeof(out));
-        PBKDF2_HMAC_SHA512(kdf_cases[i].mnemonic, salt, 2048, out, 64, on_progress);
+        CHECK(PBKDF2_HMAC_SHA512(kdf_cases[i].mnemonic, salt, 2048, out, 64, on_progress));
         if (memcmp(out, kdf_cases[i].seed, 64) != 0) {
             printf("FAIL seed for passphrase of %u chars\n", (unsigned)strlen(kdf_cases[i].passphrase));
             failures++;
@@ -55,8 +61,14 @@ int main(void) {
     }
 
     // A NULL progress callback is allowed
-    PBKDF2_HMAC_SHA512(kdf_cases[0].mnemonic, "mnemonic", 2048, out, 64, NULL);
+    CHECK(PBKDF2_HMAC_SHA512(kdf_cases[0].mnemonic, "mnemonic", 2048, out, 64, NULL));
     CHECK(memcmp(out, kdf_cases[0].seed, 64) == 0);
+
+    // Cancelled: returns false and leaves no partial result behind
+    static const uint8_t zeros[64] = {0};
+    memset(out, 0xAA, sizeof(out));
+    CHECK(!PBKDF2_HMAC_SHA512(kdf_cases[0].mnemonic, "mnemonic", 2048, out, 64, cancel_early));
+    CHECK(memcmp(out, zeros, 64) == 0);
 
     printf(failures ? "\n%d FAILURE(S)\n" : "\nALL TESTS PASSED\n", failures);
     return failures != 0;

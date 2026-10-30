@@ -65,9 +65,10 @@ void HmacSha512(const uint8_t *key, size_t keyLen,
     hmac_sha512_2(key, keyLen, data, dataLen, NULL, 0, out);
 }
 
-void PBKDF2_HMAC_SHA512(const char *password, const char *salt,
+bool PBKDF2_HMAC_SHA512(const char *password, const char *salt,
                         uint32_t iterations, uint8_t *output, size_t dkLen,
                         kdf_progress_t progress) {
+    bool completed = true;
     uint8_t U[KDF_SHA512_SIZE];
     uint8_t T[KDF_SHA512_SIZE];
     uint8_t counter[4];
@@ -88,8 +89,12 @@ void PBKDF2_HMAC_SHA512(const char *password, const char *salt,
         for (uint32_t j = 2; j <= iterations; j++) {
             HmacSha512((const uint8_t *)password, passwordLen, U, KDF_SHA512_SIZE, U);
             for (int k = 0; k < KDF_SHA512_SIZE; k++) T[k] ^= U[k];
-            if (progress != NULL && (j % KDF_PROGRESS_EVERY) == 0) progress(j, iterations);
+            if (progress != NULL && (j % KDF_PROGRESS_EVERY) == 0 && !progress(j, iterations)) {
+                completed = false;
+                break;
+            }
         }
+        if (!completed) break;
 
         size_t offset = (size_t)(i - 1) * KDF_SHA512_SIZE;
         size_t toCopy = (dkLen - offset < KDF_SHA512_SIZE) ? (dkLen - offset) : KDF_SHA512_SIZE;
@@ -98,4 +103,6 @@ void PBKDF2_HMAC_SHA512(const char *password, const char *salt,
 
     memzero(U, sizeof(U));
     memzero(T, sizeof(T));
+    if (!completed) memzero(output, dkLen);
+    return completed;
 }

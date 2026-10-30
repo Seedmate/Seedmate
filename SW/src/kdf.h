@@ -19,6 +19,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #define KDF_SHA512_SIZE 64
 
@@ -27,12 +28,14 @@ void HmacSha512(const uint8_t *key, size_t keyLen,
                 const uint8_t *data, size_t dataLen,
                 uint8_t *out);
 
-// Called by PBKDF2 every few iterations with (iteration, iterations); may be NULL.
-typedef void (*kdf_progress_t)(uint32_t done, uint32_t total);
+// Called by PBKDF2 every few iterations with (iteration, iterations); may be
+// NULL. Returning false cancels the computation.
+typedef bool (*kdf_progress_t)(uint32_t done, uint32_t total);
 
 // PBKDF2-HMAC-SHA512 (RFC 8018). For BIP39: password = mnemonic,
 // salt = "mnemonic" + passphrase, 2048 iterations, 64-byte output.
-void PBKDF2_HMAC_SHA512(const char *password, const char *salt,
+// Returns false if the progress callback cancelled it; output is then zeroed.
+bool PBKDF2_HMAC_SHA512(const char *password, const char *salt,
                         uint32_t iterations, uint8_t *output, size_t dkLen,
                         kdf_progress_t progress);
 

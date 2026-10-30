@@ -217,13 +217,25 @@ static HDNode ms_receive_node_cache;    // .../0
 static HDNode ms_change_node_cache;     // .../1
 static uint32_t ms_account_parent_fingerprint = 0;
 
-// Multisig menu position -> cBIP84_* option (single sig positions are the options)
+// Account index of m/84'/0'/account' and m/48'/0'/account'/2'. The coin
+// level nodes stay cached so changing the account skips the PBKDF2.
+#define BIP84_ACCOUNT_MAX 255   // Keeps the crypto-account QR in one version 8 code
+static uint32_t bip84_account_index = 0;
+static HDNode bip84_coin_node;          // m/84'/0'
+static HDNode ms_coin_node;             // m/48'/0'
+
+// Menu position -> cBIP84_* option for each mode
+static const uint8_t bip84_single_options[cBIP84_n_opt] = {
+    cBIP84_RECEIVE, cBIP84_CHANGE, cBIP84_SEEDQR, cBIP84_FINGERPRINT, cBIP84_XPUB, cBIP84_PASSPHRASE,
+    cBIP84_SIGN, cBIP84_ACCOUNT, cBIP84_MODE
+};
 static const uint8_t bip84_multi_options[cBIP84_MULTI_n_opt] = {
-    cBIP84_SEEDQR, cBIP84_FINGERPRINT, cBIP84_XPUB, cBIP84_PASSPHRASE, cBIP84_SIGN, cBIP84_DESCRIPTOR, cBIP84_MODE
+    cBIP84_SEEDQR, cBIP84_FINGERPRINT, cBIP84_XPUB, cBIP84_PASSPHRASE, cBIP84_SIGN, cBIP84_DESCRIPTOR,
+    cBIP84_ACCOUNT, cBIP84_MODE
 };
 
 static int bip84_option(void) {
-    return bip84_multisig_mode ? bip84_multi_options[bip84_menu_pointer] : bip84_menu_pointer;
+    return bip84_multisig_mode ? bip84_multi_options[bip84_menu_pointer] : bip84_single_options[bip84_menu_pointer];
 }
 
 static int bip84_option_count(void) {
@@ -343,7 +355,7 @@ int card_view_page = 0;
 // HMAC-SHA512 and PBKDF2 live in kdf.c. This callback keeps the MCU tasks
 // running during the 2048 BIP39 iterations and fills the green progress bar
 // (x = 10..150, y = 121..124) drawn by the caller.
-static void pbkdf2_progress_bar(uint32_t done, uint32_t total) {
+static bool pbkdf2_progress_bar(uint32_t done, uint32_t total) {
     static uint32_t drawn = 0;          // Bar end already painted (x offset)
     uint32_t fill = (140u * done) / total;
 
@@ -353,6 +365,13 @@ static void pbkdf2_progress_bar(uint32_t done, uint32_t total) {
         rectan(10 + drawn, 121, 10 + fill, 124, ST7735_GREEN);
         drawn = fill;
     }
+    return true;
+}
+
+// Same bar, but BACK cancels the computation
+static bool pbkdf2_progress_cancellable(uint32_t done, uint32_t total) {
+    pbkdf2_progress_bar(done, total);
+    return BT1 != 0;
 }
 
 
@@ -1577,7 +1596,7 @@ static void key_progress_step(void) {
     rectan(10, 121, 10 + (140u * key_steps_done) / key_steps_total, 124, ST7735_GREEN);
 }
 
-static bool derive_root_with_progress(HDNode *root) {
+static bool derive_root_with_progress(HDNode *root, bool cancellable) {
     char mnemonic_str[250];
     char bip39_salt[250] = "mnemonic";
     uint8_t seed[64];
@@ -1586,8 +1605,9 @@ static bool derive_root_with_progress(HDNode *root) {
     strcat(bip39_salt, bip84_passphrase);
 
     key_progress_phase("1/2 SEED (PBKDF2)", 0);
-    PBKDF2_HMAC_SHA512(mnemonic_str, bip39_salt, 2048, seed, 64, pbkdf2_progress_bar);
-    bool ok = hdnode_from_seed(seed, 64, SECP256K1_NAME, root) != 0;
+    bool ok = PBKDF2_HMAC_SHA512(mnemonic_str, bip39_salt, 2048, seed, 64,
+                                 cancellable ? pbkdf2_progress_cancellable : pbkdf2_progress_bar) &&
+              hdnode_from_seed(seed, 64, SECP256K1_NAME, root) != 0;
 
     memzero(seed, sizeof(seed));
     memzero(mnemonic_str, sizeof(mnemonic_str));
@@ -1595,12 +1615,11 @@ static bool derive_root_with_progress(HDNode *root) {
     return ok;
 }
 
-// m/48'/0'/0'/2' (BIP48 P2WSH multisig) and its receive/change branches
-static void derive_multisig_account(const HDNode *root) {
-    ms_account_node = *root;
-    hdnode_private_ckd(&ms_account_node, 48 | 0x80000000);
-    hdnode_private_ckd(&ms_account_node, 0 | 0x80000000);
-    hdnode_private_ckd(&ms_account_node, 0 | 0x80000000);
+// m/48'/0'/account'/2' (BIP48 P2WSH multisig) from the cached m/48'/0',
+// and its receive/change branches. Two public keys.
+static void derive_multisig_from_coin(void) {
+    ms_account_node = ms_coin_node;
+    hdnode_private_ckd(&ms_account_node, bip84_account_index | 0x80000000);
     ms_account_parent_fingerprint = hdnode_fingerprint(&ms_account_node);
     key_progress_step();
     hdnode_private_ckd(&ms_account_node, 2 | 0x80000000);
@@ -1614,12 +1633,62 @@ static void derive_multisig_account(const HDNode *root) {
     ms_account_cached = true;
 }
 
-// Background calculation function
-void precompute_bip84_account(void) {
-    if (bip84_account_cached) return;
+static void derive_multisig_account(const HDNode *root) {
+    ms_coin_node = *root;
+    hdnode_private_ckd(&ms_coin_node, 48 | 0x80000000);
+    hdnode_private_ckd(&ms_coin_node, 0 | 0x80000000);
+    derive_multisig_from_coin();
+}
+
+// m/84'/0'/account' from the cached m/84'/0', its xpub/zpub strings and the
+// receive/change branches. One public key.
+static void derive_bip84_account(void) {
+    bip84_account_node = bip84_coin_node;
+    hdnode_private_ckd(&bip84_account_node, bip84_account_index | 0x80000000);
+    hdnode_fill_public_key(&bip84_account_node);
+    key_progress_step();
+
+    hdnode_serialize_public(&bip84_account_node, bip84_account_parent_fingerprint, 0x0488B21E, bip84_cached_xpub, sizeof(bip84_cached_xpub));
+    hdnode_serialize_public(&bip84_account_node, bip84_account_parent_fingerprint, 0x04B24746, bip84_cached_zpub, sizeof(bip84_cached_zpub));
+
+    // This saves one heavy HMAC-SHA512 derivation per address request
+    bip84_receive_node_cache = bip84_account_node;
+    hdnode_private_ckd(&bip84_receive_node_cache, 0);
+    bip84_change_node_cache = bip84_account_node;
+    hdnode_private_ckd(&bip84_change_node_cache, 1);
+}
+
+// Identifies the seed the cached keys belong to (see bip84_seed_tag_now)
+static uint8_t bip84_seed_tag[8];
+
+// Short SHA256 tag of what the keys derive from: the entropy, its size and the
+// passphrase. Lets the cache notice that the seed on screen changed (another
+// Shamir share, a BIP85 child...) without keeping a copy of the secret.
+static void bip84_seed_tag_now(uint8_t tag[8]) {
+    uint8_t hash[32];
+    uint8_t size = (uint8_t)size_pointer;
+    SHA256_CTX ctx;
+
+    sha256_init(&ctx);
+    sha256_update(&ctx, data_array_256b, 16 + size_pointer * 16);
+    sha256_update(&ctx, &size, 1);
+    sha256_update(&ctx, (const BYTE *)bip84_passphrase, strlen(bip84_passphrase));
+    sha256_final(&ctx, hash);
+    memcpy(tag, hash, 8);
+    memzero(hash, sizeof(hash));
+    memzero(&ctx, sizeof(ctx));
+}
+
+// Derives the BIP84 keys (and the BIP48 ones in multisig mode) of the seed
+// on screen. With 'cancellable', BACK stops the PBKDF2 and false is returned.
+static bool bip84_derive_keys(bool cancellable) {
+    if (bip84_account_cached) return true;
 
     HDNode root;
-    if (!derive_root_with_progress(&root)) return;
+    if (!derive_root_with_progress(&root, cancellable)) {
+        memzero(&root, sizeof(root));
+        return false;
+    }
 
     // Three public keys here, two more for the multisig account
     key_progress_phase("2/2 PUBLIC KEYS", bip84_multisig_mode ? 5 : 3);
@@ -1628,63 +1697,182 @@ void precompute_bip84_account(void) {
     bip84_master_fingerprint = hdnode_fingerprint(&root);
     key_progress_step();
 
-    // Derive path m/84'/0'
-    bip84_account_node = root;
-    hdnode_private_ckd(&bip84_account_node, 84 | 0x80000000);
-    hdnode_private_ckd(&bip84_account_node, 0  | 0x80000000);
-
-    // Store parent fingerprint for account-level xpub/zpub
-    bip84_account_parent_fingerprint = hdnode_fingerprint(&bip84_account_node);
+    // m/84'/0' (kept), whose fingerprint is the parent of every account xpub
+    bip84_coin_node = root;
+    hdnode_private_ckd(&bip84_coin_node, 84 | 0x80000000);
+    hdnode_private_ckd(&bip84_coin_node, 0  | 0x80000000);
+    bip84_account_parent_fingerprint = hdnode_fingerprint(&bip84_coin_node);
     key_progress_step();
 
-    // Derive Account path: m/84'/0'/0'
-    hdnode_private_ckd(&bip84_account_node, 0  | 0x80000000);
-
-    // Precompute public key and Base58 strings under the loading bar ---
-    // Fill the public key for the account node so it can be serialized
-    hdnode_fill_public_key(&bip84_account_node);
-    key_progress_step();
-
-    // Serialize and cache the XPUB and ZPUB strings globally
-    hdnode_serialize_public(&bip84_account_node, bip84_account_parent_fingerprint, 0x0488B21E, bip84_cached_xpub, sizeof(bip84_cached_xpub));
-    hdnode_serialize_public(&bip84_account_node, bip84_account_parent_fingerprint, 0x04B24746, bip84_cached_zpub, sizeof(bip84_cached_zpub));
-    // --------------------------------------------------------------------------------
-
-    // This saves one heavy HMAC-SHA512 derivation per address request
-    bip84_receive_node_cache = bip84_account_node;
-    hdnode_private_ckd(&bip84_receive_node_cache, 0);
-
-    bip84_change_node_cache = bip84_account_node;
-    hdnode_private_ckd(&bip84_change_node_cache, 1);
+    // m/84'/0'/account'
+    derive_bip84_account();
 
     // A new passphrase while in multisig mode: refresh that account too
     if (bip84_multisig_mode) derive_multisig_account(&root);
     memzero(&root, sizeof(root));
 
-    // Mark as successfully cached
+    // Mark as successfully cached, for this seed and passphrase
+    bip84_seed_tag_now(bip84_seed_tag);
     bip84_account_cached = true;
+    return true;
+}
+
+// Background calculation function
+void precompute_bip84_account(void) {
+    (void)bip84_derive_keys(false);
+}
+
+// Opening the wallet menu: derives the keys of the seed on screen unless they
+// are already cached for it, on a loading screen that shows each phase
+// (Rule 4). BACK cancels during the seed computation. Returns false if cancelled.
+static bool load_wallet_keys(void) {
+    uint8_t tag[8];
+    bip84_seed_tag_now(tag);
+    bool same_seed = bip84_account_cached && memcmp(tag, bip84_seed_tag, sizeof(tag)) == 0;
+    memzero(tag, sizeof(tag));
+    if (same_seed) return true;
+
+    // Keys of another seed (or none yet): derive again
+    bip84_account_cached = false;
+    ms_account_cached = false;
+    black_screen();
+    drawtext(5, 5, "LOADING WALLET", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(5, 25, "DERIVING THE KEYS", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 35, "OF THIS SEED", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 60, "BACK = CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
+
+    bool ok = bip84_derive_keys(true);
+    while (BT1 == 0) SYS_Tasks();       // Do not let BACK reach the state machine
+    return ok;
 }
 
 // Derives the multisig account on first use (PBKDF2 again: the root is not kept)
 static void precompute_multisig_account(void) {
     if (ms_account_cached) return;
     HDNode root;
-    if (derive_root_with_progress(&root)) {
+    if (derive_root_with_progress(&root, false)) {
         key_progress_phase("2/2 PUBLIC KEYS", 2);
         derive_multisig_account(&root);
     }
     memzero(&root, sizeof(root));
 }
 
-// "[fingerprint/48h/0h/0h/2h]" key origin plus the multisig account xpub or
-// Zpub, the form wallets such as Sparrow import for a cosigner. out >= 140.
-static void multisig_account_key(bool zpub, char *out) {
+static void fast_itoa(uint32_t val, char* buf);    // Defined with the PSBT viewer
+
+// Account key with its origin, as shown on screen: "[fingerprint/84h/0h/nh]"
+// plus the xpub/zpub, or "[fingerprint/48h/0h/nh/2h]" plus the multisig
+// xpub/Zpub. out must hold 140 chars.
+static void account_key_text(bool zpub, char *out) {
     static const char hex[] = "0123456789abcdef";
+    char num[12];
     out[0] = '[';
     for (int i = 0; i < 8; i++) out[1 + i] = hex[(bip84_master_fingerprint >> (28 - 4 * i)) & 0x0F];
-    strcpy(&out[9], "/48h/0h/0h/2h]");
-    hdnode_serialize_public(&ms_account_node, ms_account_parent_fingerprint,
-                            zpub ? 0x02AA7ED3 : 0x0488B21E, &out[23], 115);
+    out[9] = '\0';
+    strcat(out, bip84_multisig_mode ? "/48h/0h/" : "/84h/0h/");
+    fast_itoa(bip84_account_index, num);
+    strcat(out, num);
+    strcat(out, bip84_multisig_mode ? "h/2h]" : "h]");
+    if (bip84_multisig_mode) {
+        hdnode_serialize_public(&ms_account_node, ms_account_parent_fingerprint,
+                                zpub ? 0x02AA7ED3 : 0x0488B21E, &out[strlen(out)], 115);
+    } else {
+        strcat(out, zpub ? bip84_cached_zpub : bip84_cached_xpub);
+    }
+}
+
+// Applies a new account index: one hardened step from the cached coin nodes
+// (no PBKDF2), with its progress on screen (Rule 4)
+static void set_account_index(uint32_t index) {
+    char text[24];
+    char num[12];
+
+    bip84_account_index = index;
+    bip84_address_index = 0;
+    black_screen();
+    strcpy(text, "ACCOUNT ");
+    fast_itoa(index, num);
+    strcat(text, num);
+    drawtext(5, 5, text, ST7735_YELLOW, ST7735_BLACK, 1);
+    key_progress_phase("PUBLIC KEYS", ms_account_cached ? 3 : 1);
+    derive_bip84_account();
+    if (ms_account_cached) derive_multisig_from_coin();
+}
+
+// Number entry for the account index, with the resulting path shown.
+// UP/DOWN +-1, LEFT/RIGHT +-10, OK applies, BACK cancels. Returns true on OK.
+static bool edit_account_index(uint32_t *value) {
+    uint32_t v = *value;
+    char text[32];
+    char num[12];
+
+    while (1) {
+        black_screen();
+        drawtext(5, 5, "ACCOUNT INDEX", ST7735_YELLOW, ST7735_BLACK, 1);
+        fast_itoa(v, num);
+        drawtext((160 - 18 * (int)strlen(num)) / 2, 30, num, ST7735_ORANGE, ST7735_BLACK, 3);
+        strcpy(text, bip84_multisig_mode ? "m/48'/0'/" : "m/84'/0'/");
+        strcat(text, num);
+        strcat(text, bip84_multisig_mode ? "'/2'" : "'");
+        drawtext(5, 65, text, ST7735_CYAN, ST7735_BLACK, 1);
+        drawtext(5, 85, "UP/DOWN +1/-1", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 95, "RIGHT/LEFT +10/-10", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 118, "OK=APPLY  BACK=CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
+
+        // Wait for all keys up, then for one press
+        while (BT_OK == 0 || BT1 == 0 || BT2 == 0 || BT4 == 0 || BT5 == 0 || BT6 == 0) SYS_Tasks();
+        delay_ms(30);
+        while (BT_OK == 1 && BT1 == 1 && BT2 == 1 && BT4 == 1 && BT5 == 1 && BT6 == 1) SYS_Tasks();
+        delay_ms(30);
+
+        if (BT1 == 0 || BT_OK == 0) {
+            bool apply = (BT_OK == 0);
+            while (BT_OK == 0 || BT1 == 0) SYS_Tasks();     // Keep the key away from the menu
+            if (apply) *value = v;
+            return apply;
+        }
+        if (BT5 == 0 && v < BIP84_ACCOUNT_MAX) v++;
+        if (BT4 == 0 && v > 0) v--;
+        if (BT6 == 0) v = (v + 10 > BIP84_ACCOUNT_MAX) ? BIP84_ACCOUNT_MAX : v + 10;
+        if (BT2 == 0) v = (v >= 10) ? v - 10 : 0;
+    }
+}
+
+// Shows the account public key as a static ur:crypto-account QR code
+// (BCR-2020-015) for wallets such as Sparrow: master fingerprint, origin
+// path, chain code and parent fingerprint, as wpkh() for the BIP84 account
+// or wsh(cosigner()) for the BIP48 multisig account
+static void show_account_qr(void) {
+    uint8_t cbor[140];
+    char text[UR_PART_MAX_CHARS(140) + 1];
+    char num[12];
+    uint32_t path[4];
+    ur_account_key_t key;
+    ur_encoder_t ur;
+    const HDNode *node = bip84_multisig_mode ? &ms_account_node : &bip84_account_node;
+
+    path[0] = (bip84_multisig_mode ? 48 : 84) | 0x80000000;
+    path[1] = 0x80000000;
+    path[2] = bip84_account_index | 0x80000000;
+    path[3] = 2 | 0x80000000;
+    key.master_fingerprint = bip84_master_fingerprint;
+    key.parent_fingerprint = bip84_multisig_mode ? ms_account_parent_fingerprint : bip84_account_parent_fingerprint;
+    key.public_key = node->public_key;
+    key.chain_code = node->chain_code;
+    key.path = path;
+    key.path_len = bip84_multisig_mode ? 4 : 3;
+    key.multisig = bip84_multisig_mode;
+
+    white_screen();
+    uint32_t len = ur_account_cbor(&key, cbor, sizeof(cbor));
+    if (len == 0 || !ur_encoder_init_type(&ur, "CRYPTO-ACCOUNT", cbor, len, false, sizeof(cbor)) ||
+        ur_encoder_part(&ur, 1, text, sizeof(text)) == 0 || !draw_qr_frame(text, 8, 2)) {
+        drawtext(5, 5, "QR EXPORT ERROR", ST7735_RED, ST7735_WHITE, 1);
+        return;
+    }
+    // Account in the left margin
+    drawtext(1, 54, "ACC", ST7735_BLACK, ST7735_WHITE, 1);
+    fast_itoa(bip84_account_index, num);
+    drawtext(1, 64, num, ST7735_BLACK, ST7735_WHITE, 1);
 }
 
 static bool get_current_bip84_result(uint32_t chain, uint32_t address_index, BitcoinBip84Result *result)
@@ -1735,14 +1923,19 @@ static void print_bip84_menu(void)
     print_generic_menu(bip84_multisig_mode ? menu_bip84_multi : menu_bip84, bip84_option_count(), bip84_menu_pointer);
     // --- ADDED: Display master fingerprint at the bottom left ---
     // Convert the 32-bit fingerprint into an 8-character hex string
-    char fgp_str[9];
+    // Fingerprint and, below it, the account at the bottom left: both fit in
+    // the 55 px left of the button grid (which starts at x = 60)
+    char fgp_str[16];
+    char num[12];
     u16_to_hex4((bip84_master_fingerprint >> 16) & 0xFFFF, fgp_str);
     u16_to_hex4(bip84_master_fingerprint & 0xFFFF, fgp_str + 4);
     fgp_str[8] = '\0';
-    
-    // Draw the fingerprint string in Cyan color at x=5, y=117 (bottom left corner)
+    drawtext(5, 107, fgp_str, ST7735_CYAN, ST7735_BLACK, 1);
+    strcpy(fgp_str, "ACC: ");
+    fast_itoa(bip84_account_index, num);
+    strcat(fgp_str, num);
     drawtext(5, 117, fgp_str, ST7735_CYAN, ST7735_BLACK, 1);
-    
+
     estado = SHOW_SEED_MENU;
     estado = SHOW_SEED_MENU;
 }
@@ -1758,7 +1951,6 @@ static void print_bip84_info_screen(void)
     char ms_key[140];
     BitcoinBip84Result result;
     const char *title;
-    const char *value;
     char index_text[12];
 
     black_screen();
@@ -1776,7 +1968,10 @@ static void print_bip84_info_screen(void)
         
         u16_to_str((unsigned int)bip84_address_index, index_text);
         drawtext(45, 15, index_text, ST7735_CYAN, ST7735_BLACK, 1);
-        
+        drawtext(100, 15, "ACC", ST7735_WHITE, ST7735_BLACK, 1);
+        fast_itoa(bip84_account_index, index_text);
+        drawtext(124, 15, index_text, ST7735_CYAN, ST7735_BLACK, 1);
+
         if (derived) {
             draw_bip84_wrapped_text(result.address, 1, 30, 25, 6);
         } else {
@@ -1793,17 +1988,16 @@ static void print_bip84_info_screen(void)
         drawtext(1, 5, "MASTER FINGERPRINT", ST7735_ORANGE, ST7735_BLACK, 1);
         drawtext(1, 30, fgp_str, ST7735_CYAN, ST7735_BLACK, 2);
         
-    } else if (bip84_multisig_mode) {
-        multisig_account_key(bip84_extended_key_page != 0, ms_key);
-        drawtext(1, 5, (bip84_extended_key_page == 0) ? "MULTISIG XPUB" : "MULTISIG ZPUB", ST7735_ORANGE, ST7735_BLACK, 1);
-        draw_bip84_wrapped_text(ms_key, 1, 18, 25, 7);
     } else {
-        // FAST PATH: Read the XPUB/ZPUB directly from the cached global buffers
-        value = (bip84_extended_key_page == 0) ? bip84_cached_xpub : bip84_cached_zpub;
-        title = (bip84_extended_key_page == 0) ? "XPUB" : "ZPUB";
-        
+        // Origin + key from the cached account (no derivation here)
+        account_key_text(bip84_extended_key_page != 0, ms_key);
+        if (bip84_multisig_mode) {
+            title = (bip84_extended_key_page == 0) ? "MULTISIG XPUB" : "MULTISIG ZPUB";
+        } else {
+            title = (bip84_extended_key_page == 0) ? "XPUB" : "ZPUB";
+        }
         drawtext(1, 5, (char *)title, ST7735_ORANGE, ST7735_BLACK, 1);
-        draw_bip84_wrapped_text(value, 1, 18, 25, 7);
+        draw_bip84_wrapped_text(ms_key, 1, 18, 25, 7);
     }
 
     grid_menu2();
@@ -2437,13 +2631,8 @@ void redraw_show_seed_with_offset(void) {
     BYTE *c_buf = append_checksum(data_array_256b, 16 + size_pointer*16);
     extract_11bit_groups(c_buf, 16  + size_pointer*16 +1);    
     
-    // Intercept to compute keys in the background while blocking user input.
-    // We skip this if navigating BIP85, as it doesn't need BIP84 keys.
-    if (!bip84_account_cached && (main_pointer != cMAIN_BIP85)) {
-        estado = PRECOMPUTE_BIP84;
-        return; 
-    }
-
+    // Keys are derived only when the user opens the wallet menu (Rule 4):
+    // see load_wallet_keys()
     estado = SHOW_SEED;
 }
 
@@ -3191,6 +3380,12 @@ void transition_to_main(void) {
     bip84_account_cached = false;
     ms_account_cached = false;
     bip84_multisig_mode = false;
+    bip84_account_index = 0;
+    memzero(&bip84_coin_node, sizeof(bip84_coin_node));
+    memzero(&bip84_account_node, sizeof(bip84_account_node));
+    memzero(&bip84_receive_node_cache, sizeof(bip84_receive_node_cache));
+    memzero(&bip84_change_node_cache, sizeof(bip84_change_node_cache));
+    memzero(&ms_coin_node, sizeof(ms_coin_node));
     memzero(&ms_account_node, sizeof(ms_account_node));
     memzero(&ms_receive_node_cache, sizeof(ms_receive_node_cache));
     memzero(&ms_change_node_cache, sizeof(ms_change_node_cache));
@@ -3559,14 +3754,34 @@ static bool psbt_fp_is_mine(uint32_t fingerprint) {
     return bip84_account_cached && fingerprint == bip84_master_fingerprint;
 }
 
-// m/84'/0'/0'/chain/index with chain 0 (receive) or 1 (change)
-static bool psbt_is_bip84_path(const psbt_keypath_t *kp) {
+// m/84'/0'/account'/chain/index with chain 0 (receive) or 1 (change), any
+// account (returned in *account)
+static bool psbt_bip84_path(const psbt_keypath_t *kp, uint32_t *account) {
+    *account = psbt_path_element(kp, 2) & ~PSBT_HARDENED;
     return kp->path_len == 5 &&
            psbt_path_element(kp, 0) == (84 | PSBT_HARDENED) &&
            psbt_path_element(kp, 1) == PSBT_HARDENED &&
-           psbt_path_element(kp, 2) == PSBT_HARDENED &&
+           (psbt_path_element(kp, 2) & PSBT_HARDENED) &&
            psbt_path_element(kp, 3) <= 1 &&
            psbt_path_element(kp, 4) < PSBT_HARDENED;
+}
+
+// m/48'/0'/account'/2'/chain/index with chain 0 or 1 (BIP48 P2WSH multisig)
+static bool psbt_multisig_path(const psbt_keypath_t *kp, uint32_t *account) {
+    *account = psbt_path_element(kp, 2) & ~PSBT_HARDENED;
+    return kp->path_len == 6 &&
+           psbt_path_element(kp, 0) == (48 | PSBT_HARDENED) &&
+           psbt_path_element(kp, 1) == PSBT_HARDENED &&
+           (psbt_path_element(kp, 2) & PSBT_HARDENED) &&
+           psbt_path_element(kp, 3) == (2 | PSBT_HARDENED) &&
+           psbt_path_element(kp, 4) <= 1 &&
+           psbt_path_element(kp, 5) < PSBT_HARDENED;
+}
+
+// The same, restricted to the selected account
+static bool psbt_is_bip84_path(const psbt_keypath_t *kp) {
+    uint32_t account;
+    return psbt_bip84_path(kp, &account) && account == bip84_account_index;
 }
 
 // Derives the path's key from the cached account and checks that it is the
@@ -3594,15 +3809,9 @@ static bool psbt_bip84_key_matches(const psbt_keypath_t *kp, const uint8_t *scri
     return match;
 }
 
-// m/48'/0'/0'/2'/chain/index with chain 0 or 1 (BIP48 P2WSH multisig)
 static bool psbt_is_multisig_path(const psbt_keypath_t *kp) {
-    return kp->path_len == 6 &&
-           psbt_path_element(kp, 0) == (48 | PSBT_HARDENED) &&
-           psbt_path_element(kp, 1) == PSBT_HARDENED &&
-           psbt_path_element(kp, 2) == PSBT_HARDENED &&
-           psbt_path_element(kp, 3) == (2 | PSBT_HARDENED) &&
-           psbt_path_element(kp, 4) <= 1 &&
-           psbt_path_element(kp, 5) < PSBT_HARDENED;
+    uint32_t account;
+    return psbt_multisig_path(kp, &account) && account == bip84_account_index;
 }
 
 // Derives the path's key from the cached multisig account and checks that it
@@ -3671,9 +3880,20 @@ static void psbt_view_owner(int y, psbt_owner_t owner, const psbt_keypath_t *kp,
             psbt_format_fingerprint(kp->fingerprint, &text[9]);
             drawtext(5, y, text, ST7735_YELLOW, ST7735_BLACK, 1);
             break;
-        case PSBT_OWNER_FP_ONLY:
-            drawtext(5, y, "MY FP, PATH NOT CHECKED", ST7735_YELLOW, ST7735_BLACK, 1);
+        case PSBT_OWNER_FP_ONLY: {
+            uint32_t account;
+            bool single = psbt_bip84_path(kp, &account);
+            bool multi = !single && psbt_multisig_path(kp, &account);
+            if ((single || multi) && account != bip84_account_index) {
+                strcpy(text, "MY FP, OTHER ACCOUNT");
+            } else if (multi && !ms_account_cached) {
+                strcpy(text, "MY FP, MULTISIG MODE OFF");
+            } else {
+                strcpy(text, "MY FP, PATH NOT CHECKED");
+            }
+            drawtext(5, y, text, ST7735_YELLOW, ST7735_BLACK, 1);
             break;
+        }
         case PSBT_OWNER_VERIFIED:
             if (!is_output) {
                 strcpy(text, "MINE (VERIFIED)");
@@ -4161,6 +4381,9 @@ typedef struct {
     uint32_t already_signed;    // Our inputs that already carry a signature
     uint32_t foreign;           // Inputs of other keys (cosigners, other wallets)
     uint32_t other_mode;        // Ours, but for the other single/multi sig mode
+    uint32_t other_account;     // Ours, but for another account index
+    uint32_t other_account_index;
+    char refuse_text[24];       // Built refusal reason (refuse points here)
     uint64_t send;              // Outputs that do not come back to us
     uint64_t change;            // Outputs verified as ours
     uint64_t fee;
@@ -4280,13 +4503,20 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
             plan->refuse = "INPUT KEY MISMATCH";
             return;
         }
-        bool multi_input = owner == PSBT_OWNER_VERIFIED_MULTI ||
-                           (owner == PSBT_OWNER_FP_ONLY && psbt_is_multisig_path(&kp));
-        if (owner != PSBT_OWNER_VERIFIED && !multi_input) {
+        uint32_t account = 0;
+        bool single_path = psbt_bip84_path(&kp, &account);
+        bool multi_path = !single_path && psbt_multisig_path(&kp, &account);
+        bool mine = owner == PSBT_OWNER_VERIFIED || owner == PSBT_OWNER_VERIFIED_MULTI;
+        if (owner != PSBT_OWNER_FP_ONLY && !mine) {
             plan->foreign++;
-        } else if (multi_input != bip84_multisig_mode) {
+        } else if (!single_path && !multi_path) {
+            plan->foreign++;                    // Our fingerprint on a path we do not sign
+        } else if (multi_path != bip84_multisig_mode) {
             plan->other_mode++;
-        } else if (owner != PSBT_OWNER_VERIFIED && owner != PSBT_OWNER_VERIFIED_MULTI) {
+        } else if (account != bip84_account_index) {
+            plan->other_account++;
+            plan->other_account_index = account;
+        } else if (!mine) {
             plan->foreign++;
         } else if (in.finalized || psbt_input_has_sig_from(psbt, i, kp.key, kp.key_len)) {
             plan->already_signed++;
@@ -4298,10 +4528,16 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
         }
     }
     if (plan->signable == 0) {
-        if (plan->other_mode == 0) {
-            plan->refuse = "NOTHING TO SIGN";
-        } else {
+        if (plan->other_mode > 0) {
             plan->refuse = bip84_multisig_mode ? "SWITCH TO SINGLE SIG" : "SWITCH TO MULTI SIG";
+        } else if (plan->other_account > 0) {
+            char num[12];
+            strcpy(plan->refuse_text, "SWITCH TO ACCOUNT ");
+            fast_itoa(plan->other_account_index, num);
+            strcat(plan->refuse_text, num);
+            plan->refuse = plan->refuse_text;
+        } else {
+            plan->refuse = "NOTHING TO SIGN";
         }
         return;
     }
@@ -6862,9 +7098,12 @@ int main ( void ){
             case SHOW_SEED:
                 switch (pulsed_bt) {
                     case OK_BT:
+                        if (!load_wallet_keys()) {          // Cancelled: back to the words
+                            redraw_show_seed_with_offset();
+                            break;
+                        }
                         bip84_address_index = 0;
                         bip84_extended_key_page = 0;
-                        //bip84_account_cached = false;
                         black_screen();
                         print_bip84_menu();
                         break;
@@ -6900,6 +7139,10 @@ int main ( void ){
                         estado=SEL_SD_BLOCK_WR;
                         break;
                     case RIGHT_BT: // Compact QR
+                        if (!load_wallet_keys()) {          // Cancelled: back to the words
+                            redraw_show_seed_with_offset();
+                            break;
+                        }
                         bip84_address_index = 0;
                         bip84_extended_key_page = 0;
                         black_screen();
@@ -6958,6 +7201,14 @@ int main ( void ){
                             bip84_menu_pointer = bip84_option_count() - 1;   // Stay on MODE
                             print_bip84_menu();
                             pulsed_bt = NONE;   // Ignore keys pressed during the derivation
+                        } else if (bip84_option() == cBIP84_ACCOUNT) {
+                            uint32_t index = bip84_account_index;
+                            if (edit_account_index(&index) && index != bip84_account_index) {
+                                set_account_index(index);   // Progress bar while deriving
+                            }
+                            black_screen();
+                            print_bip84_menu();
+                            pulsed_bt = NONE;
                         } else if (bip84_option() == cBIP84_DESCRIPTOR) {
                             // TODO: import the multisig wallet descriptor (cosigner xpubs)
                             // so multisig change can be verified
@@ -7026,14 +7277,8 @@ int main ( void ){
                         {
                             if (bip84_option() == cBIP84_XPUB) {
                                 // FAST PATH: Draw QR directly from cache without recalculating
-                                if (bip84_multisig_mode) {
-                                    char ms_key[140];
-                                    multisig_account_key(bip84_extended_key_page != 0, ms_key);
-                                    draw_xpub_qr(ms_key);
-                                } else {
-                                    const char *value = (bip84_extended_key_page == 0) ? bip84_cached_xpub : bip84_cached_zpub;
-                                    draw_xpub_qr(value);
-                                }
+                                // ur:crypto-account with fingerprint and origin path
+                                show_account_qr();
                                 bip84_qr_return_to_info = true;
                                 estado = SHOW_QRSEED;
                             } else if (bip84_option() == cBIP84_RECEIVE || bip84_option() == cBIP84_CHANGE) {

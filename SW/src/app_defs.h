@@ -56,8 +56,9 @@
 #define cBIP84_SIGN 6
 #define cBIP84_MODE 7           // Toggles single sig / multisig
 #define cBIP84_DESCRIPTOR 8     // Multisig menu only
-#define cBIP84_n_opt 8          // Single sig menu: options 0..7 in order
-#define cBIP84_MULTI_n_opt 7    // Multisig menu: no address options
+#define cBIP84_ACCOUNT 9        // Account index of m/84'/0'/n' and m/48'/0'/n'/2'
+#define cBIP84_n_opt 9          // Single sig menu entries
+#define cBIP84_MULTI_n_opt 8    // Multisig menu entries (no address options)
 
 #define cSIGN_QR 0
 #define cSIGN_SD 1

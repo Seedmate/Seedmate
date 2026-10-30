@@ -11,6 +11,7 @@
 #include "fountain.h"
 #include "psbt.h"
 #include "ur_test_psbt.h"
+#include "ur_account_vectors.h"
 
 static int failures = 0;
 #define CHECK(cond) do { if (!(cond)) { printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); failures++; } } while (0)
@@ -146,10 +147,34 @@ static void test_round_trip(void) {
     CHECK(!ur_encoder_init(&e, ur_test_signed_psbt, sizeof(ur_test_signed_psbt), 5));
 }
 
+// crypto-account: CBOR identical to the independent Python encoder, and a
+// single-part "UR:CRYPTO-ACCOUNT/..." text that fits a version 8 QR
+static void test_account(void) {
+    uint8_t cbor[200], decoded[200];
+    char text[UR_PART_MAX_CHARS(200) + 1];
+    ur_encoder_t e;
+
+    for (int i = 0; i < UR_ACCOUNT_CASES; i++) {
+        const ur_account_case_t *c = &ur_account_cases[i];
+        ur_account_key_t key = { c->master_fp, c->parent_fp, c->pub, c->chain, c->path, c->path_len, c->multisig };
+        uint32_t len = ur_account_cbor(&key, cbor, sizeof(cbor));
+        CHECK(len == c->cbor_len && memcmp(cbor, c->cbor, len) == 0);
+        CHECK(ur_account_cbor(&key, cbor, len - 1) == 0);       // Too small: refused
+
+        CHECK(ur_encoder_init_type(&e, "CRYPTO-ACCOUNT", cbor, len, false, 1000) && e.seq_len == 1);
+        uint32_t chars = ur_encoder_part(&e, 1, text, sizeof(text));
+        CHECK(chars > 0 && chars <= 279);                       // Version 8, ECC L, alphanumeric
+        CHECK(strncmp(text, "UR:CRYPTO-ACCOUNT/", 18) == 0 && strchr(text + 18, '/') == NULL);
+        CHECK(decode_words(text, decoded, sizeof(decoded)) == (int)len && memcmp(decoded, cbor, len) == 0);
+        printf("crypto-account %d: %u CBOR bytes, %u chars\n", i, len, chars);
+    }
+}
+
 int main(void) {
     init_bytewords_lookup();
     test_sparrow_frames("../animated_QR_scan/captures_pure.txt");
     test_round_trip();
+    test_account();
     printf(failures ? "\n%d FAILURE(S)\n" : "\nALL TESTS PASSED\n", failures);
     return failures != 0;
 }
