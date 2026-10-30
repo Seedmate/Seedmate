@@ -4766,6 +4766,166 @@ static void psbt_review_and_sign(uint8_t *buf, uint32_t len, uint32_t capacity) 
     show_ur_animated_qr(buf, len);
 }
 
+// Scanner timing, measured with the MIPS core timer (counts at SYSCLK / 2)
+#define CORE_TICKS_PER_MS       (CPU_CLOCK_FREQUENCY / 2000u)
+#define SCAN_FRAME_GAP_MS       15      // Silence that ends a frame (a byte takes ~87 us at 115200;
+                                        // margin for a scanner that sends a frame in chunks)
+#define SCAN_ACK_TIMEOUT_MS     50      // The trigger ACK did not arrive: the scanner ignored it, resend
+#define SCAN_RETRIGGER_MS       300     // Silence after which a new read session is started
+#define GM861_REPLY_TIMEOUT_MS  200     // Zone bit read/write reply
+
+// GM861 zone bit 0x0060 (manual 10.6): bit 7 protocol output, bits 6-5 tail
+// type (00 = CR), bit 4 RF, 3 prefix, 2 Code ID, 1 suffix, 0 tail enable
+#define GM861_ZONE_OUTPUT       0x0060
+#define GM861_TAIL_TYPE_MASK    0x60
+#define GM861_TAIL_ENABLE       0x01
+// GM861 zone bit 0x0005: pause between two reads, 0.1 s steps (0 = none).
+// A trigger that arrives during this pause is ignored by the scanner.
+#define GM861_ZONE_BREAK        0x0005
+// GM861 zone bit 0x0000: bits 1-0 read mode (01 command triggered, 10 continuous)
+#define GM861_ZONE_MODE         0x0000
+#define GM861_MODE_MASK         0x03
+#define GM861_MODE_CONTINUOUS   0x02
+// GM861 zone bit 0x0013: bit 7 same code delay on, bits 6-0 delay in 0.1 s
+#define GM861_ZONE_SAME_CODE    0x0013
+#define GM861_SAME_CODE_ON      0x80
+
+static void gm861_send(const uint8_t *cmd, uint32_t len) {
+    for (uint32_t i = 0; i < len; i++) {
+        while (U2STAbits.UTXBF);
+        U2TXREG = cmd[i];
+    }
+}
+
+// Drops anything pending, then waits until the line has been quiet a moment
+static void gm861_flush(void) {
+    uint32_t quiet = _CP0_GET_COUNT();
+    if (U2STAbits.OERR) U2STAbits.OERR = 0;
+    while ((uint32_t)(_CP0_GET_COUNT() - quiet) < SCAN_FRAME_GAP_MS * CORE_TICKS_PER_MS) {
+        if (U2STAbits.URXDA) {
+            (void)U2RXREG;
+            quiet = _CP0_GET_COUNT();
+        }
+    }
+}
+
+// Receives exactly len bytes, or false after GM861_REPLY_TIMEOUT_MS
+static bool gm861_receive(uint8_t *reply, uint32_t len) {
+    uint32_t start = _CP0_GET_COUNT();
+    uint32_t n = 0;
+    while (n < len) {
+        if (U2STAbits.OERR) U2STAbits.OERR = 0;
+        if (U2STAbits.URXDA) {
+            reply[n++] = (uint8_t)U2RXREG;
+        } else if ((uint32_t)(_CP0_GET_COUNT() - start) >= GM861_REPLY_TIMEOUT_MS * CORE_TICKS_PER_MS) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Zone bit read (manual 10.2): 7E 00 07 01 <addr> 01 <CRC> -> 02 00 00 01 <value> <CRC>
+static bool gm861_read_zone(uint16_t addr, uint8_t *value) {
+    const uint8_t cmd[] = {0x7E, 0x00, 0x07, 0x01, (uint8_t)(addr >> 8), (uint8_t)addr, 0x01, 0xAB, 0xCD};
+    uint8_t reply[7];
+    gm861_flush();
+    gm861_send(cmd, sizeof(cmd));
+    if (!gm861_receive(reply, sizeof(reply))) return false;
+    if (reply[0] != 0x02 || reply[1] != 0x00 || reply[2] != 0x00 || reply[3] != 0x01) return false;
+    *value = reply[4];
+    return true;
+}
+
+// Zone bit write (manual 10.3), RAM only: lost at power off, never saved to
+// the scanner's flash. 7E 00 08 01 <addr> <value> <CRC> -> 02 00 00 01 00 33 31
+static bool gm861_write_zone(uint16_t addr, uint8_t value) {
+    const uint8_t cmd[] = {0x7E, 0x00, 0x08, 0x01, (uint8_t)(addr >> 8), (uint8_t)addr, value, 0xAB, 0xCD};
+    static const uint8_t ack[7] = {0x02, 0x00, 0x00, 0x01, 0x00, 0x33, 0x31};
+    uint8_t reply[7];
+    gm861_flush();
+    gm861_send(cmd, sizeof(cmd));
+    return gm861_receive(reply, sizeof(reply)) && memcmp(reply, ack, sizeof(ack)) == 0;
+}
+
+// A zone bit changed for the UR scan, with the value to put back
+typedef struct {
+    uint16_t addr;
+    uint8_t orig;
+    bool changed;
+} gm861_backup_t;
+
+// Sets the 'mask' bits of a zone bit to 'value', remembering the original
+static bool gm861_override(gm861_backup_t *r, uint16_t addr, uint8_t mask, uint8_t value) {
+    r->addr = addr;
+    r->changed = false;
+    if (!gm861_read_zone(addr, &r->orig)) return false;
+    uint8_t v = (uint8_t)((r->orig & ~mask) | (value & mask));
+    if (v == r->orig) return true;
+    if (!gm861_write_zone(addr, v)) return false;
+    r->changed = true;
+    return true;
+}
+
+// Puts the original value back (three attempts); true if nothing is left changed
+static bool gm861_restore(gm861_backup_t *r) {
+    for (int attempt = 0; attempt < 3 && r->changed; attempt++) {
+        if (gm861_write_zone(r->addr, r->orig)) r->changed = false;
+    }
+    return !r->changed;
+}
+
+// Interrupt-driven UART2 reception into a ring buffer, used while scanning:
+// in continuous mode the scanner sends codes at any time, also while a frame
+// is processed, and the 4-byte hardware FIFO alone would overflow. The
+// generated driver reads one byte per request; the callback (interrupt
+// context) stores it and asks for the next one.
+#define SCAN_RX_RING_SIZE 512u          // Power of two
+static uint8_t scan_rx_ring[SCAN_RX_RING_SIZE];
+static volatile uint16_t scan_rx_head;
+static volatile uint16_t scan_rx_tail;
+static volatile bool scan_rx_overflow;
+static uint8_t scan_rx_byte;
+
+static void scan_rx_store(uint8_t b) {
+    uint16_t next = (uint16_t)((scan_rx_head + 1u) & (SCAN_RX_RING_SIZE - 1u));
+    if (next != scan_rx_tail) {
+        scan_rx_ring[scan_rx_head] = b;
+        scan_rx_head = next;
+    } else {
+        scan_rx_overflow = true;        // Byte dropped; the frame CRC rejects it
+    }
+}
+
+static void scan_rx_callback(uintptr_t context) {
+    (void)context;
+    scan_rx_store(scan_rx_byte);
+    // The driver takes one byte per request and has already cleared the
+    // interrupt flag: drain whatever else is waiting in the hardware FIFO,
+    // or the last bytes of a frame (its CR) could stay there until more come
+    while (U2STAbits.URXDA) scan_rx_store((uint8_t)U2RXREG);
+    UART2_Read(&scan_rx_byte, 1);
+}
+
+static void scan_rx_start(void) {
+    scan_rx_head = 0;
+    scan_rx_tail = 0;
+    scan_rx_overflow = false;
+    UART2_ReadCallbackRegister(scan_rx_callback, 0);
+    UART2_Read(&scan_rx_byte, 1);
+}
+
+static void scan_rx_stop(void) {
+    UART2_ReadAbort();
+    UART2_ReadCallbackRegister(NULL, 0);
+}
+
+static bool scan_rx_get(uint8_t *b) {
+    if (scan_rx_tail == scan_rx_head) return false;
+    *b = scan_rx_ring[scan_rx_tail];
+    scan_rx_tail = (uint16_t)((scan_rx_tail + 1u) & (SCAN_RX_RING_SIZE - 1u));
+    return true;
+}
+
 void scan_ur_animated_qr(void) {
     black_screen();
     drawtext(10, 10, "SCANNING PSBT", ST7735_YELLOW, ST7735_BLACK, 1);
@@ -4776,13 +4936,42 @@ void scan_ur_animated_qr(void) {
     init_bytewords_lookup();
     fountain_init();
 
-    uint32_t trigger_timeout = 200000;
     char burst_buffer[MAX_UR_PAYLOAD_LEN * 2 + 50];
 
     // Clear OERR flag and flush buffer ONLY once at startup
     if (U2STAbits.OERR) U2STAbits.OERR = 0;
     while (U2STAbits.URXDA) (void)U2RXREG;
-    trigger_gm861_scanner();
+
+    // Scanner settings for this scan only (its RAM, restored on exit):
+    //  - 0x0060 CR after each code, so a frame ends as soon as it is complete
+    //  - 0x0005 no pause between reads
+    //  - 0x0013 the same code is ignored for 500 ms (a Sparrow frame stays
+    //    on screen ~250 ms), so one frame is not processed again and again
+    //  - 0x0000 continuous mode: reads and sends codes with no trigger
+    // The mode is changed last: if anything fails the scanner stays in
+    // command triggered mode and the scan uses triggers instead.
+    gm861_backup_t gm861_regs[4];               // Restored in this order: mode first
+    memset(gm861_regs, 0, sizeof(gm861_regs));
+    bool continuous =
+        gm861_override(&gm861_regs[1], GM861_ZONE_OUTPUT, GM861_TAIL_TYPE_MASK | GM861_TAIL_ENABLE, GM861_TAIL_ENABLE) &&
+        gm861_override(&gm861_regs[2], GM861_ZONE_BREAK, 0xFF, 0x00) &&
+        gm861_override(&gm861_regs[3], GM861_ZONE_SAME_CODE, 0xFF, GM861_SAME_CODE_ON | 5) &&
+        gm861_override(&gm861_regs[0], GM861_ZONE_MODE, GM861_MODE_MASK, GM861_MODE_CONTINUOUS);
+    if (!continuous) {
+        drawtext(10, 20, "SCANNER SETUP FAILED", ST7735_YELLOW, ST7735_BLACK, 1);
+    }
+
+    // Fallback, command triggered mode (manual 3.4): each trigger answers
+    // 02 00 00 01 00 33 31 and reads ONE code, then stops. A trigger sent
+    // while the scanner is still busy is ignored, so wait for the ACK.
+    scan_rx_start();
+    uint32_t last_activity = _CP0_GET_COUNT();
+    uint32_t trigger_sent = last_activity;
+    bool awaiting_ack = false;
+    if (!continuous) {
+        trigger_gm861_scanner();
+        awaiting_ack = true;
+    }
 
     bool psbt_recovered = false;
     uint32_t expected_msg_len = 0;
@@ -4790,40 +4979,36 @@ void scan_ur_animated_qr(void) {
     while (BT1 == 1) { 
         SYS_Tasks(); // Keep MCU watchdog alive in the main loop
 
-        // PROBE 1: UART OVERRUN DETECTION
-        if (U2STAbits.OERR) {
-            U2STAbits.OERR = 0;
-            drawtext(10, 20, "UART OERR DETECTED!", ST7735_RED, ST7735_BLACK, 1);
+        // Bytes were lost: the ring buffer filled up (frames are then
+        // rejected by their CRC, so this is only a warning)
+        if (scan_rx_overflow) {
+            scan_rx_overflow = false;
+            drawtext(10, 20, "UART BUFFER FULL", ST7735_RED, ST7735_BLACK, 1);
         }
 
-        if (U2STAbits.URXDA) {
+        uint8_t rx;
+        if (scan_rx_get(&rx)) {
             int burst_idx = 0;
-            uint32_t byte_timeout = 400000;
+            uint32_t last_byte = _CP0_GET_COUNT();
+            bool have_byte = true;
 
-            while (byte_timeout > 0 && burst_idx < sizeof(burst_buffer) - 1) {
-                SYS_Tasks(); // Keep MCU alive during long UART bursts
-                
-                if (U2STAbits.OERR) {
-                    U2STAbits.OERR = 0;
-                    drawtext(10, 20, "UART OERR DETECTED!", ST7735_RED, ST7735_BLACK, 1);
-                }
-                
-                if (U2STAbits.URXDA) {
-                    char c = U2RXREG;
-                    byte_timeout = 400000; 
-                    if (c == '\r' || c == '\n') {
+            // A frame ends with CR/LF or, if the scanner sends none, with a
+            // short silence measured in real time
+            while (burst_idx < (int)sizeof(burst_buffer) - 1) {
+                if (have_byte) {
+                    last_byte = _CP0_GET_COUNT();
+                    if (rx == '\r' || rx == '\n') {
                         if (burst_idx > 0) break;
                     } else {
-                        burst_buffer[burst_idx++] = c;
+                        burst_buffer[burst_idx++] = (char)rx;
                     }
-                } else {
-                    byte_timeout--;
+                } else if ((uint32_t)(_CP0_GET_COUNT() - last_byte) >= SCAN_FRAME_GAP_MS * CORE_TICKS_PER_MS) {
+                    break;
                 }
+                SYS_Tasks(); // Keep MCU alive during long UART bursts
+                have_byte = scan_rx_get(&rx);
             }
             burst_buffer[burst_idx] = '\0';
-
-            // Reset scanner timeout since we just received data
-            trigger_timeout = 200000;
 
             if (burst_idx > 15) {
                 const char target[] = "UR:CRYPTO-PSBT/";
@@ -5003,20 +5188,51 @@ void scan_ur_animated_qr(void) {
                 }
             }
             
-            // NO buffer flushing here. Let the scanner stream uninterrupted.
+            // Trigger mode only: anything received (the ACK or a code) means the
+            // last trigger was accepted; after a code the scanner has stopped,
+            // so trigger the next read. The ACK alone (7 bytes) must not.
+            awaiting_ack = false;
+            last_activity = _CP0_GET_COUNT();
+            if (!continuous && burst_idx > 15) {
+                trigger_gm861_scanner();
+                trigger_sent = _CP0_GET_COUNT();
+                awaiting_ack = true;
+            }
 
-        } else {
-            // Trigger scanner ONLY if there is actual UART inactivity
-            if (trigger_timeout > 0) {
-                trigger_timeout--;
-                if (trigger_timeout == 0) {
-                    trigger_gm861_scanner();
-                    trigger_timeout = 200000;
-                }
+        } else if (!continuous) {
+            uint32_t now = _CP0_GET_COUNT();
+            if (awaiting_ack && (uint32_t)(now - trigger_sent) >= SCAN_ACK_TIMEOUT_MS * CORE_TICKS_PER_MS) {
+                // No ACK: the scanner was still busy and ignored the trigger
+                trigger_gm861_scanner();
+                trigger_sent = now;
+            } else if (!awaiting_ack && (uint32_t)(now - last_activity) >= SCAN_RETRIGGER_MS * CORE_TICKS_PER_MS) {
+                // Nothing received for a while: the read session ended (no QR
+                // in view or it timed out), so start a new one
+                trigger_gm861_scanner();
+                trigger_sent = now;
+                awaiting_ack = true;
             }
         }
         
-        if (psbt_recovered) break; 
+        if (psbt_recovered) break;
+    }
+
+    // Back to polled reception, then give the GM861 its original settings
+    // (mode first, so it stops reading), so other functions never see the
+    // continuous reads or the CR tail. Reported if it cannot be done.
+    scan_rx_stop();
+    bool gm861_restored = true;
+    for (uint32_t i = 0; i < sizeof(gm861_regs) / sizeof(gm861_regs[0]); i++) {
+        if (!gm861_restore(&gm861_regs[i])) gm861_restored = false;
+    }
+    if (!gm861_restored) {
+        black_screen();
+        drawtext(5, 5, "SCANNER RESET FAILED", ST7735_RED, ST7735_BLACK, 1);
+        drawtext(5, 25, "TURN THE DEVICE OFF", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 35, "AND ON BEFORE USING", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 45, "OTHER QR FUNCTIONS", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 118, "PRESS ANY KEY", ST7735_WHITE, ST7735_BLACK, 1);
+        psbt_wait_key();
     }
 
     if (psbt_recovered) {
@@ -5423,12 +5639,16 @@ int main ( void ){
                     case UP_BT:                        
                         if (main_pointer > 0) {
                             main_pointer--;
+                        } else {
+                            main_pointer = cMAIN_n_opt - 1;     // From the top, wrap to the last entry (SETTINGS)
                         }
                         main_screen(main_pointer); // <--- Updated
                         break;
                     case DOWN_BT:                        
                         if (main_pointer < (cMAIN_n_opt-1)) {
                             main_pointer++;
+                        } else {
+                            main_pointer = 0;                   // From the bottom, wrap to the first entry
                         }
                         main_screen(main_pointer); // <--- Updated
                         break;
