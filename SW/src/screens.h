@@ -69,6 +69,7 @@ void black_screen(void);
 void white_screen(void);
 void print_logo(void);
 void grid_OK_back(void);
+void grid_scan_back(void);
 void print_update_fw_warning(void);
 void print_diceroll_screen(int sel, int sel2);
 void print_TMR_screen(int size_TMR);

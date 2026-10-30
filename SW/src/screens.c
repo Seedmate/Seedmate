@@ -391,6 +391,13 @@ void grid_OK_back(void) {
     print_back();
 }
 
+// Button grid of the QR seed scan screen: BACK, and SCAN on the OK button
+void grid_scan_back(void) {
+    print_cursor_grid();
+    print_back();
+    drawtext(123, 107, "SCAN", ST7735_WHITE, ST7735_WHITE, 1);
+}
+
 void print_update_fw_warning(void) {
     black_screen();
     drawtext(20, 25, "SYSTEM UPDATE", ST7735_WHITE, ST7735_BLACK, 1);

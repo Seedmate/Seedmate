@@ -6612,7 +6612,7 @@ int main ( void ){
                         } else if (selinput_pointer==cQRSCAN) {
                             black_screen();
                             drawtext(10, 10, "READY TO SCAN", ST7735_YELLOW, ST7735_BLACK, 1);
-                            //drawtext(10, 60, "BACK TO CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
+                            grid_scan_back();
                             estado = QR_SCANNING;
                         
                         } else { // cFROMSD
@@ -7948,6 +7948,7 @@ int main ( void ){
                             delay_ms(1000); 
                             black_screen();
                             drawtext(10, 10, "READY TO SCAN", ST7735_YELLOW, ST7735_BLACK, 1);
+                            grid_scan_back();
                         }
                         break;
                     }
