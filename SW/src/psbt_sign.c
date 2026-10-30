@@ -15,11 +15,13 @@
 #include "crypto/ecdsa.h"
 #include "crypto/secp256k1.h"
 #include "crypto/memzero.h"
+#include "kdf.h"
 
 // Not exported by the trimmed ecdsa.h, but defined in crypto/ecdsa.c
 int scalar_multiply(const ecdsa_curve *curve, const bignum256 *k, curve_point *res);
 int point_multiply(const ecdsa_curve *curve, const bignum256 *k, const curve_point *p, curve_point *res);
 void point_add(const ecdsa_curve *curve, const curve_point *cp1, curve_point *cp2);
+int point_is_infinity(const curve_point *p);
 
 // ============================================================================
 // Hash helpers
@@ -323,4 +325,39 @@ bool psbt_ecdsa_sign(const uint8_t priv_key[32], const uint8_t pub_key[33], cons
     }
     memzero(&s, sizeof(s));
     return ok;
+}
+
+// ============================================================================
+// BIP32 public derivation
+// ============================================================================
+
+bool psbt_public_ckd(const uint8_t chain_code[32], const uint8_t public_key[33], uint32_t index,
+                     uint8_t child_chain[32], uint8_t child_key[33]) {
+    const ecdsa_curve *curve = &secp256k1;
+    uint8_t data[37];
+    uint8_t I[64];
+    bignum256 il;
+    curve_point parent, child;
+
+    if (index & 0x80000000u) return false;
+    if (!ecdsa_read_pubkey(curve, public_key, &parent)) return false;
+
+    // I = HMAC-SHA512(chain code, key || index); child = I_L * G + parent
+    memcpy(data, public_key, 33);
+    data[33] = (uint8_t)(index >> 24);
+    data[34] = (uint8_t)(index >> 16);
+    data[35] = (uint8_t)(index >> 8);
+    data[36] = (uint8_t)index;
+    HmacSha512(chain_code, 32, data, sizeof(data), I);
+
+    bn_read_be(I, &il);
+    if (!bn_is_less(&il, &curve->order)) return false;   // Next index per BIP32 (p < 2^-127)
+    scalar_multiply(curve, &il, &child);
+    point_add(curve, &parent, &child);
+    if (point_is_infinity(&child)) return false;
+
+    child_key[0] = (uint8_t)(0x02 | (child.y.val[0] & 1));
+    bn_write_be(&child.x, &child_key[1]);
+    memcpy(child_chain, &I[32], 32);
+    return true;
 }

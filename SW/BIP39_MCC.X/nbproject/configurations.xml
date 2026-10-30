@@ -50,6 +50,7 @@
       <itemPath>../src/sd_files.h</itemPath>
       <itemPath>../src/ur_encode.h</itemPath>
       <itemPath>../src/psbt_sign.h</itemPath>
+      <itemPath>../src/descriptor.h</itemPath>
       <itemPath>../src/kdf.h</itemPath>
       <itemPath>../../bootloader/src/pff.h</itemPath>
       <itemPath>../../bootloader/src/pffconf.h</itemPath>
@@ -148,6 +149,7 @@
       <itemPath>../src/pff_app.c</itemPath>
       <itemPath>../src/ur_encode.c</itemPath>
       <itemPath>../src/psbt_sign.c</itemPath>
+      <itemPath>../src/descriptor.c</itemPath>
       <itemPath>../src/kdf.c</itemPath>
       <itemPath>../src/sha512.c</itemPath>
       <itemPath>../src/EFF_short.c</itemPath>

@@ -85,6 +85,7 @@
 #include "sd_files.h"
 #include "ur_encode.h"
 #include "psbt_sign.h"
+#include "descriptor.h"
 
 
 
@@ -162,17 +163,45 @@ char bip84_passphrase[200] = {0}; // Holds the optional BIP39 passphrase
 
 
 //Text editor
-#define KBD_LETTER_SPACING 8
+// Title on line y=2, text in a 5-line window (y 15..63) and the keyboard
+// below the separator: 3 rows of 9 keys plus a column for CANCEL / SAVE /
+// RETURN, then the 2x3 control keys at the bottom left of the button grid.
+#define EDITOR_TEXT_TOP     15
+#define EDITOR_TEXT_HEIGHT  50      // 5 lines of 10 px
+#define EDITOR_TEXT_CLEAR_Y 64      // Last pixel row of the text area
+#define KBD_SEPARATOR_Y     65
+#define KBD_TOP             67      // Top outline of the first key row
+#define KBD_LEFT            1
+#define KBD_CELL_W          12
+#define KBD_CELL_H          11
+#define KBD_COLS            9
+#define KBD_ROWS            3
+#define KBD_SIDE_LEFT       112     // Column of CANCEL / SAVE / RETURN
+#define KBD_SIDE_RIGHT      158
+#define KBD_BOX_COLOR       0x8410  // Dark gray key outlines
+// 2x3 control keys (aA, up, #@ / left, down, right): rows aligned with the
+// button grid, the last column ends on its left line (x=60)
+#define KBD_CTRL_TOP        105
+#define KBD_CTRL_ROW_H      10
+
+// Keyboard focus indices: 0..26 are the keys (26 is the space), then the
+// side column; 30..35 are the control keys
+#define KBD_SPACE   26
+#define KBD_CANCEL  27
+#define KBD_SAVE    28
+#define KBD_RETURN  29
 
 #define LAYER_ABC 0
 #define LAYER_ABC_UPPER 1
 #define LAYER_NUM 2
 #define LAYER_SYM 3
+// 26 keys per layer, in alphabetical / reading order (key 26 is the space).
+// NUM and SYM together hold every printable ASCII symbol exactly once;
+// empty slots are 0 (drawn blank, nothing inserted).
 const char kbd_abc[27] = "abcdefghijklmnopqrstuvwxyz";
 const char kbd_ABC[27] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-// Fixed: Padded with a trailing space to reach 26 slots, preventing ghost chars
-const char kbd_num[27] = "0123456789.,!?+-*/=()@#$%&"; // Exactly 26 chars
-const char kbd_sym[27] = "<>[]{}~^|_\\\"';:.,!?+-*/=@#"; // Exactly 26 chars
+const char kbd_num[27] = "1234567890.,-_!?@#$%&*+=/:";
+const char kbd_sym[27] = "()[]{}<>;'\"`~^|\\";
 
 #define PASSPHRASE_MODE false
 #define NOTE_MODE true
@@ -223,6 +252,14 @@ static uint32_t ms_account_parent_fingerprint = 0;
 static uint32_t bip84_account_index = 0;
 static HDNode bip84_coin_node;          // m/84'/0'
 static HDNode ms_coin_node;             // m/48'/0'
+
+// Multisig wallet (cosigner xpubs) from IMPORT DESCRIPTOR, for this session
+// only: it applies only to the seed and account it was checked against
+// (ms_wallet_active) and is wiped when the seed is unloaded
+static desc_wallet_t ms_wallet;
+static bool ms_wallet_loaded = false;
+static uint8_t ms_wallet_seed_tag[8];
+static uint32_t ms_wallet_account;
 
 // Menu position -> cBIP84_* option for each mode
 static const uint8_t bip84_single_options[cBIP84_n_opt] = {
@@ -869,7 +906,7 @@ int SD_page = 0;
 
 // --- Helper: Draw Single Character in Text Box (For Delta Rendering) ---
 static void draw_single_text_char(const char* text, int len, int target_idx, int text_cursor, int scroll_y) {
-    int pos_x = 5, pos_y = 15;
+    int pos_x = 5, pos_y = EDITOR_TEXT_TOP;
     
     // Calculate coordinates for the target index
     for(int i = 0; i < target_idx; i++) {
@@ -881,9 +918,9 @@ static void draw_single_text_char(const char* text, int len, int target_idx, int
          }
     }
     
-    // Only draw if within visible vertical scrolling window (60px height)
-    if (pos_y >= scroll_y && pos_y < scroll_y + 60) {
-        int draw_y = 15 + (pos_y - scroll_y);
+    // Only draw if within visible vertical scrolling window
+    if (pos_y >= scroll_y && pos_y < scroll_y + EDITOR_TEXT_HEIGHT) {
+        int draw_y = EDITOR_TEXT_TOP + (pos_y - scroll_y);
         char c = (target_idx < len) ? text[target_idx] : ' ';
         if (c == '\n') c = ' '; // Newlines are rendered as blank spaces visually
         
@@ -901,11 +938,11 @@ static void draw_single_text_char(const char* text, int len, int target_idx, int
 
 // --- Helper: Draw Full Editor Text Box (Delta Optimized - No Flicker) ---
 static void draw_editor_textbox_full(const char* text, int len, int text_cursor, int scroll_y) {
-    int pos_x = 5, pos_y = 15;
+    int pos_x = 5, pos_y = EDITOR_TEXT_TOP;
     
     for(int i = 0; i <= len; i++) {
-        int draw_y = 15 + (pos_y - scroll_y);
-        bool in_viewport = (pos_y >= scroll_y && pos_y < scroll_y + 60);
+        int draw_y = EDITOR_TEXT_TOP + (pos_y - scroll_y);
+        bool in_viewport = (pos_y >= scroll_y && pos_y < scroll_y + EDITOR_TEXT_HEIGHT);
         
         char c = (i < len) ? text[i] : ' ';
         bool is_newline = (c == '\n');
@@ -946,8 +983,8 @@ static void draw_editor_textbox_full(const char* text, int len, int text_cursor,
     } // <-- End of the for loop
     
     // 3. Final cleanup (Erase trailing artifacts at the end of the text)
-    if (pos_y >= scroll_y && pos_y < scroll_y + 60) {
-        int draw_y = 15 + (pos_y - scroll_y);
+    if (pos_y >= scroll_y && pos_y < scroll_y + EDITOR_TEXT_HEIGHT) {
+        int draw_y = EDITOR_TEXT_TOP + (pos_y - scroll_y);
         
         // Offset the cleanup if the block cursor is sitting at the very end of the text
         int erase_x = pos_x;
@@ -960,15 +997,15 @@ static void draw_editor_textbox_full(const char* text, int len, int text_cursor,
             rectan(erase_x, draw_y, 157, draw_y + 9, ST7735_BLACK);
         }
         // Clear any lower lines that have been left empty
-        if (draw_y + 10 < 75) {
-            rectan(2, draw_y + 10, 157, 75, ST7735_BLACK);
+        if (draw_y + 10 < EDITOR_TEXT_CLEAR_Y) {
+            rectan(2, draw_y + 10, 157, EDITOR_TEXT_CLEAR_Y, ST7735_BLACK);
         }
     }
 }
 
 // --- Helper: Find Closest Text Index (Used for UP/DOWN text navigation) ---
 static int get_closest_text_idx(const char* text, int len, int target_x, int target_y) {
-    int pos_x = 5, pos_y = 15;
+    int pos_x = 5, pos_y = EDITOR_TEXT_TOP;
     int best_idx = -1;
     int min_dist = 9999;
     
@@ -985,71 +1022,101 @@ static int get_closest_text_idx(const char* text, int len, int target_x, int tar
     return best_idx;
 }
 
+// --- Helper: Character of key 'idx' (0..26) in a layer; 0 for an empty slot ---
+static char kbd_key_char(int idx, int layer) {
+    if (idx == KBD_SPACE) return ' ';
+    const char* charset = (layer == LAYER_ABC) ? kbd_abc :
+                          (layer == LAYER_ABC_UPPER) ? kbd_ABC :
+                          (layer == LAYER_NUM) ? kbd_num : kbd_sym;
+    return charset[idx];
+}
+
+// --- Keyboard focus as (row, column): column KBD_COLS is the side column ---
+static int kbd_key_row(int idx) { return (idx >= KBD_CANCEL) ? idx - KBD_CANCEL : idx / KBD_COLS; }
+static int kbd_key_col(int idx) { return (idx >= KBD_CANCEL) ? KBD_COLS : idx % KBD_COLS; }
+static int kbd_key_at(int row, int col) { return (col == KBD_COLS) ? KBD_CANCEL + row : row * KBD_COLS + col; }
+// Control key of the upper row (30 aA, 31 up, 32 #@) under a keyboard column
+static int kbd_control_below(int col) { return (col <= 1) ? 30 : (col == 2) ? 31 : 32; }
+
+// --- Helper: Key outlines, drawn once per full redraw (never highlighted) ---
+static void draw_keyboard_boxes(void) {
+    int height = KBD_ROWS * KBD_CELL_H + 1;
+    for (int r = 0; r <= KBD_ROWS; r++) {
+        int y = KBD_TOP + r * KBD_CELL_H;
+        drawFastHLine(KBD_LEFT, y, KBD_COLS * KBD_CELL_W + 1, KBD_BOX_COLOR);
+        drawFastHLine(KBD_SIDE_LEFT, y, KBD_SIDE_RIGHT - KBD_SIDE_LEFT + 1, KBD_BOX_COLOR);
+    }
+    for (int c = 0; c <= KBD_COLS; c++) {
+        drawFastVLine(KBD_LEFT + c * KBD_CELL_W, KBD_TOP, height, KBD_BOX_COLOR);
+    }
+    drawFastVLine(KBD_SIDE_LEFT, KBD_TOP, height, KBD_BOX_COLOR);
+    drawFastVLine(KBD_SIDE_RIGHT, KBD_TOP, height, KBD_BOX_COLOR);
+
+    // Control keys: columns at x 1, 21, 40 and the button grid line at 60
+    for (int r = 0; r <= 2; r++) {
+        drawFastHLine(KBD_LEFT, KBD_CTRL_TOP + r * KBD_CTRL_ROW_H, 60, KBD_BOX_COLOR);
+    }
+    drawFastVLine(1, KBD_CTRL_TOP, 2 * KBD_CTRL_ROW_H + 1, KBD_BOX_COLOR);
+    drawFastVLine(21, KBD_CTRL_TOP, 2 * KBD_CTRL_ROW_H + 1, KBD_BOX_COLOR);
+    drawFastVLine(40, KBD_CTRL_TOP, 2 * KBD_CTRL_ROW_H + 1, KBD_BOX_COLOR);
+}
+
 // --- Helper: Delta Renderer for a Single Key ---
 static void draw_keyboard_key(int idx, int active_layer, bool is_selected, bool allow_newlines) {
     uint16_t color = is_selected ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t bg = ST7735_BLACK;
     
-    if (idx >= 0 && idx <= 25) { 
-        const char* charset = (active_layer == LAYER_ABC) ? kbd_abc : 
-                              (active_layer == LAYER_ABC_UPPER) ? kbd_ABC : 
-                              (active_layer == LAYER_NUM) ? kbd_num : kbd_sym;
-        
-        char single_char[2] = { charset[idx], '\0' };
-        int row = (idx <= 12) ? 0 : 1;
-        int col = (idx <= 12) ? idx : (idx - 13);
-        
-        int kx = 5 + (col * KBD_LETTER_SPACING);
-        int ky = 81 + (row * 12);
+    if (idx >= 0 && idx < KBD_SPACE) {
+        char c = kbd_key_char(idx, active_layer);
+        char single_char[2] = { c ? c : ' ', '\0' };
+        int kx = KBD_LEFT + (idx % KBD_COLS) * KBD_CELL_W + 4;
+        int ky = KBD_TOP + (idx / KBD_COLS) * KBD_CELL_H + 2;
         
         drawtext(kx, ky, single_char, color, bg, 1);
+        if (!c && is_selected) {
+            rectan(kx + 2, ky + 3, kx + 3, ky + 4, ST7735_ORANGE); // Focus on an empty slot
+        }
         
-    } else if (idx == 26) { // Space ?
-        int sx = 5 + 13 * KBD_LETTER_SPACING;
-        int sy = 81; 
+    } else if (idx == KBD_SPACE) {
+        int sx = KBD_LEFT + (KBD_SPACE % KBD_COLS) * KBD_CELL_W + 3;
+        int sy = KBD_TOP + (KBD_SPACE / KBD_COLS) * KBD_CELL_H + 2;
         
         rectan(sx, sy, sx + 6, sy + 7, ST7735_BLACK);
         drawFastHLine(sx, sy + 6, 6, color);
         drawFastVLine(sx, sy + 4, 3, color);
         drawFastVLine(sx + 5, sy + 4, 3, color);
         
-    } else if (idx == 27) { // Return ?
-        int sx = 5 + 13 * KBD_LETTER_SPACING;
-        int sy = 93;
+    } else if (idx == KBD_CANCEL) {
+        drawtext(KBD_SIDE_LEFT + 6, KBD_TOP + 2, "CANCEL", color, bg, 1);
+    } else if (idx == KBD_SAVE) {
+        drawtext(KBD_SIDE_LEFT + 6, KBD_TOP + KBD_CELL_H + 2, " SAVE ", color, bg, 1);
+
+    } else if (idx == KBD_RETURN) {
+        int sx = 132;
+        int sy = KBD_TOP + 2 * KBD_CELL_H + 2;
         uint16_t c = is_selected ? ST7735_ORANGE : (allow_newlines ? ST7735_WHITE : 0x8410); // 0x8410 is Dark Gray
         
         // Clear the background
         rectan(sx, sy, sx + 6, sy + 7, ST7735_BLACK);
-        
-        // 1. Vertical drop line on the right side of the cell
-        // Drops down from the top (sy) with a length of 5 pixels
+        // Vertical drop line on the right, then the arrow pointing left from the elbow
         drawFastVLine(sx + 5, sy, 5, c); 
-        
-        // 2. Left arrow pointing from the elbow
-        // (sy + 2) lowers it slightly to align with the bottom of the vertical line
         print_left_arrow(sx, sy + 8, c);
-        
-    } else if (idx == 28) { // CANCEL
-        drawtext(118, 81, "CANCEL", color, bg, 1);
-    } else if (idx == 29) { // SAVE
-        uint16_t save_color = is_selected ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(118, 93, "SAVE  ", save_color, bg, 1); 
         
     } else if (idx >= 30 && idx <= 35) { // 2x3 Control Grid (Bottom Left)
         if (idx == 30) {
             uint16_t c = is_selected ? ST7735_ORANGE : ((active_layer == LAYER_ABC || active_layer == LAYER_ABC_UPPER) ? ST7735_CYAN : ST7735_WHITE);
-            drawtext(5, 105, "aA ", c, bg, 1);
+            drawtext(5, 106, "aA", c, bg, 1);
         } else if (idx == 31) {            
-            print_up_arrow(27,110,color);
+            print_up_arrow(28,113,color);
         } else if (idx == 32) {
             uint16_t c = is_selected ? ST7735_ORANGE : ((active_layer == LAYER_NUM || active_layer == LAYER_SYM) ? ST7735_CYAN : ST7735_WHITE);
-            drawtext(43, 105, "#@ ", c, bg, 1);
+            drawtext(45, 106, "#@", c, bg, 1);
         } else if (idx == 33) {            
-            print_left_arrow(8,122,color);
+            print_left_arrow(8,123,color);
         } else if (idx == 34) {            
-            print_down_arrow(27,122,color);
+            print_down_arrow(28,123,color);
         } else if (idx == 35) {            
-            print_rigth_arrow(46,122,color);
+            print_rigth_arrow(47,123,color);
         }
     }
 }
@@ -1058,6 +1125,8 @@ static void draw_keyboard_key(int idx, int active_layer, bool is_selected, bool 
 // --- Helper: Draw Title Line (Delta Optimized - No Flicker) ---
 static void draw_editor_title_full(char* title, int len, int t_cursor, bool is_editing, bool allow_newlines) {
     int pos_x = 2; 
+    // Note mode keeps the right end for the UP hint, passphrase mode for the counter
+    int right = allow_newlines ? 135 : 112;
     
     for (int i = 0; i <= len; i++) {
         char c = (i < len) ? title[i] : ' ';
@@ -1075,20 +1144,19 @@ static void draw_editor_title_full(char* title, int len, int t_cursor, bool is_e
         }
         
         pos_x += 6;
-        // Prevent text from overwriting the UI hint on the right side
-        if (pos_x > 130) break; 
+        // Prevent text from overwriting the right side
+        if (pos_x > right - 5) break;
     }
     
-    // Clear remaining pixels up to the hint area boundary
-    if (pos_x <= 135) {
-        rectan(pos_x, 2, 135, 10, ST7735_BLACK);
+    // Clear remaining pixels up to the right side
+    if (pos_x <= right) {
+        rectan(pos_x, 2, right, 10, ST7735_BLACK);
     }
     
     // Draw the UI hints ONLY if we are in Note Mode (newlines allowed)
     if (allow_newlines) {
         if (is_editing) {
             // Active state: Orange hint
-            //drawtext(138, 2, "[^]", ST7735_ORANGE, ST7735_BLACK, 1);
             print_up_arrow(138,8,ST7735_ORANGE);
         } else {
             // Inactive state: Cyan hint to attract attention
@@ -1098,6 +1166,60 @@ static void draw_editor_title_full(char* title, int len, int t_cursor, bool is_e
         // Draw a subtle bottom border to make it look like an input box
         // 0x8410 is Dark Gray in RGB565
         drawFastHLine(0, 12, 160, 0x8410); 
+    }
+}
+
+// --- Helper: Character counter "len/max" at the right of the title line,
+// right aligned in a fixed field (no flicker); orange when full ---
+static void draw_editor_counter(int len, int max_chars) {
+    char num[12];
+    size_t n = u16_to_str((unsigned int)len, num);
+    num[n++] = '/';
+    n += u16_to_str((unsigned int)max_chars, &num[n]);
+    char field[8] = "       ";
+    if (n > 7) n = 7;
+    memcpy(&field[7 - n], num, n);
+    drawtext(117, 2, field, (len >= max_chars) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+}
+
+// --- Passphrase check after SAVE: the whole passphrase and its length, so a
+// typo is seen before any key is derived. OK accepts, BACK edits again. ---
+static bool editor_review_passphrase(const char* text, int len) {
+    black_screen();
+    drawtext(2, 2, "CHECK PASSPHRASE", ST7735_YELLOW, ST7735_BLACK, 1);
+    if (len == 0) {
+        drawtext(5, 20, "NO PASSPHRASE", ST7735_WHITE, ST7735_BLACK, 1);
+    }
+    // Same 25 characters per line as the editor (drawn one by one: no copy)
+    for (int i = 0; i < len; i++) {
+        char s[2] = { text[i], '\0' };
+        drawtext(5 + (i % 25) * 6, 14 + (i / 25) * 10, s, ST7735_WHITE, ST7735_BLACK, 1);
+    }
+    char num[12];
+    u16_to_str((unsigned int)len, num);
+    drawtext(2, 107, num, ST7735_CYAN, ST7735_BLACK, 1);
+    drawtext(2, 117, "CHARS", ST7735_CYAN, ST7735_BLACK, 1);
+    grid_OK_back();
+
+    while (BT_OK == 0 || BT1 == 0) SYS_Tasks();
+    while (1) {
+        SYS_Tasks();
+        if (BT_OK == 0) {
+            delay_ms(30);
+            if (BT_OK == 0) {
+                while (BT_OK == 0) SYS_Tasks();
+                delay_ms(30);
+                return true;
+            }
+        }
+        if (BT1 == 0) {
+            delay_ms(30);
+            if (BT1 == 0) {
+                while (BT1 == 0) SYS_Tasks();
+                delay_ms(30);
+                return false;
+            }
+        }
     }
 }
 
@@ -1120,8 +1242,8 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
     bool prev_editing_title = false;
     bool title_changed = true;
     
-    int scroll_y = 15;
-    int prev_scroll_y = 15;
+    int scroll_y = EDITOR_TEXT_TOP;
+    int prev_scroll_y = EDITOR_TEXT_TOP;
     
     bool full_redraw = true;
     bool text_changed = true;
@@ -1134,7 +1256,8 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
         SYS_Tasks();
 
         if (full_redraw) {
-            drawFastHLine(0, 77, 160, ST7735_WHITE); 
+            drawFastHLine(0, KBD_SEPARATOR_Y, 160, ST7735_WHITE);
+            draw_keyboard_boxes();
             grid_keyboard(); 
             
             for (int i = 0; i <= 35; i++) {
@@ -1152,7 +1275,7 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
         }
 
         // --- Calculate Text Viewport Scrolling ---
-        int cursor_x = 5, cursor_y = 15;
+        int cursor_x = 5, cursor_y = EDITOR_TEXT_TOP;
         for(int i = 0; i < text_cursor; i++) {
              if (buffer[i] == '\n') { cursor_x = 5; cursor_y += 10; }
              else { cursor_x += 6; if (cursor_x > 150) { cursor_x = 5; cursor_y += 10; } }
@@ -1162,18 +1285,22 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
         if (cursor_y < scroll_y) {
             scroll_y = cursor_y;
             scrolled = true;
-        } else if (cursor_y >= scroll_y + 60) {
-            scroll_y = cursor_y - 50;
+        } else if (cursor_y >= scroll_y + EDITOR_TEXT_HEIGHT) {
+            scroll_y = cursor_y - (EDITOR_TEXT_HEIGHT - 10);
             scrolled = true;
         }
         
-        // --- Render Title ---
-        // Check if editing state changed OR text changed
+        // --- Render Title (and the passphrase counter next to it) ---
+        bool counter_due = text_changed;
         if (title_changed || (editing_title != prev_editing_title) || (editing_title && prev_title_cursor != title_cursor)) {
             draw_editor_title_full(title, title_len, title_cursor, editing_title, allow_newlines);
             title_changed = false;
             prev_title_cursor = title_cursor;
             prev_editing_title = editing_title; // <-- Update previous state tracker
+            counter_due = true;
+        }
+        if (counter_due && !allow_newlines) {
+            draw_editor_counter(text_len, max_len - 1);
         }
 
         // --- Render Text Body ---
@@ -1197,12 +1324,9 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
                 
                 char char_to_insert = '\0';
                 
-                if (cursor_idx >= 0 && cursor_idx <= 25) { 
-                    char_to_insert = (active_layer == LAYER_ABC) ? kbd_abc[cursor_idx] : 
-                                     (active_layer == LAYER_ABC_UPPER) ? kbd_ABC[cursor_idx] : 
-                                     (active_layer == LAYER_NUM) ? kbd_num[cursor_idx] : kbd_sym[cursor_idx];
-                } else if (cursor_idx == 26) { char_to_insert = ' '; } 
-                  else if (cursor_idx == 27 && allow_newlines) { char_to_insert = '\n'; }
+                if (cursor_idx >= 0 && cursor_idx <= KBD_SPACE) {
+                    char_to_insert = kbd_key_char(cursor_idx, active_layer); // 0 on an empty slot
+                } else if (cursor_idx == KBD_RETURN && allow_newlines) { char_to_insert = '\n'; }
                 
                 // Insertion Mode
                 if (char_to_insert != '\0') {
@@ -1226,33 +1350,36 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
                         }
                     }
                 } 
-                else if (cursor_idx == 28) { // CANCEL
+                else if (cursor_idx == KBD_CANCEL) {
                     while(BT_OK == 0) SYS_Tasks();
                     delay_ms(30);
                     black_screen();
                     LED = 0;
                     return false; 
                 } 
-                else if (cursor_idx == 29) { // SAVE
+                else if (cursor_idx == KBD_SAVE) {
                     while(BT_OK == 0) SYS_Tasks();
                     delay_ms(30);
-                    black_screen();
                     LED = 0;
-                    return true; 
+                    // A passphrase is shown whole for a check first; BACK edits again
+                    if (allow_newlines || editor_review_passphrase(buffer, text_len)) {
+                        black_screen();
+                        return true;
+                    }
+                    black_screen();
+                    full_redraw = true;
                 } 
                 else if (cursor_idx == 30) { // Toggle aA
                     if (active_layer == LAYER_ABC) active_layer = LAYER_ABC_UPPER;
                     else if (active_layer == LAYER_ABC_UPPER) active_layer = LAYER_ABC;
                     else active_layer = LAYER_ABC; 
                     full_redraw = true; 
-                    rectan(0, 78, 159, 103, ST7735_BLACK);
                 } 
                 else if (cursor_idx == 32) { // Toggle #@
                     if (active_layer == LAYER_NUM) active_layer = LAYER_SYM;
                     else if (active_layer == LAYER_SYM) active_layer = LAYER_NUM;
                     else active_layer = LAYER_NUM; 
                     full_redraw = true; 
-                    rectan(0, 78, 159, 103, ST7735_BLACK);
                 }
                 else if (cursor_idx == 33) { // LEFT (Text Navigation)
                     if (editing_title) {
@@ -1271,7 +1398,7 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
                 else if (cursor_idx == 31) { // UP (Text Navigation)
                     if (!editing_title) {
                         // Jump to title if we are on the top line and in NOTE_MODE
-                        if (allow_newlines && cursor_y == 15 && scroll_y == 15) {
+                        if (allow_newlines && cursor_y == EDITOR_TEXT_TOP && scroll_y == EDITOR_TEXT_TOP) {
                             editing_title = true;
                             title_changed = true; // Force title redraw
                             text_changed = true;  // Force redraw to hide body cursor
@@ -1327,18 +1454,16 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
             }
         }
 
+        // D-pad on the keyboard: rows and columns wrap around, the side column
+        // (CANCEL / SAVE / RETURN) is the last column, and the bottom row leads
+        // to the control keys under it
         if (BT6 == 0) { // RIGHT D-Pad
             delay_ms(30);
             if (BT6 == 0) {
                 update_entropy_coefficients();
-                if (cursor_idx <= 11) cursor_idx++;
-                else if (cursor_idx == 12) cursor_idx = 26; 
-                else if (cursor_idx == 26) cursor_idx = 28; 
-                else if (cursor_idx == 28) cursor_idx = 0;  
-                else if (cursor_idx >= 13 && cursor_idx <= 24) cursor_idx++;
-                else if (cursor_idx == 25) cursor_idx = 27; 
-                else if (cursor_idx == 27) cursor_idx = 29; 
-                else if (cursor_idx == 29) cursor_idx = 13; 
+                if (cursor_idx <= KBD_RETURN) {
+                    cursor_idx = kbd_key_at(kbd_key_row(cursor_idx), (kbd_key_col(cursor_idx) + 1) % (KBD_COLS + 1));
+                }
                 else if (cursor_idx == 30) cursor_idx = 31; 
                 else if (cursor_idx == 31) cursor_idx = 32; 
                 else if (cursor_idx == 32) cursor_idx = 30; 
@@ -1355,14 +1480,9 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
             delay_ms(30);
             if (BT2 == 0) {
                 update_entropy_coefficients();
-                if (cursor_idx == 0) cursor_idx = 28;       
-                else if (cursor_idx >= 1 && cursor_idx <= 12) cursor_idx--;
-                else if (cursor_idx == 26) cursor_idx = 12; 
-                else if (cursor_idx == 28) cursor_idx = 26; 
-                else if (cursor_idx == 13) cursor_idx = 29; 
-                else if (cursor_idx >= 14 && cursor_idx <= 25) cursor_idx--;
-                else if (cursor_idx == 27) cursor_idx = 25; 
-                else if (cursor_idx == 29) cursor_idx = 27; 
+                if (cursor_idx <= KBD_RETURN) {
+                    cursor_idx = kbd_key_at(kbd_key_row(cursor_idx), (kbd_key_col(cursor_idx) + KBD_COLS) % (KBD_COLS + 1));
+                }
                 else if (cursor_idx == 30) cursor_idx = 32; 
                 else if (cursor_idx == 31) cursor_idx = 30; 
                 else if (cursor_idx == 32) cursor_idx = 31; 
@@ -1379,20 +1499,15 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
             delay_ms(30);
             if (BT4 == 0) {
                 update_entropy_coefficients();
-                if (cursor_idx >= 0 && cursor_idx <= 12) cursor_idx += 13; 
-                else if (cursor_idx >= 13 && cursor_idx <= 15) cursor_idx = 30; 
-                else if (cursor_idx >= 16 && cursor_idx <= 18) cursor_idx = 31; 
-                else if (cursor_idx >= 19 && cursor_idx <= 25) cursor_idx = 32; 
-                else if (cursor_idx == 26) cursor_idx = 27; 
-                else if (cursor_idx == 27) cursor_idx = 32; 
-                else if (cursor_idx == 28) cursor_idx = 29; 
-                else if (cursor_idx == 29) cursor_idx = 32; 
-                else if (cursor_idx == 30) cursor_idx = 33; 
-                else if (cursor_idx == 31) cursor_idx = 34; 
-                else if (cursor_idx == 32) cursor_idx = 35; 
-                else if (cursor_idx == 33) cursor_idx = 0;  
-                else if (cursor_idx == 34) cursor_idx = 4;  
-                else if (cursor_idx == 35) cursor_idx = 9;  
+                if (cursor_idx <= KBD_RETURN) {
+                    int row = kbd_key_row(cursor_idx);
+                    int col = kbd_key_col(cursor_idx);
+                    cursor_idx = (row < KBD_ROWS - 1) ? kbd_key_at(row + 1, col) : kbd_control_below(col);
+                }
+                else if (cursor_idx >= 30 && cursor_idx <= 32) cursor_idx += 3;
+                else if (cursor_idx == 33) cursor_idx = kbd_key_at(0, 0);
+                else if (cursor_idx == 34) cursor_idx = kbd_key_at(0, 2);
+                else if (cursor_idx == 35) cursor_idx = kbd_key_at(0, 3);
                 
                 while(BT4 == 0) SYS_Tasks();
                 delay_ms(30);
@@ -1403,20 +1518,15 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
             delay_ms(30);
             if (BT5 == 0) {
                 update_entropy_coefficients();
-                if (cursor_idx >= 13 && cursor_idx <= 25) cursor_idx -= 13; 
-                else if (cursor_idx == 27) cursor_idx = 26; 
-                else if (cursor_idx == 29) cursor_idx = 28; 
-                else if (cursor_idx == 30) cursor_idx = 14; 
-                else if (cursor_idx == 31) cursor_idx = 17; 
-                else if (cursor_idx == 32) cursor_idx = 21; 
-                else if (cursor_idx == 33) cursor_idx = 30; 
-                else if (cursor_idx == 34) cursor_idx = 31; 
-                else if (cursor_idx == 35) cursor_idx = 32; 
-                else if (cursor_idx >= 0 && cursor_idx <= 3) cursor_idx = 33; 
-                else if (cursor_idx >= 4 && cursor_idx <= 8) cursor_idx = 34;
-                else if (cursor_idx >= 9 && cursor_idx <= 12) cursor_idx = 35;
-                else if (cursor_idx == 26) cursor_idx = 35; 
-                else if (cursor_idx == 28) cursor_idx = 35; 
+                if (cursor_idx <= KBD_RETURN) {
+                    int row = kbd_key_row(cursor_idx);
+                    int col = kbd_key_col(cursor_idx);
+                    cursor_idx = (row > 0) ? kbd_key_at(row - 1, col) : kbd_control_below(col) + 3;
+                }
+                else if (cursor_idx == 30) cursor_idx = kbd_key_at(KBD_ROWS - 1, 0);
+                else if (cursor_idx == 31) cursor_idx = kbd_key_at(KBD_ROWS - 1, 2);
+                else if (cursor_idx == 32) cursor_idx = kbd_key_at(KBD_ROWS - 1, 3);
+                else if (cursor_idx >= 33 && cursor_idx <= 35) cursor_idx -= 3;
                 
                 while(BT5 == 0) SYS_Tasks();
                 delay_ms(30);
@@ -3374,8 +3484,23 @@ void transition_to_sd_block(int sd_ptr) {
     estado = SEL_SD_BLOCK;
 }
 // Helper to transition to the MAIN screen
+// Edits the BIP39 passphrase on a copy, so CANCEL leaves the current one
+// untouched. Not inlined: the copy lives on the stack only during the call.
+static __attribute__((noinline)) bool edit_bip39_passphrase(void) {
+    char title[25] = "BIP39 PASSPHRASE:";
+    char draft[sizeof(bip84_passphrase)];
+    memcpy(draft, bip84_passphrase, sizeof(draft));
+    bool saved = full_text_editor(title, sizeof(title), draft, sizeof(draft), PASSPHRASE_MODE);
+    if (saved) memcpy(bip84_passphrase, draft, sizeof(draft));
+    memzero(draft, sizeof(draft));
+    return saved;
+}
+
 void transition_to_main(void) {
     black_screen();
+    memzero(bip84_passphrase, sizeof(bip84_passphrase)); // The seed is unloaded
+    memzero(&ms_wallet, sizeof(ms_wallet));
+    ms_wallet_loaded = false;
     // Invalidate the cache when returning to the main menu to prevent stale sessions
     bip84_account_cached = false;
     ms_account_cached = false;
@@ -3747,7 +3872,8 @@ typedef enum {
     PSBT_OWNER_VERIFIED,    // Key and script derived from our BIP84 account
     PSBT_OWNER_VERIFIED_MULTI,  // Our key in a P2WSH multisig input, verified
     PSBT_OWNER_MULTISIG_CHANGE, // Our key in a multisig output: cosigners not verified
-    PSBT_OWNER_MISMATCH     // Our fingerprint and path, but a different key or script
+    PSBT_OWNER_NOT_IN_WALLET,   // Our multisig path, but not the loaded wallet's script
+PSBT_OWNER_MISMATCH     // Our fingerprint and path, but a different key or script
 } psbt_owner_t;
 
 static bool psbt_fp_is_mine(uint32_t fingerprint) {
@@ -3834,6 +3960,39 @@ static bool psbt_multisig_key_matches(const psbt_keypath_t *kp, const uint8_t *s
     return match;
 }
 
+// Master fingerprint of a descriptor key, as the PSBT code stores it
+static uint32_t desc_key_fingerprint(const desc_key_t *k) {
+    return (uint32_t)k->fingerprint[0] << 24 | (uint32_t)k->fingerprint[1] << 16 |
+           (uint32_t)k->fingerprint[2] << 8 | k->fingerprint[3];
+}
+
+// The loaded multisig wallet applies to the seed and account on screen
+static bool ms_wallet_active(void) {
+    return ms_wallet_loaded && ms_account_cached && ms_wallet_account == bip84_account_index &&
+           memcmp(ms_wallet_seed_tag, bip84_seed_tag, sizeof(ms_wallet_seed_tag)) == 0;
+}
+
+// Witness script of wallet 'w' at change/index: every cosigner key derived
+// from its xpub (two public derivations each). Returns 0 on a bad key.
+static uint32_t ms_wallet_script(const desc_wallet_t *w, uint32_t change, uint32_t index, uint8_t *script) {
+    uint8_t keys[DESC_MAX_KEYS][33];
+    uint8_t chain[32];
+    for (uint8_t i = 0; i < w->key_count; i++) {
+        if (!psbt_public_ckd(w->keys[i].chain_code, w->keys[i].public_key, change, chain, keys[i]) ||
+            !psbt_public_ckd(chain, keys[i], index, chain, keys[i])) {
+            return 0;
+        }
+    }
+    return desc_witness_script((const uint8_t (*)[33])keys, w->key_count, w->threshold, w->sorted, script);
+}
+
+// True if 'script' pays to the loaded wallet at the path's change/index
+static bool ms_wallet_matches(const psbt_keypath_t *kp, const uint8_t *script, uint32_t script_len) {
+    uint8_t ws[3 + 34 * DESC_MAX_KEYS];
+    uint32_t len = ms_wallet_script(&ms_wallet, psbt_path_element(kp, 4), psbt_path_element(kp, 5), ws);
+    return len > 0 && psbt_p2wsh_matches(script, script_len, ws, len);
+}
+
 // Classifies an input (is_input) or output and returns in 'shown' the
 // derivation to display: ours if present, else the first one
 static psbt_owner_t psbt_check_owner(const psbt_t *psbt, bool is_input, uint32_t index,
@@ -3857,8 +4016,14 @@ static psbt_owner_t psbt_check_owner(const psbt_t *psbt, bool is_input, uint32_t
             return psbt_bip84_key_matches(&kp, script, script_len) ? PSBT_OWNER_VERIFIED : PSBT_OWNER_MISMATCH;
         }
         if (psbt_is_multisig_path(&kp)) {
-            if (!is_input) return PSBT_OWNER_MULTISIG_CHANGE;   // Needs the wallet descriptor
             if (!ms_account_cached) return PSBT_OWNER_FP_ONLY;  // Multisig mode not active
+            if (ms_wallet_active()) {
+                // With the wallet descriptor every cosigner key is checked
+                if (!ms_wallet_matches(&kp, script, script_len)) return PSBT_OWNER_NOT_IN_WALLET;
+                if (!is_input) return PSBT_OWNER_VERIFIED_MULTI;
+            } else if (!is_input) {
+                return PSBT_OWNER_MULTISIG_CHANGE;              // Needs the wallet descriptor
+            }
             return psbt_multisig_key_matches(&kp, script, script_len, witness_script, witness_len) ?
                    PSBT_OWNER_VERIFIED_MULTI : PSBT_OWNER_MISMATCH;
         }
@@ -3903,10 +4068,18 @@ static void psbt_view_owner(int y, psbt_owner_t owner, const psbt_keypath_t *kp,
             drawtext(5, y, text, ST7735_GREEN, ST7735_BLACK, 1);
             break;
         case PSBT_OWNER_VERIFIED_MULTI:
-            drawtext(5, y, "MINE, MULTISIG (VERIFIED)", ST7735_GREEN, ST7735_BLACK, 1);
+            if (!is_output) {
+                strcpy(text, "MINE, MULTISIG (VERIFIED)");
+            } else {
+                strcpy(text, (psbt_path_element(kp, 4) == 1) ? "MULTISIG CHANGE VERIFIED" : "MULTISIG RECEIVE VERIFIED");
+            }
+            drawtext(5, y, text, ST7735_GREEN, ST7735_BLACK, 1);
             break;
         case PSBT_OWNER_MULTISIG_CHANGE:
             drawtext(5, y, "MULTISIG, NOT VERIFIED", ST7735_YELLOW, ST7735_BLACK, 1);
+            break;
+        case PSBT_OWNER_NOT_IN_WALLET:
+            drawtext(5, y, "NOT IN LOADED WALLET", is_output ? ST7735_YELLOW : ST7735_RED, ST7735_BLACK, 1);
             break;
         default:
             drawtext(5, y, "KEY MISMATCH! NOT YOURS", ST7735_RED, ST7735_BLACK, 1);
@@ -4071,8 +4244,10 @@ static void psbt_view_input(const psbt_t *psbt, uint32_t index) {
                  ST7735_CYAN, ST7735_BLACK, 1);
     }
 
+    if (ms_wallet_active()) drawtext(5, 45, "CHECKING COSIGNERS...", ST7735_CYAN, ST7735_BLACK, 1);
     psbt_owner_t owner = psbt_check_owner(psbt, true, index, in.script, in.script_len,
                                           in.witness_script, in.witness_script_len, &kp);
+    rectan(0, 45, 159, 53, ST7735_BLACK);
     psbt_view_owner(45, owner, &kp, false);
 
     // Signing state and sighash, e.g. "SIGS:1 SIGHASH:ALL" (fits one line)
@@ -4119,8 +4294,10 @@ static void psbt_view_output(const psbt_t *psbt, uint32_t index) {
     psbt_view_address(out.script, out.script_len, addr);
     draw_bip84_wrapped_text(addr, 5, 27, PSBT_VIEW_LINE_CHARS, 3);
 
+    if (ms_wallet_active()) drawtext(5, 59, "CHECKING COSIGNERS...", ST7735_CYAN, ST7735_BLACK, 1);
     psbt_owner_t owner = psbt_check_owner(psbt, false, index, out.script, out.script_len,
                                           out.witness_script, out.witness_script_len, &kp);
+    rectan(0, 59, 159, 67, ST7735_BLACK);
     psbt_view_owner(59, owner, &kp, true);
 
     psbt_view_multisig(88, psbt, false, index, out.witness_script, out.witness_script_len,
@@ -4261,62 +4438,226 @@ static uint32_t psbt_sd_load(const char *name, uint32_t file_size, uint8_t *buf,
     return len;
 }
 
-// Lists .PSB/.TXT files in the SD root and shows the selected PSBT.
-// OK = open, UP/DOWN = move, BACK = exit.
-static void load_psbt_from_sd(void) {
-    char name[SD_FILES_NAME_LEN];
+// Lists the files of the SD root with one of 'exts', with their sizes.
+// UP/DOWN move, OK picks the file (name, size and *sel set, true), BACK
+// returns false. No card or no file is explained on screen.
+static bool sd_pick_file(const char *title, const char *none_title, const char *none_detail,
+                         const char *const *exts, uint32_t ext_count,
+                         uint32_t *sel, char *name, uint32_t *size) {
     char line[32];
     char num[12];
-    char err[24];
-    uint32_t size, count = 0, sel = 0;
+    char text[24];
+    uint32_t count = 0;
 
     black_screen();
     drawtext(5, 5, "READING SD CARD...", ST7735_YELLOW, ST7735_BLACK, 1);
     if (!sd_files_mount()) {
         psbt_sd_message("SD CARD ERROR", "NO CARD OR NOT FAT16");
-        return;
+        return false;
     }
-    while (count < 99 && sd_files_find(count, psbt_sd_exts, 2, name, &size)) count++;
+    while (count < 99 && sd_files_find(count, exts, ext_count, name, size)) count++;
     if (count == 0) {
-        psbt_sd_message("NO PSBT FILES", "NEED .PSB OR .TXT FILE");
-        return;
+        strcpy(line, none_title);
+        strcpy(text, none_detail);
+        psbt_sd_message(line, text);
+        return false;
     }
+    if (*sel >= count) *sel = 0;
 
     while (1) {
         black_screen();
-        drawtext(5, 5, "SELECT PSBT FILE", ST7735_YELLOW, ST7735_BLACK, 1);
-        uint32_t first = sel - sel % PSBT_SD_LIST_ROWS;
+        strcpy(text, title);
+        drawtext(5, 5, text, ST7735_YELLOW, ST7735_BLACK, 1);
+        uint32_t first = *sel - *sel % PSBT_SD_LIST_ROWS;
         for (uint32_t i = 0; i < PSBT_SD_LIST_ROWS && first + i < count; i++) {
-            if (!sd_files_find(first + i, psbt_sd_exts, 2, name, &size)) break;
+            if (!sd_files_find(first + i, exts, ext_count, name, size)) break;
             strcpy(line, name);
             strcat(line, " ");
-            fast_itoa(size, num);
+            fast_itoa(*size, num);
             strcat(line, num);
             strcat(line, "B");
-            drawtext(5, 17 + i * 10, line, (first + i == sel) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+            drawtext(5, 17 + i * 10, line, (first + i == *sel) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
         }
         drawtext(5, 118, "OK=OPEN UP/DN BACK=EXIT", ST7735_WHITE, ST7735_BLACK, 1);
 
         int key = psbt_wait_key();
-        if (key == BACK_BT) break;
+        if (key == BACK_BT) return false;
         if (key == UP_BT) {
-            sel = (sel == 0) ? count - 1 : sel - 1;
+            *sel = (*sel == 0) ? count - 1 : *sel - 1;
         } else if (key == DOWN_BT) {
-            sel = (sel + 1) % count;
-        } else if (sd_files_find(sel, psbt_sd_exts, 2, name, &size)) {
-            black_screen();
-            drawtext(5, 5, "LOADING PSBT...", ST7735_YELLOW, ST7735_BLACK, 1);
-            uint32_t buf_size;
-            uint8_t *buf = fountain_scratch_buffer(&buf_size);
-            uint32_t len = psbt_sd_load(name, size, buf, buf_size, err);
-            if (len == 0) {
-                psbt_sd_message("LOAD ERROR", err);
-            } else {
-                psbt_review_and_sign(buf, len, buf_size);
-            }
+            *sel = (*sel + 1) % count;
+        } else if (sd_files_find(*sel, exts, ext_count, name, size)) {
+            return true;
+        }
+    }
+}
+
+// Lists .PSB/.TXT files in the SD root and shows the selected PSBT.
+// OK = open, UP/DOWN = move, BACK = exit.
+static void load_psbt_from_sd(void) {
+    char name[SD_FILES_NAME_LEN];
+    char err[24];
+    uint32_t size, sel = 0;
+
+    while (sd_pick_file("SELECT PSBT FILE", "NO PSBT FILES", "NEED .PSB OR .TXT FILE",
+                        psbt_sd_exts, 2, &sel, name, &size)) {
+        black_screen();
+        drawtext(5, 5, "LOADING PSBT...", ST7735_YELLOW, ST7735_BLACK, 1);
+        uint32_t buf_size;
+        uint8_t *buf = fountain_scratch_buffer(&buf_size);
+        uint32_t len = psbt_sd_load(name, size, buf, buf_size, err);
+        if (len == 0) {
+            psbt_sd_message("LOAD ERROR", err);
+        } else {
+            psbt_review_and_sign(buf, len, buf_size);
         }
     }
     while (BT1 == 0) SYS_Tasks();   // Do not let BACK reach the menu state machine
+}
+
+// ============================================================================
+// Multisig wallet descriptor import
+// ============================================================================
+
+static const char *const desc_sd_exts[] = {"TXT"};
+
+// Shows a parsed wallet before loading it: policy, checksum, cosigner
+// fingerprints (ours in green) and its first receive address, to compare
+// with the wallet software. Returns true on OK, false on BACK.
+static bool desc_review(const desc_wallet_t *w, int mine) {
+    char line[32];
+    char num[12];
+    char addr[76];
+    uint8_t ws[3 + 34 * DESC_MAX_KEYS];
+    uint8_t prog[32];
+    SHA256_CTX ctx;
+
+    black_screen();
+    drawtext(5, 5, "MULTISIG WALLET", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(5, 17, "DERIVING ADDRESS...", ST7735_CYAN, ST7735_BLACK, 1);
+    uint32_t len = ms_wallet_script(w, 0, 0, ws);
+    bool addr_ok = len > 0;
+    if (addr_ok) {
+        sha256_init(&ctx);
+        sha256_update(&ctx, ws, len);
+        sha256_final(&ctx, prog);
+        addr_ok = segwit_addr_encode(addr, "bc", 0, prog, 32) == 1;
+    }
+    rectan(0, 15, 159, 127, ST7735_BLACK);
+
+    fast_itoa(w->threshold, line);
+    strcat(line, " OF ");
+    fast_itoa(w->key_count, num);
+    strcat(line, num);
+    strcat(line, w->sorted ? " SORTEDMULTI" : " MULTI");
+    drawtext(5, 17, line, ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 27, w->has_checksum ? "CHECKSUM OK" : "NO CHECKSUM",
+             w->has_checksum ? ST7735_GREEN : ST7735_YELLOW, ST7735_BLACK, 1);
+    for (int i = 0; i < w->key_count; i++) {
+        psbt_format_fingerprint(desc_key_fingerprint(&w->keys[i]), line);
+        drawtext(1 + (i % 3) * 54, 39 + (i / 3) * 10, line, (i == mine) ? ST7735_GREEN : ST7735_WHITE, ST7735_BLACK, 1);
+    }
+    if (!addr_ok) {
+        drawtext(5, 71, "BAD COSIGNER KEY", ST7735_RED, ST7735_BLACK, 1);
+        drawtext(5, 118, "BACK=CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
+        while (psbt_wait_key() != BACK_BT) {}
+        return false;
+    }
+    drawtext(5, 71, "RECEIVE 0, COMPARE:", ST7735_CYAN, ST7735_BLACK, 1);
+    draw_bip84_wrapped_text(addr, 5, 81, PSBT_VIEW_LINE_CHARS, 3);
+    drawtext(5, 118, "OK=LOAD  BACK=CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
+
+    int key;
+    do {
+        key = psbt_wait_key();
+    } while (key != OK_BT && key != BACK_BT);
+    return key == OK_BT;
+}
+
+// IMPORT DESCRIPTOR: reads a descriptor or Coldcard setup file (.TXT) from
+// the SD card, checks that this seed's multisig key at the current account
+// is one of the cosigners, shows it and loads it on OK. Not inlined: the
+// parsed copy lives on the stack only during the call.
+static __attribute__((noinline)) void import_descriptor_from_sd(void) {
+    char name[SD_FILES_NAME_LEN];
+    char text[24];
+    char num[12];
+    uint32_t size, sel = 0;
+    int32_t got;
+    desc_wallet_t w;
+
+    if (!sd_pick_file("SELECT DESCRIPTOR", "NO TEXT FILES", "NEED A .TXT FILE",
+                      desc_sd_exts, 1, &sel, name, &size)) {
+        while (BT1 == 0) SYS_Tasks();
+        return;
+    }
+    black_screen();
+    drawtext(5, 5, "READING DESCRIPTOR", ST7735_YELLOW, ST7735_BLACK, 1);
+    uint32_t buf_size, len = 0;
+    char *buf = (char *)fountain_scratch_buffer(&buf_size);
+    if (size >= buf_size) {
+        psbt_sd_message("LOAD ERROR", "FILE TOO BIG");
+        return;
+    }
+    if (!sd_files_open(name)) {
+        psbt_sd_message("LOAD ERROR", "CANNOT OPEN FILE");
+        return;
+    }
+    while ((got = sd_files_read(&buf[len], buf_size - len)) > 0) len += (uint32_t)got;
+    if (got < 0) {
+        psbt_sd_message("LOAD ERROR", "SD READ ERROR");
+        return;
+    }
+
+    desc_result_t r = desc_parse(buf, len, &w);
+    if (r != DESC_OK) {
+        strcpy(text, desc_error_text(r));
+        psbt_sd_message("DESCRIPTOR REFUSED", text);
+        return;
+    }
+
+    // Our cosigner key: the xpub of m/48'/0'/account'/2' of this seed
+    int mine = -1, mine_fp = -1;
+    for (int i = 0; i < w.key_count; i++) {
+        if (memcmp(w.keys[i].public_key, ms_account_node.public_key, 33) == 0 &&
+            memcmp(w.keys[i].chain_code, ms_account_node.chain_code, 32) == 0) {
+            mine = i;
+        } else if (desc_key_fingerprint(&w.keys[i]) == bip84_master_fingerprint) {
+            mine_fp = i;
+        }
+    }
+    if (mine < 0) {
+        const desc_key_t *k = (mine_fp >= 0) ? &w.keys[mine_fp] : NULL;
+        if (k != NULL && k->origin_len == 4 && k->origin[0] == (48 | 0x80000000u) &&
+            k->origin[1] == 0x80000000u && k->origin[3] == (2 | 0x80000000u) &&
+            (k->origin[2] & 0x7FFFFFFFu) != bip84_account_index) {
+            strcpy(text, "SWITCH TO ACCOUNT ");
+            fast_itoa(k->origin[2] & 0x7FFFFFFFu, num);
+            strcat(text, num);
+        } else {
+            // Our fingerprint with another key: usually another passphrase
+            strcpy(text, (k != NULL) ? "MY KEY DOES NOT MATCH" : "MY KEY IS NOT IN IT");
+        }
+        psbt_sd_message("DESCRIPTOR REFUSED", text);
+        return;
+    }
+
+    if (desc_review(&w, mine)) {
+        ms_wallet = w;
+        ms_wallet_loaded = true;
+        memcpy(ms_wallet_seed_tag, bip84_seed_tag, sizeof(ms_wallet_seed_tag));
+        ms_wallet_account = bip84_account_index;
+        black_screen();
+        drawtext(5, 5, "DESCRIPTOR LOADED", ST7735_GREEN, ST7735_BLACK, 1);
+        drawtext(5, 25, "MULTISIG CHANGE IS NOW", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 35, "CHECKED AGAINST ALL", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 45, "COSIGNER KEYS.", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 65, "KEPT UNTIL THE SEED", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 75, "IS UNLOADED", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 118, "PRESS ANY KEY", ST7735_WHITE, ST7735_BLACK, 1);
+        psbt_wait_key();
+    }
+    while (BT1 == 0 || BT_OK == 0) SYS_Tasks();
 }
 
 // ============================================================================
@@ -4390,7 +4731,7 @@ typedef struct {
     const char *refuse;         // Reason not to sign, NULL if signing is allowed
     bool amounts_unverified;    // Some input amount is not committed by a txid
     bool high_change_index;
-    bool change_unverified;     // Multisig change: counted as sent until descriptors exist
+    bool change_unverified;     // Multisig change without a descriptor: counted as sent
 } psbt_sign_plan_t;
 
 // Coin type 1' (testnet/signet) in a BIP44-style path
@@ -4503,6 +4844,10 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
             plan->refuse = "INPUT KEY MISMATCH";
             return;
         }
+        if (owner == PSBT_OWNER_NOT_IN_WALLET) {
+            plan->refuse = "INPUT NOT IN WALLET";      // Another wallet's descriptor is loaded
+            return;
+        }
         uint32_t account = 0;
         bool single_path = psbt_bip84_path(&kp, &account);
         bool multi_path = !single_path && psbt_multisig_path(&kp, &account);
@@ -4544,7 +4889,8 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
 
     for (uint32_t o = 0; o < psbt->output_count; o++) {
         psbt_count_label("OUTPUT ", o, psbt->output_count, label);
-        psbt_progress_step(label, NULL, "CHANGE KEYS", psbt->input_count + o, checks);
+        psbt_progress_step(label, NULL, ms_wallet_active() ? "COSIGNER KEYS" : "CHANGE KEYS",
+                           psbt->input_count + o, checks);
         if (!psbt_get_output(psbt, o, &out)) {
             plan->refuse = "PSBT READ ERROR";
             return;
@@ -4558,6 +4904,9 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
         if (owner == PSBT_OWNER_VERIFIED) {
             plan->change += out.amount;
             if (psbt_path_element(&kp, 4) > PSBT_HIGH_CHANGE_INDEX) plan->high_change_index = true;
+        } else if (owner == PSBT_OWNER_VERIFIED_MULTI) {
+            plan->change += out.amount;             // Every cosigner key checked
+            if (psbt_path_element(&kp, 5) > PSBT_HIGH_CHANGE_INDEX) plan->high_change_index = true;
         } else if (owner == PSBT_OWNER_MULTISIG_CHANGE) {
             plan->send += out.amount;
             plan->change_unverified = true;
@@ -4605,6 +4954,16 @@ static bool psbt_confirm_signing(const psbt_t *psbt, const psbt_sign_plan_t *pla
     }
     if (plan->change_unverified) {
         drawtext(5, y, "CHANGE NOT VERIFIED", ST7735_YELLOW, ST7735_BLACK, 1);
+        drawtext(5, y + 10, "IMPORT DESCRIPTOR FIRST", ST7735_YELLOW, ST7735_BLACK, 1);
+    } else if (bip84_multisig_mode && ms_wallet_active()) {
+        strcpy(line, "WALLET ");
+        fast_itoa(ms_wallet.threshold, num);
+        strcat(line, num);
+        strcat(line, "-OF-");
+        fast_itoa(ms_wallet.key_count, num);
+        strcat(line, num);
+        strcat(line, " CHECKED");
+        drawtext(5, y, line, ST7735_CYAN, ST7735_BLACK, 1);
     }
     drawtext(5, 118, "OK=SIGN  BACK=CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
 
@@ -7377,9 +7736,8 @@ int main ( void ){
                 switch (pulsed_bt) {
                     case OK_BT:
                         if (bip84_option() == cBIP84_PASSPHRASE) {
-                            char pass_title[25] = "BIP39 PASSPHRASE:";
-                            // Open text editor. Returns true if user selects SAVE
-                            if (full_text_editor(pass_title, 25, bip84_passphrase, 200, PASSPHRASE_MODE)) {
+                            // Open text editor on a copy. Returns true if user selects SAVE
+                            if (edit_bip39_passphrase()) {
                                 // Invalidate cache to force a new derivation with the passphrase
                                 bip84_account_cached = false;
                                 ms_account_cached = false;
@@ -7430,13 +7788,11 @@ int main ( void ){
                             print_bip84_menu();
                             pulsed_bt = NONE;
                         } else if (bip84_option() == cBIP84_DESCRIPTOR) {
-                            // TODO: import the multisig wallet descriptor (cosigner xpubs)
-                            // so multisig change can be verified
-                            black_screen();
-                            drawtext(1, 20, "NOT IMPLEMENTED YET", ST7735_RED, ST7735_BLACK, 1);
-                            delay_ms(1500);
+                            // Cosigner xpubs, so multisig change can be verified
+                            import_descriptor_from_sd();
                             black_screen();
                             print_bip84_menu();
+                            pulsed_bt = NONE;
                         } else {
                             print_bip84_info_screen();
                         }

@@ -57,4 +57,11 @@ bool psbt_prev_tx_matches(const psbt_input_t *in);
 bool psbt_ecdsa_sign(const uint8_t priv_key[32], const uint8_t pub_key[33], const uint8_t digest[32],
                      uint8_t sighash_type, uint8_t *sig, uint32_t *sig_len, void (*on_verify)(void));
 
+// BIP32 public child derivation (non-hardened index) of an extended public
+// key given as chain code and compressed key. The outputs may be the input
+// buffers. Derives the cosigner keys of a multisig descriptor. Returns false
+// for a hardened index or an invalid key.
+bool psbt_public_ckd(const uint8_t chain_code[32], const uint8_t public_key[33], uint32_t index,
+                     uint8_t child_chain[32], uint8_t child_key[33]);
+
 #endif // PSBT_SIGN_H
