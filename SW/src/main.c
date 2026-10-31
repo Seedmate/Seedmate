@@ -214,6 +214,7 @@ int sss_pointer = 0;
 int resource_pointer = 0;
 uint8_t  selected_share_id = 1;
 int shares_loaded = 0;
+int SSS_K = 2;                  // Shamir threshold k
 
 int bip85_size = cSIZE_12;
 int bip85_index = 0;
@@ -287,7 +288,8 @@ BYTE xor_merge_word1[32] = {0};
 BYTE xor_merge_word2[32] = {0};
 BYTE xor_merge_word3[32] = {0};
 int xor_merge_words_available = 0;
-int xor_merge_size = 0;         // Seed size of the first XOR input: QR inputs must match it
+int multi_input_size = 0;       // XOR / Shamir merge: seed size of the first input, the rest must match
+uint8_t multi_sources[8];       // XOR / Shamir merge: source of each loaded input (cKEYBOARD, cFROMSD, cQRSCAN)
 
 int extract_word_offset = 0;
 int triple_view_state = 0;
@@ -3566,10 +3568,103 @@ void transition_to_main(void) {
 }
 
 // Helper to transition to the SEL_INPUT screen
+// XOR and Shamir merge take several seeds, each one from its own source
+static bool multi_input_mode(void) {
+    return main_pointer == cMAIN_XOR || (main_pointer == cMAIN_SSS && sss_pointer == cMERGE);
+}
+
+// Inputs already stored, and inputs needed
+static int multi_input_count(void) {
+    return (main_pointer == cMAIN_XOR) ? xor_merge_words_available : shares_loaded;
+}
+
+static int multi_input_total(void) {
+    return (main_pointer == cMAIN_XOR) ? xor_pointer + 2 : SSS_K;
+}
+
+// Source menu. For XOR and Shamir merge the title says which input is next
+// ("SEED 2 OF 3 FROM") and the inputs already loaded are listed with their source.
+static void print_input_menu(int sel_ptr) {
+    char text[28];
+    char num[12];
+
+    if (!multi_input_mode()) {
+        print_generic_menu(menu_input, cSELINPUT_n_opt, sel_ptr);
+        return;
+    }
+    int n = multi_input_count();
+    strcpy(text, (main_pointer == cMAIN_XOR) ? "SEED " : "SHARE ");
+    fast_itoa((uint32_t)n + 1, num);
+    strcat(text, num);
+    strcat(text, " OF ");
+    fast_itoa((uint32_t)multi_input_total(), num);
+    strcat(text, num);
+    strcat(text, " FROM");
+    print_titled_menu(text, menu_input, cSELINPUT_n_opt, sel_ptr);
+    for (int i = 0; i < n && i < 6; i++) {
+        fast_itoa((uint32_t)i + 1, text);
+        strcat(text, " ");
+        strcat(text, menu_input[multi_sources[i]]);
+        drawtext(5, 48 + i * 9, text, ST7735_GREEN, ST7735_BLACK, 1);
+    }
+}
+
 void transition_to_input(int sel_ptr) {
     black_screen();
-    print_generic_menu(menu_input, cSELINPUT_n_opt, sel_ptr);
+    print_input_menu(sel_ptr);
     estado = SEL_INPUT;
+}
+
+#define MULTI_MORE          0   // Stored; the next input is needed
+#define MULTI_DONE          1   // Last input: the result is in data_array_256b
+#define MULTI_WRONG_SIZE    2   // Not the size of the first input
+#define MULTI_SHAMIR_ERROR  3
+
+// Stores the seed just loaded (data_array_256b, size_pointer) as the next XOR
+// input or Shamir share, read from 'source'. After the last one the result is
+// computed into data_array_256b. The same step for keyboard, SD and QR.
+static int multi_input_store(int source, uint8_t **shares_input, uint8_t *share_indices,
+                             uint8_t *sss_result, size_t len) {
+    int n = multi_input_count();
+    if (n > 0 && size_pointer != multi_input_size) return MULTI_WRONG_SIZE;
+    if (n == 0) multi_input_size = size_pointer;
+    if (n < (int)sizeof(multi_sources)) multi_sources[n] = (uint8_t)source;
+
+    if (main_pointer == cMAIN_XOR) {
+        if (xor_merge_words_available <= xor_pointer) {
+            BYTE *slot = (xor_merge_words_available == 0) ? xor_merge_word1 :
+                         (xor_merge_words_available == 1) ? xor_merge_word2 : xor_merge_word3;
+            memcpy(slot, data_array_256b, 32);
+            xor_merge_words_available++;
+            return MULTI_MORE;
+        }
+        for (int i = 0; i < 16 + size_pointer * 16; i++) {
+            data_array_256b[i] ^= xor_merge_word1[i] ^ xor_merge_word2[i] ^ xor_merge_word3[i];
+        }
+        return MULTI_DONE;
+    }
+
+    memcpy(shares_input[shares_loaded], data_array_256b, 32);
+    share_indices[shares_loaded] = selected_share_id;
+    shares_loaded++;
+    if (shares_loaded < SSS_K) {
+        if (selected_share_id < cN_MAX) selected_share_id++;    // Suggest the next ID
+        return MULTI_MORE;
+    }
+    if (!shamir_interpolate(sss_result, 0, share_indices, shares_input, (uint8_t)SSS_K, len)) return MULTI_SHAMIR_ERROR;
+    memcpy(data_array_256b, sss_result, 32);
+    return MULTI_DONE;
+}
+
+// Forgets and wipes every stored input (start, cancel, or after the result)
+static void multi_input_wipe(uint8_t **shares_input, uint8_t *sss_result, size_t len) {
+    memzero(xor_merge_word1, sizeof(xor_merge_word1));
+    memzero(xor_merge_word2, sizeof(xor_merge_word2));
+    memzero(xor_merge_word3, sizeof(xor_merge_word3));
+    xor_merge_words_available = 0;
+    for (int i = 0; i < cN_MAX; i++) memzero(shares_input[i], len);
+    memzero(sss_result, len);
+    shares_loaded = 0;
 }
 
 // Helper to transition to the SEL_SIZE screen
@@ -6112,8 +6207,7 @@ int main ( void ){
     int BT5_ST= 1;
     int BT6_ST= 1;
 
-    int SSS_K = 2;
-    int SSS_N = 9;
+int SSS_N = 9;
     int sel_K_N = 0;
     int SDblock_pointer = 0;
     int selinput_pointer = 0;
@@ -6766,14 +6860,7 @@ int main ( void ){
                         }   else {
                             entropy_bits = cENTROPY_BITS24W;
                         }
-                        if (main_pointer==cMAIN_XOR) { // XOR stuff
-                            xor_merge_words_available=0; // Reset
-                            for (int i = 0; i < 32; i++){
-                                xor_merge_word1[i] = 0;
-                                xor_merge_word2[i] = 0;
-                                xor_merge_word3[i] = 0;
-                            }
-
+                        if (main_pointer==cMAIN_XOR) { // First XOR input from the keyboard
                             if (selinput_pointer==cKEYBOARD)	{
                                 black_screen();
                                 estado = WRITE_WORD;
@@ -6789,7 +6876,6 @@ int main ( void ){
                                 sel_sd_block_screen_generic(SDblock_pointer);
                             }
                         }else if ((main_pointer==cMAIN_SSS) & (sss_pointer==cMERGE)){
-                            shares_loaded = 0;
                             black_screen();
                             print_sel_share_screen(selected_share_id);
                             estado = SEL_SHARE;
@@ -6883,6 +6969,7 @@ int main ( void ){
             case SEL_XOR:
                 switch (pulsed_bt) {
                     case OK_BT:
+                        multi_input_wipe(shares_input, SSS_result, LEN);
                         transition_to_input(selinput_pointer);
                         break;
                     case BACK_BT:
@@ -7099,36 +7186,19 @@ int main ( void ){
                         {
                             int sd_status = load_and_verify_sd_slot(SDblock_pointer + SD_page * cSDBLOCK_n_opt);
                             if (sd_status == 0) {
-                                // Check size
-                                if (buffer[cSD_SIZE_ADDR]==size_pointer){
-                                    drawtext(70, 20 + 10*SDblock_pointer, "XOR INPUT OK", ST7735_GREEN, ST7735_BLACK, 1);
-                                    if (xor_merge_words_available <= xor_pointer){
-                                        for (int i = 0; i < 32; i++) {
-                                            if (xor_merge_words_available==0){
-                                                xor_merge_word1[i] = data_array_256b[i];
-                                            } else if (xor_merge_words_available==1){
-                                                xor_merge_word2[i] = data_array_256b[i];
-                                            } else if (xor_merge_words_available==2){
-                                                xor_merge_word3[i] = data_array_256b[i];
-                                            }
-                                        }
-                                        xor_merge_words_available++;
-                                        pulsed_bt = NONE;
-                                        break;
-                                    } else { // We have everything
-                                        black_screen();
-                                        for (int i = 0; i < 16 + 16*size_pointer; i++) {
-                                            data_array_256b[i] = data_array_256b[i] ^ xor_merge_word1[i]^ xor_merge_word2[i]^ xor_merge_word3[i];
-                                        }
-                                        redraw_show_seed_with_offset();
-                                        break;
-
-                                    }
-                                }else{
+                                size_pointer = buffer[cSD_SIZE_ADDR];
+                                int r = multi_input_store(cFROMSD, shares_input, share_indices, SSS_result, LEN);
+                                if (r == MULTI_WRONG_SIZE) {
                                     drawtext(70, 20 + 10*SDblock_pointer, "WRONG SIZE", ST7735_RED, ST7735_BLACK, 1);
-                                    break;
+                                } else if (r == MULTI_MORE) {
+                                    transition_to_input(selinput_pointer);  // Next input, any source
+                                } else {
+                                    multi_input_wipe(shares_input, SSS_result, LEN);
+                                    black_screen();
+                                    redraw_show_seed_with_offset();
                                 }
-
+                                pulsed_bt = NONE;
+                                break;
                             } else if (sd_status == 2) {// Checksum error
                                 drawtext(70, 20 + 10*SDblock_pointer, "NO SEED", ST7735_RED, ST7735_BLACK, 1);
                                 break;
@@ -7143,7 +7213,7 @@ int main ( void ){
                         }
 
                     case BACK_BT:
-                        transition_to_size();
+                        transition_to_input(selinput_pointer);  // Another source for this input
                         break;
                     case UP_BT:
                         if ((SDblock_pointer == 0) & (SD_page >0)){// Page down and point to slot 8
@@ -7191,38 +7261,24 @@ int main ( void ){
                             }
                             int sd_status = load_and_verify_sd_slot(SDblock_pointer + SD_page * cSDBLOCK_n_opt);
                             if (sd_status == 0) {
-                                // Load size from the first share and validate the rest.
-                                if (shares_loaded==0){
-                                    size_pointer=buffer[cSD_SIZE_ADDR];
-                                }else if (buffer[cSD_SIZE_ADDR]!=size_pointer){
+                                size_pointer = buffer[cSD_SIZE_ADDR];
+                                int r = multi_input_store(cFROMSD, shares_input, share_indices, SSS_result, LEN);
+                                if (r == MULTI_WRONG_SIZE) {
                                     drawtext(70, 20 + 10*SDblock_pointer, "WRONG SIZE", ST7735_RED, ST7735_BLACK, 1);
-                                    break;
-                                }
-                                // Everything is valid; store the share.
-                                for (int i = 0; i < 32; i++) {
-                                        shares_input[shares_loaded][i] = data_array_256b[i];
-                                }
-                                share_indices[shares_loaded] = selected_share_id;
-                                shares_loaded++;
-                                drawtext(70, 20 + 10*SDblock_pointer,  "SHARE OK   ", ST7735_GREEN, ST7735_BLACK, 1);
-
-                                if (shares_loaded >= (SSS_K)) { // We already have K shares
+                                } else if (r == MULTI_MORE) {
+                                    transition_to_input(selinput_pointer);  // Next share, any source
+                                } else if (r == MULTI_SHAMIR_ERROR) {
+                                    multi_input_wipe(shares_input, SSS_result, LEN);
                                     black_screen();
-                                    if (!shamir_interpolate(SSS_result,0,share_indices, shares_input,SSS_K,LEN)){
-                                        drawtext(5,39, "SHAMIR ERROR", ST7735_RED, ST7735_BLACK, 1);
-                                        grid_OK_back();
-                                        estado = END_MODE;
-                                        break;
-                                    }
-                                    for (int i = 0; i < 32; i++) data_array_256b[i]=SSS_result[i]; // Move result to data array
-                                    redraw_show_seed_with_offset();
-                                    break;
-
+                                    drawtext(5, 39, "SHAMIR ERROR", ST7735_RED, ST7735_BLACK, 1);
+                                    grid_OK_back();
+                                    estado = END_MODE;
                                 } else {
-                                    if (selected_share_id < cN_MAX) selected_share_id++;
-                                    sel_sd_block_screen_merge(SDblock_pointer, selected_share_id);
-                                    break;
+                                    multi_input_wipe(shares_input, SSS_result, LEN);
+                                    black_screen();
+                                    redraw_show_seed_with_offset();
                                 }
+                                break;
                             } else if (sd_status == 2) {// Checksum error
                                 drawtext(70, 20 + 10*SDblock_pointer, "NO SEED FOUND", ST7735_RED, ST7735_BLACK, 1);
                                 break;
@@ -7237,7 +7293,7 @@ int main ( void ){
                         }
 
                     case BACK_BT:
-                        transition_to_size();
+                        transition_to_input(selinput_pointer);  // Another source for this input
                         break;
                     case UP_BT:
                         if ((SDblock_pointer == 0) & (SD_page >0)){// Page down and point to slot 8
@@ -7275,6 +7331,48 @@ int main ( void ){
            case SEL_INPUT:
                 switch (pulsed_bt) {
                     case OK_BT:
+                        if (multi_input_mode()) {
+                            // XOR / Shamir merge: this input from the chosen source
+                            black_screen();
+                            if (main_pointer == cMAIN_XOR) {
+                                if (selinput_pointer == cKEYBOARD) {
+                                    if (xor_merge_words_available == 0) {
+                                        transition_to_size();       // The first input sets the size
+                                    } else {
+                                        size_pointer = multi_input_size;
+                                        entropy_bits = (size_pointer == cSIZE_12) ? cENTROPY_BITS12W : cENTROPY_BITS24W;
+                                            estado = WRITE_WORD;
+                                            word_number = 1;
+                                            lt_idx = 0;
+                                            clear_string(word);
+                                            found = refresh_word_input_preview(word, result, sizeof(result), &found_bool);
+                                            print_word_number_top(word_number, word_number_text);
+                                            print_previous_confirmed_word(word_number, word_number_text);
+                                            print_keyboard_with_validation(lt_idx, found_bool, word);
+                                    }
+                                } else if (selinput_pointer == cFROMSD) {
+                                    estado = SEL_SD_BLOCK_XOR;
+                                    sel_sd_block_screen_generic(SDblock_pointer);
+                                } else {
+                                    show_qr_ready(SSS_K);
+                                    estado = QR_SCANNING;
+                                }
+                            } else if (selinput_pointer == cFROMSD) {
+                                // The SD list chooses the share ID too
+                                sel_sd_block_screen_merge(SDblock_pointer, selected_share_id);
+                                estado = SEL_SD_BLOCK_MERGE;
+                            } else if (selinput_pointer == cKEYBOARD && shares_loaded == 0) {
+                                transition_to_size();               // Size, then the share ID
+                            } else {
+                                if (selinput_pointer == cKEYBOARD) {
+                                    size_pointer = multi_input_size;
+                                    entropy_bits = (size_pointer == cSIZE_12) ? cENTROPY_BITS12W : cENTROPY_BITS24W;
+                                }
+                                print_sel_share_screen(selected_share_id);  // The share ID, then the input
+                                estado = SEL_SHARE;
+                            }
+                            break;
+                        }
                         if (selinput_pointer==cKEYBOARD){
                             black_screen();
                             if (seed_pointer == cSEED_triple && main_pointer == cMAIN_create) {
@@ -7290,18 +7388,7 @@ int main ( void ){
                             }
                         } else if (selinput_pointer==cQRSCAN) {
                             black_screen();
-                            if (main_pointer == cMAIN_XOR) {
-                                xor_merge_words_available = 0;
-                                memset(xor_merge_word1, 0, sizeof(xor_merge_word1));
-                                memset(xor_merge_word2, 0, sizeof(xor_merge_word2));
-                                memset(xor_merge_word3, 0, sizeof(xor_merge_word3));
-                            }
-                            if ((main_pointer==cMAIN_SSS) & (sss_pointer==cMERGE)) {
-                                // Each share: its ID first, then its QR
-                                shares_loaded = 0;
-                                print_sel_share_screen(selected_share_id);
-                                estado = SEL_SHARE;
-                            } else if ((main_pointer==cMAIN_SSS) & (sss_pointer==cSPLIT)) {
+                            if ((main_pointer==cMAIN_SSS) & (sss_pointer==cSPLIT)) {
                                 // Timer entropy for the coefficients, as from the SD
                                 estado = TMR_INPUT;
                                 dice_x_pointer = 0;
@@ -7340,6 +7427,7 @@ int main ( void ){
 
                         break;
                     case BACK_BT:
+                        if (multi_input_mode()) multi_input_wipe(shares_input, SSS_result, LEN);    // Cancelled
                         if (main_pointer == cMAIN_XOR)   {
                             black_screen();
                             print_generic_menu(menu_xor, cXOR_n_opt, xor_pointer);
@@ -7368,13 +7456,13 @@ int main ( void ){
                         if (selinput_pointer > 0) {
                             selinput_pointer--;
                         }
-                        print_generic_menu(menu_input, cSELINPUT_n_opt, selinput_pointer);
+                        print_input_menu(selinput_pointer);
                         break;
                     case DOWN_BT:
                         if (selinput_pointer < (cSELINPUT_n_opt-1)) {
                             selinput_pointer++;
                         }
-                        print_generic_menu(menu_input, cSELINPUT_n_opt, selinput_pointer);
+                        print_input_menu(selinput_pointer);
                         break;
                     case LEFT_BT:
                         break;
@@ -7456,6 +7544,7 @@ int main ( void ){
            case SEL_K:
                 switch (pulsed_bt) {
                     case OK_BT:
+                        multi_input_wipe(shares_input, SSS_result, LEN);
                         transition_to_input(selinput_pointer);
                         break;
                     case BACK_BT:
@@ -7501,7 +7590,9 @@ int main ( void ){
                         print_word_number_top(word_number, word_number_text);
                         print_previous_confirmed_word(word_number, word_number_text);
                         print_keyboard_with_validation(lt_idx, found_bool, word);
-                    case BACK_BT:// No return here
+                        break;
+                    case BACK_BT:                   // Another source for this share
+                        transition_to_input(selinput_pointer);
                         break;
                     case UP_BT:
                         if (selected_share_id<cN_MAX)selected_share_id++;
@@ -7833,59 +7924,24 @@ int main ( void ){
                                             shares);
                                         for (int i = 0; i < 16 + size_pointer*16; i++) data_array_256b[i]=shares[selected_share_id-1][i];
 
-                                    } else if ((main_pointer==cMAIN_SSS) & (sss_pointer==cMERGE)){
-                                        for (int i = 0; i < 32; i++) {
-                                                shares_input[shares_loaded][i] = data_array_256b[i];
-                                        }
-                                        share_indices[shares_loaded] = selected_share_id;
-                                        shares_loaded++;
-                                        if (shares_loaded>=(SSS_K)){ // We already have K shares
-                                            black_screen();
-                                            if (!shamir_interpolate(SSS_result,0,share_indices, shares_input,SSS_K,LEN)){
-                                                drawtext(10,39, "SHAMIR ERROR", ST7735_RED, ST7735_BLACK, 1);
-                                                grid_OK_back();
-                                                estado = END_MODE;
-                                                break;
-                                            }
-                                            for (int i = 0; i < 32; i++) data_array_256b[i] = SSS_result[i]; // Copy the result into the data buffer
-                                            redraw_show_seed_with_offset();
+                                    } else if (multi_input_mode()) {
+                                        int r = multi_input_store(cKEYBOARD, shares_input, share_indices, SSS_result, LEN);
+                                        if (r == MULTI_MORE) {
+                                            transition_to_input(selinput_pointer);  // Next input, any source
                                             break;
                                         }
-                                        // The merge is not complete yet
-                                        black_screen();
-                                        print_sel_share_screen(selected_share_id);
-                                        estado = SEL_SHARE;
+                                        if (r != MULTI_DONE) {
+                                            black_screen();
+                                            drawtext(10, 39, (r == MULTI_WRONG_SIZE) ? "SIZE DIFFERS FROM 1ST" : "SHAMIR ERROR",
+                                                     ST7735_RED, ST7735_BLACK, 1);
+                                            multi_input_wipe(shares_input, SSS_result, LEN);
+                                            grid_OK_back();
+                                            estado = END_MODE;
+                                            break;
+                                        }
+                                        multi_input_wipe(shares_input, SSS_result, LEN);
+                                        redraw_show_seed_with_offset();
                                         break;
-
-                                    } else if (main_pointer==cMAIN_XOR) {
-                                        if (xor_merge_words_available<=xor_pointer){
-                                            for (int i = 0; i < 32; i++) {
-                                                if (xor_merge_words_available==0){
-                                                    xor_merge_word1[i] = data_array_256b[i];
-                                                } else if (xor_merge_words_available==1){
-                                                    xor_merge_word2[i] = data_array_256b[i];
-                                                } else if (xor_merge_words_available==2){
-                                                    xor_merge_word3[i] = data_array_256b[i];
-                                                }
-                                            }
-                                            xor_merge_words_available++;
-                                            black_screen();
-                                            estado = WRITE_WORD;
-                                            word_number=1;
-                                            // Reset the word buffer before entering the next word
-                                            lt_idx=0;
-                                            clear_string(word);
-                                            found = refresh_word_input_preview(word, result, sizeof(result), &found_bool);
-                                            print_word_number_top(word_number, word_number_text);
-                                            print_previous_confirmed_word(word_number, word_number_text);
-                                            print_keyboard_with_validation(lt_idx, found_bool, word);
-                                            estado = WRITE_WORD;
-                                            break;
-                                        } else { // All XOR inputs are already loaded
-                                            for (int i = 0; i < 16 + size_pointer*16 ; i++) {
-                                                data_array_256b[i] = data_array_256b[i] ^ xor_merge_word1[i]^ xor_merge_word2[i]^ xor_merge_word3[i];
-                                            }
-                                        }
                                     } else if (main_pointer==cMAIN_BIP85) {
                                         black_screen();
                                         drawtext(20, 50, "COMPUTING CHILD", ST7735_CYAN, ST7735_BLACK, 1);
@@ -8711,43 +8767,21 @@ int main ( void ){
                                         sss_split_kofm(data_array_256b, coeffs, SSS_K, LEN, cN_MAX, shares);
                                         for (int i = 0; i < 16 + size_pointer*16; i++) data_array_256b[i] = shares[selected_share_id-1][i];
                                         redraw_show_seed_with_offset();
-                                    } else if ((main_pointer==cMAIN_SSS) & (sss_pointer==cMERGE)) {
-                                        for (int i = 0; i < 32; i++) shares_input[shares_loaded][i] = data_array_256b[i];
-                                        share_indices[shares_loaded] = selected_share_id;
-                                        shares_loaded++;
-                                        if (shares_loaded >= SSS_K) {
-                                            black_screen();
-                                            if (!shamir_interpolate(SSS_result, 0, share_indices, shares_input, SSS_K, LEN)) {
-                                                drawtext(10, 39, "SHAMIR ERROR", ST7735_RED, ST7735_BLACK, 1);
-                                                grid_OK_back();
-                                                estado = END_MODE;
-                                            } else {
-                                                for (int i = 0; i < 32; i++) data_array_256b[i] = SSS_result[i];
-                                                redraw_show_seed_with_offset();
-                                            }
-                                        } else {
-                                            // Next share: its ID, then its QR
-                                            black_screen();
-                                            print_sel_share_screen(selected_share_id);
-                                            estado = SEL_SHARE;
-                                        }
-                                    } else if (main_pointer == cMAIN_XOR) {
-                                        if (xor_merge_words_available > 0 && size_pointer != xor_merge_size) {
+                                    } else if (multi_input_mode()) {
+                                        int r = multi_input_store(cQRSCAN, shares_input, share_indices, SSS_result, LEN);
+                                        if (r == MULTI_WRONG_SIZE) {
                                             drawtext(10, 40, "SIZE DIFFERS FROM 1ST", ST7735_RED, ST7735_BLACK, 1);
-                                            success = false;
-                                        } else if (xor_merge_words_available <= xor_pointer) {
-                                            // Keep this seed and scan the next one
-                                            if (xor_merge_words_available == 0) xor_merge_size = size_pointer;
-                                            BYTE *slot = (xor_merge_words_available == 0) ? xor_merge_word1 :
-                                                         (xor_merge_words_available == 1) ? xor_merge_word2 : xor_merge_word3;
-                                            for (int i = 0; i < 32; i++) slot[i] = data_array_256b[i];
-                                            xor_merge_words_available++;
+                                            success = false;            // Scan another one
+                                        } else if (r == MULTI_MORE) {
+                                            transition_to_input(selinput_pointer);  // Next input, any source
+                                        } else if (r == MULTI_SHAMIR_ERROR) {
+                                            multi_input_wipe(shares_input, SSS_result, LEN);
                                             black_screen();
-                                            show_qr_ready(SSS_K);
+                                            drawtext(10, 39, "SHAMIR ERROR", ST7735_RED, ST7735_BLACK, 1);
+                                            grid_OK_back();
+                                            estado = END_MODE;
                                         } else {
-                                            for (int i = 0; i < 16 + size_pointer*16; i++) {
-                                                data_array_256b[i] ^= xor_merge_word1[i] ^ xor_merge_word2[i] ^ xor_merge_word3[i];
-                                            }
+                                            multi_input_wipe(shares_input, SSS_result, LEN);
                                             redraw_show_seed_with_offset();
                                         }
                                     } else {
