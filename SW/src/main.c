@@ -221,6 +221,7 @@ int bip85_cursor = 0;
 
 int bip84_menu_pointer = 0;
 static int sign_menu_pointer = 0;
+static bool sign_menu_descriptor = false;   // The FROM QR / FROM SD menu imports a descriptor
 uint32_t bip84_address_index = 0;
 int bip84_extended_key_page = 0;
 bool bip84_qr_return_to_menu = false;
@@ -4578,10 +4579,11 @@ static bool desc_review(const desc_wallet_t *w, int mine) {
 // the SD card, checks that this seed's multisig key at the current account
 // is one of the cosigners, shows it and loads it on OK. Not inlined: the
 // parsed copy lives on the stack only during the call.
+static void descriptor_check_and_load(const desc_wallet_t *w);
+
 static __attribute__((noinline)) void import_descriptor_from_sd(void) {
     char name[SD_FILES_NAME_LEN];
     char text[24];
-    char num[12];
     uint32_t size, sel = 0;
     int32_t got;
     desc_wallet_t w;
@@ -4615,19 +4617,29 @@ static __attribute__((noinline)) void import_descriptor_from_sd(void) {
         psbt_sd_message("DESCRIPTOR REFUSED", text);
         return;
     }
+    descriptor_check_and_load(&w);
+    memzero(&w, sizeof(w));
+}
+
+// Checks that this seed's multisig key at the current account is one of the
+// cosigners of a parsed wallet, shows it and loads it on OK. Any refusal is
+// explained on screen.
+static void descriptor_check_and_load(const desc_wallet_t *w) {
+    char text[24];
+    char num[12];
 
     // Our cosigner key: the xpub of m/48'/0'/account'/2' of this seed
     int mine = -1, mine_fp = -1;
-    for (int i = 0; i < w.key_count; i++) {
-        if (memcmp(w.keys[i].public_key, ms_account_node.public_key, 33) == 0 &&
-            memcmp(w.keys[i].chain_code, ms_account_node.chain_code, 32) == 0) {
+    for (int i = 0; i < w->key_count; i++) {
+        if (memcmp(w->keys[i].public_key, ms_account_node.public_key, 33) == 0 &&
+            memcmp(w->keys[i].chain_code, ms_account_node.chain_code, 32) == 0) {
             mine = i;
-        } else if (desc_key_fingerprint(&w.keys[i]) == bip84_master_fingerprint) {
+        } else if (desc_key_fingerprint(&w->keys[i]) == bip84_master_fingerprint) {
             mine_fp = i;
         }
     }
     if (mine < 0) {
-        const desc_key_t *k = (mine_fp >= 0) ? &w.keys[mine_fp] : NULL;
+        const desc_key_t *k = (mine_fp >= 0) ? &w->keys[mine_fp] : NULL;
         if (k != NULL && k->origin_len == 4 && k->origin[0] == (48 | 0x80000000u) &&
             k->origin[1] == 0x80000000u && k->origin[3] == (2 | 0x80000000u) &&
             (k->origin[2] & 0x7FFFFFFFu) != bip84_account_index) {
@@ -4642,8 +4654,8 @@ static __attribute__((noinline)) void import_descriptor_from_sd(void) {
         return;
     }
 
-    if (desc_review(&w, mine)) {
-        ms_wallet = w;
+    if (desc_review(w, mine)) {
+        ms_wallet = *w;
         ms_wallet_loaded = true;
         memcpy(ms_wallet_seed_tag, bip84_seed_tag, sizeof(ms_wallet_seed_tag));
         ms_wallet_account = bip84_account_index;
@@ -5285,9 +5297,18 @@ static bool scan_rx_get(uint8_t *b) {
     return true;
 }
 
-void scan_ur_animated_qr(void) {
+// Scans an animated UR of type 'target' (uppercase, e.g. "UR:CRYPTO-PSBT/")
+// and rebuilds its CBOR message in the fountain part buffer. Returns true if
+// a complete message was received; *msg is NULL if it could not be joined.
+static bool scan_ur_message(const char *target, const char *title, uint8_t **msg, uint32_t *msg_len) {
+    char title_text[24];
+    const int target_len = (int)strlen(target);
+
+    *msg = NULL;
+    *msg_len = 0;
+    strcpy(title_text, title);
     black_screen();
-    drawtext(10, 10, "SCANNING PSBT", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(10, 10, title_text, ST7735_YELLOW, ST7735_BLACK, 1);
     drawtext(10, 105, "PRESS BACK TO CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
     // Same progress bar outline as precompute_bip84_account()
     rectan(9, 120, 151, 125, WHITE);
@@ -5369,13 +5390,12 @@ void scan_ur_animated_qr(void) {
             }
             burst_buffer[burst_idx] = '\0';
 
-            if (burst_idx > 15) {
-                const char target[] = "UR:CRYPTO-PSBT/";
+            if (burst_idx > target_len) {
                 char *header_start = NULL;
 
-                for (int i = 0; i <= burst_idx - 15; i++) {
+                for (int i = 0; i <= burst_idx - target_len; i++) {
                     bool match = true;
-                    for (int j = 0; j < 15; j++) {
+                    for (int j = 0; j < target_len; j++) {
                         char cu = burst_buffer[i + j];
                         if (cu >= 'a' && cu <= 'z') cu -= ('a' - 'A'); 
                         if (cu != target[j]) { match = false; break; }
@@ -5384,7 +5404,7 @@ void scan_ur_animated_qr(void) {
                 }
 
                 if (header_start != NULL) {
-                    char *payload_start = header_start + 15;
+                    char *payload_start = header_start + target_len;
                     char *payload_clean = NULL;
 
                     for (int i = 0; payload_start[i] != '\0'; i++) {
@@ -5596,17 +5616,51 @@ void scan_ur_animated_qr(void) {
 
     if (psbt_recovered) {
         // The part buffer becomes one contiguous message (no extra RAM)
-        uint8_t *psbt_msg = fountain_assemble_message(expected_msg_len);
-        if (psbt_msg == NULL) {
-            show_psbt_details(NULL, 0);     // Shows the error
-        } else {
-            uint32_t capacity;
-            (void)fountain_scratch_buffer(&capacity);   // Same buffer; the message starts at its base
-            psbt_review_and_sign(psbt_msg, expected_msg_len, capacity);
-        }
+        *msg = fountain_assemble_message(expected_msg_len);
+        *msg_len = expected_msg_len;
     }
     
     while (BT1 == 0) SYS_Tasks(); // Wait for button release
+    return psbt_recovered;
+}
+
+// SIGN > FROM QR: animated "ur:crypto-psbt", then review and signing
+void scan_ur_animated_qr(void) {
+    uint8_t *msg;
+    uint32_t len;
+
+    if (!scan_ur_message("UR:CRYPTO-PSBT/", "SCANNING PSBT", &msg, &len)) return;
+    if (msg == NULL) {
+        show_psbt_details(NULL, 0);     // Shows the error
+    } else {
+        uint32_t capacity;
+        (void)fountain_scratch_buffer(&capacity);   // Same buffer; the message starts at its base
+        psbt_review_and_sign(msg, len, capacity);
+    }
+}
+
+// IMPORT DESCRIPTOR > FROM QR: the animated "Output Descriptor" QR of
+// Sparrow (ur:crypto-output), then the same checks and review as from SD.
+// Not inlined: the parsed copy lives on the stack only during the call.
+static __attribute__((noinline)) void import_descriptor_from_qr(void) {
+    uint8_t *msg;
+    uint32_t len;
+    char text[24];
+    desc_wallet_t w;
+
+    if (!scan_ur_message("UR:CRYPTO-OUTPUT/", "SCANNING DESCRIPTOR", &msg, &len)) return;
+    if (msg == NULL) {
+        psbt_sd_message("QR ERROR", "PARTS DO NOT JOIN");
+        return;
+    }
+    desc_result_t r = desc_parse_cbor(msg, len, &w);
+    if (r != DESC_OK) {
+        strcpy(text, desc_error_text(r));
+        psbt_sd_message("DESCRIPTOR REFUSED", text);
+        return;
+    }
+    descriptor_check_and_load(&w);
+    memzero(&w, sizeof(w));
 }
 
 
@@ -7765,6 +7819,7 @@ int main ( void ){
                             bip84_qr_return_to_menu = true;
                             estado = SHOW_QRSEED;
                         } else if (bip84_option() == cBIP84_SIGN) {
+                            sign_menu_descriptor = false;
                             black_screen();
                             print_sign_menu();
                         } else if (bip84_option() == cBIP84_MODE) {
@@ -7788,11 +7843,11 @@ int main ( void ){
                             print_bip84_menu();
                             pulsed_bt = NONE;
                         } else if (bip84_option() == cBIP84_DESCRIPTOR) {
-                            // Cosigner xpubs, so multisig change can be verified
-                            import_descriptor_from_sd();
+                            // Cosigner xpubs, so multisig change can be verified:
+                            // the same FROM QR / FROM SD menu as SIGN
+                            sign_menu_descriptor = true;
                             black_screen();
-                            print_bip84_menu();
-                            pulsed_bt = NONE;
+                            print_sign_menu();
                         } else {
                             print_bip84_info_screen();
                         }
@@ -7819,13 +7874,20 @@ int main ( void ){
             case SIGN_MENU:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        if (sign_menu_pointer == cSIGN_QR) {
+                        if (sign_menu_descriptor) {
+                            if (sign_menu_pointer == cSIGN_QR) {
+                                import_descriptor_from_qr();
+                            } else {
+                                import_descriptor_from_sd();
+                            }
+                        } else if (sign_menu_pointer == cSIGN_QR) {
                             scan_ur_animated_qr();
                         } else {
                             load_psbt_from_sd();
                         }
                         black_screen();
                         print_sign_menu();
+                        pulsed_bt = NONE;
                         break;
                     case BACK_BT:
                         black_screen();

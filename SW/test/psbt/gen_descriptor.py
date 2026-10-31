@@ -7,12 +7,9 @@ Writes:
   MSWALLET.PSB          - 2-of-3 PSBT whose input and change belong to that wallet
   MSATTACK.PSB          - the same, but the "change" has a foreign key instead of B
 
-Wallet: 2-of-3 P2WSH sortedmulti at m/48'/0'/0'/2'. Cosigner A is the
-"abandon x11 about" seed (so the device can sign with it), B and C are test
-seeds. Keys come from private derivation with the BIP32 code of
-sign_abandon.py; the device derives them from the xpubs (public derivation),
-so the test also checks psbt_public_ckd(). The checksum follows the BIP380
-reference code.
+Also writes the same wallet as UR crypto-output CBOR (BCR-2020-010), with
+the v1 and v2 tag numbers, built by a generic CBOR encoder written from RFC
+8949, for desc_parse_cbor().
 """
 import hashlib, runpy, struct
 
@@ -65,7 +62,7 @@ class Cosigner:
         for idx in MS:
             parent = hash160(ser_pub(point_mul(k)))[:4]
             k, c = ckd_priv(k, c, idx)
-        self.k, self.c, self.pub = k, c, ser_pub(point_mul(k))
+        self.k, self.c, self.pub, self.parent = k, c, ser_pub(point_mul(k)), parent
         payload = bytes.fromhex('0488b21e') + bytes([len(MS)]) + parent + struct.pack('>I', MS[-1]) + c + self.pub
         self.xpub = b58check(payload)
         self.zpub = b58check(bytes.fromhex('02aa7ed3') + payload[4:])
@@ -150,6 +147,39 @@ open('MSATTACK.PSB', 'wb').write(ms_psbt([A, X, C]))
 open('MSDESC.TXT', 'w', newline='\n').write(desc_text)
 open('MSCOLD.TXT', 'w', newline='\n').write(cold_text)
 
+# --- UR crypto-output CBOR -----------------------------------------------------------
+class Tag:
+    def __init__(self, tag, value):
+        self.tag, self.value = tag, value
+
+def cbor_head(major, n):
+    if n < 24: return bytes([major << 5 | n])
+    if n < 0x100: return bytes([major << 5 | 24, n])
+    if n < 0x10000: return bytes([major << 5 | 25]) + struct.pack('>H', n)
+    return bytes([major << 5 | 26]) + struct.pack('>I', n)
+
+def cbor(v):
+    if isinstance(v, bool): return b'\xf5' if v else b'\xf4'
+    if isinstance(v, int): return cbor_head(0, v)
+    if isinstance(v, bytes): return cbor_head(2, len(v)) + v
+    if isinstance(v, str): return cbor_head(3, len(v.encode())) + v.encode()
+    if isinstance(v, list): return cbor_head(4, len(v)) + b''.join(cbor(x) for x in v)
+    if isinstance(v, dict): return cbor_head(5, len(v)) + b''.join(cbor(k) + cbor(v[k]) for k in sorted(v))
+    if isinstance(v, Tag): return cbor_head(6, v.tag) + cbor(v.value)
+    raise TypeError(v)
+
+def crypto_output(v2=False):
+    t = 40000 if v2 else 0
+    keys = []
+    for name, co in zip(['A', 'B', 'C'], cosigners):
+        origin = Tag(304 + t, {1: [48, True, 0, True, 0, True, 2, True], 2: int.from_bytes(co.fp, 'big'), 3: 4})
+        keys.append(Tag(303 + t, {2: False, 3: co.pub, 4: co.c, 5: Tag(305 + t, {1: 0, 2: 0}), 6: origin,
+                                  8: int.from_bytes(co.parent, 'big'), 9: 'Cosigner ' + name}))
+    return cbor(Tag(401, Tag(407, {1: 2, 2: keys})))
+
+output_cbor = crypto_output()
+output_cbor_v2 = crypto_output(True)
+
 # --- C header -----------------------------------------------------------------------
 def c_str(s):
     return '"' + s.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n') + '"'
@@ -170,6 +200,9 @@ with open('descriptor_vectors.h', 'w', newline='\r\n') as f:
     f.write('#define VEC_CHANGE %d\n#define VEC_INDEX %d\n' % (CHANGE, INDEX))
     f.write('static const uint8_t vec_script_sorted[%d] = %s;\n' % (len(script_sorted), arr(script_sorted)))
     f.write('static const uint8_t vec_script_multi[%d] = %s;\n\n' % (len(script_multi), arr(script_multi)))
+    f.write('// The same wallet as UR crypto-output CBOR, v1 and v2 tags\n')
+    f.write('static const uint8_t vec_output_cbor[%d] = %s;\n' % (len(output_cbor), arr(output_cbor)))
+    f.write('static const uint8_t vec_output_cbor_v2[%d] = %s;\n\n' % (len(output_cbor_v2), arr(output_cbor_v2)))
     f.write('typedef struct { const char *text; desc_result_t expected; } desc_neg_t;\n')
     f.write('static const desc_neg_t desc_neg[] = {\n')
     for text, err in neg:

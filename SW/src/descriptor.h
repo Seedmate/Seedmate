@@ -15,6 +15,11 @@
  *     checksum is verified when present.
  *   - Coldcard multisig setup file (also written by Sparrow). Always
  *     sortedmulti; no checksum.
+ *   - UR "crypto-output" CBOR (BCR-2020-010), the animated "Output
+ *     Descriptor" QR of Sparrow read by Krux, SeedSigner and Jade:
+ *     wsh(sortedmulti/multi(hdkey...)), also with the v2 tags (40303...).
+ *     Children paths are not stored: branches 0 and 1 are assumed, and a
+ *     wallet that used others would simply never match a PSBT.
  *
  *   Only mainnet P2WSH is accepted: the signer only signs P2WSH inputs.
  *   No elliptic curve code here: keys are stored as given and derived by
@@ -74,6 +79,10 @@ typedef enum {
 // Parses 'len' bytes of text (a whole file or QR payload) into *out.
 // *out is cleared first, and again on error.
 desc_result_t desc_parse(const char *text, uint32_t len, desc_wallet_t *out);
+
+// The same for the CBOR of a UR "crypto-output" (already checked by its CRC32,
+// so has_checksum is set)
+desc_result_t desc_parse_cbor(const uint8_t *data, uint32_t len, desc_wallet_t *out);
 
 // Short reason for the screen (at most 20 characters)
 const char *desc_error_text(desc_result_t r);

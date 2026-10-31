@@ -40,6 +40,56 @@ static uint32_t wallet_script(const desc_wallet_t *w, uint32_t change, uint32_t 
     return desc_witness_script((const uint8_t (*)[33])keys, w->key_count, w->threshold, w->sorted, out);
 }
 
+// Finds 'pat' in buf (first occurrence) or returns -1
+static long find_bytes(const uint8_t *buf, uint32_t len, const uint8_t *pat, uint32_t pat_len) {
+    for (uint32_t i = 0; i + pat_len <= len; i++) {
+        if (memcmp(&buf[i], pat, pat_len) == 0) return (long)i;
+    }
+    return -1;
+}
+
+// UR crypto-output CBOR of the same wallet: keys, script, and refusals of altered copies
+static void test_crypto_output(void) {
+    static const int abc[3] = {0, 1, 2};
+    static uint8_t copy[sizeof(vec_output_cbor)];
+    uint8_t script[3 + 34 * DESC_MAX_KEYS];
+    desc_wallet_t w;
+    uint32_t len = sizeof(copy);
+
+    CHECK(desc_parse_cbor(vec_output_cbor, len, &w) == DESC_OK, "crypto-output parses");
+    CHECK(w.sorted && w.has_checksum, "crypto-output is sortedmulti");
+    check_keys(&w, abc, "crypto-output");
+    uint32_t n = wallet_script(&w, VEC_CHANGE, VEC_INDEX, script);
+    CHECK(n == sizeof(vec_script_sorted) && memcmp(script, vec_script_sorted, n) == 0, "crypto-output change script");
+    CHECK(desc_parse_cbor(vec_output_cbor_v2, sizeof(vec_output_cbor_v2), &w) == DESC_OK, "crypto-output v2 tags parse");
+    check_keys(&w, abc, "crypto-output v2");
+
+    memcpy(copy, vec_output_cbor, len);
+    CHECK(desc_parse_cbor(copy, len - 1, &w) == DESC_ERR_FORMAT && w.key_count == 0, "truncated CBOR refused");
+    static const uint8_t wsh_tag[3] = {0xd9, 0x01, 0x91}, mainnet[5] = {0xa2, 0x01, 0x00, 0x02, 0x00};
+    static const uint8_t not_private[2] = {0x02, 0xf4};
+    long at = find_bytes(copy, len, wsh_tag, 3);
+    CHECK(at == 0, "starts with wsh tag");
+    copy[2] = 0x94;                                         // wpkh (404)
+    CHECK(desc_parse_cbor(copy, len, &w) == DESC_ERR_SCRIPT, "wpkh refused");
+    copy[2] = 0x91;
+    at = find_bytes(copy, len, mainnet, 5);
+    CHECK(at > 0, "use-info found");
+    if (at > 0) {
+        copy[at + 4] = 0x01;                                // testnet
+        CHECK(desc_parse_cbor(copy, len, &w) == DESC_ERR_NETWORK, "testnet key refused");
+        copy[at + 4] = 0x00;
+    }
+    at = find_bytes(copy, len, not_private, 2);
+    CHECK(at > 0, "is-private found");
+    if (at > 0) {
+        copy[at + 1] = 0xf5;                                // private key
+        CHECK(desc_parse_cbor(copy, len, &w) == DESC_ERR_KEY, "private key refused");
+        copy[at + 1] = 0xf4;
+    }
+    CHECK(desc_parse_cbor(copy, len, &w) == DESC_OK, "restored copy parses");
+}
+
 int main(void) {
     desc_wallet_t w;
     uint8_t script[3 + 34 * DESC_MAX_KEYS];
@@ -74,6 +124,8 @@ int main(void) {
         CHECK(r == desc_neg[i].expected, what);
         CHECK(w.key_count == 0, "wallet cleared on error");
     }
+
+    test_crypto_output();
 
     // Hardened public derivation is impossible
     uint8_t chain[32], key[33];

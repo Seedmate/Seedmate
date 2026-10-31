@@ -315,7 +315,222 @@ static desc_result_t parse_coldcard(const char *s, uint32_t len, desc_wallet_t *
     return DESC_OK;
 }
 
+// --- UR crypto-output (CBOR) ---------------------------------------------------------
+
+#define TAG_OUTPUT      308         // crypto-output wrapper (optional)
+#define TAG_HDKEY       303
+#define TAG_KEYPATH     304
+#define TAG_COININFO    305
+#define TAG_WSH         401
+#define TAG_MULTI       406
+#define TAG_SORTEDMULTI 407
+#define TAG_V2          40000       // ur:output v2 registry: 40303, 40304, 40305, 40308
+
+#define CBOR_UINT   0
+#define CBOR_BYTES  2
+#define CBOR_TEXT   3
+#define CBOR_ARRAY  4
+#define CBOR_MAP    5
+#define CBOR_TAG    6
+#define CBOR_SIMPLE 7
+#define CBOR_FALSE  20
+
+typedef struct {
+    const uint8_t *p;
+    const uint8_t *end;
+} cbor_t;
+
+// One item head: major type and argument (up to 32 bits, no indefinite lengths)
+static bool cbor_head(cbor_t *c, uint8_t *major, uint32_t *arg) {
+    if (c->p >= c->end) return false;
+    uint8_t ib = *c->p++;
+    uint8_t ai = ib & 31;
+    *major = ib >> 5;
+    if (ai < 24) {
+        *arg = ai;
+        return true;
+    }
+    uint32_t n = (ai == 24) ? 1 : (ai == 25) ? 2 : (ai == 26) ? 4 : 0;
+    if (n == 0 || (uint32_t)(c->end - c->p) < n) return false;
+    uint32_t v = 0;
+    while (n-- > 0) v = v << 8 | *c->p++;
+    *arg = v;
+    return true;
+}
+
+static bool cbor_expect(cbor_t *c, uint8_t major, uint32_t *arg) {
+    uint8_t m;
+    return cbor_head(c, &m, arg) && m == major;
+}
+
+// A tag, v1 or v2 number of it
+static bool cbor_expect_tag(cbor_t *c, uint32_t tag) {
+    uint32_t t;
+    return cbor_expect(c, CBOR_TAG, &t) && (t == tag || t == tag + TAG_V2);
+}
+
+// Skips one whole item, nested ones included (iterative: no recursion)
+static bool cbor_skip(cbor_t *c) {
+    uint32_t pending = 1;
+    while (pending > 0) {
+        uint8_t major;
+        uint32_t arg;
+        if (!cbor_head(c, &major, &arg)) return false;
+        pending--;
+        if (major == CBOR_BYTES || major == CBOR_TEXT) {
+            if ((uint32_t)(c->end - c->p) < arg) return false;
+            c->p += arg;
+        } else if (major == CBOR_ARRAY || major == CBOR_MAP || major == CBOR_TAG) {
+            uint32_t more = (major == CBOR_MAP) ? 2 * arg : (major == CBOR_ARRAY) ? arg : 1;
+            if (more > (uint32_t)(c->end - c->p)) return false;     // Cannot fit: corrupt
+            pending += more;
+        }
+    }
+    return true;
+}
+
+// Byte string of exactly 'len' bytes
+static bool cbor_bytes(cbor_t *c, uint8_t *out, uint32_t len) {
+    uint32_t n;
+    if (!cbor_expect(c, CBOR_BYTES, &n) || n != len || (uint32_t)(c->end - c->p) < n) return false;
+    memcpy(out, c->p, n);
+    c->p += n;
+    return true;
+}
+
+// crypto-keypath of the key origin: components (index, hardened) and source fingerprint
+static bool cbor_origin(cbor_t *c, desc_key_t *k) {
+    uint32_t n, key, count, v;
+    if (!cbor_expect_tag(c, TAG_KEYPATH) || !cbor_expect(c, CBOR_MAP, &n)) return false;
+    while (n-- > 0) {
+        if (!cbor_expect(c, CBOR_UINT, &key)) return false;
+        if (key == 1) {
+            if (!cbor_expect(c, CBOR_ARRAY, &count) || (count & 1)) return false;
+            k->origin_len = 0;
+            for (uint32_t i = 0; i < count / 2; i++) {
+                uint8_t major;
+                uint32_t hardened;
+                if (!cbor_expect(c, CBOR_UINT, &v) || v >= HARDENED) return false;
+                if (!cbor_head(c, &major, &hardened) || major != CBOR_SIMPLE) return false;
+                if (hardened != CBOR_FALSE) v |= HARDENED;
+                if (k->origin_len < DESC_ORIGIN_MAX) k->origin[k->origin_len] = v;
+                if (k->origin_len < 255) k->origin_len++;
+            }
+        } else if (key == 2) {
+            if (!cbor_expect(c, CBOR_UINT, &v)) return false;
+            k->fingerprint[0] = (uint8_t)(v >> 24);
+            k->fingerprint[1] = (uint8_t)(v >> 16);
+            k->fingerprint[2] = (uint8_t)(v >> 8);
+            k->fingerprint[3] = (uint8_t)v;
+        } else if (!cbor_skip(c)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// crypto-hdkey: an extended public key (key data and chain code)
+static desc_result_t cbor_hdkey(cbor_t *c, desc_key_t *k) {
+    uint32_t n, key, v, m;
+    bool have_key = false, have_chain = false;
+
+    if (!cbor_expect_tag(c, TAG_HDKEY) || !cbor_expect(c, CBOR_MAP, &n)) return DESC_ERR_KEY;
+    while (n-- > 0) {
+        if (!cbor_expect(c, CBOR_UINT, &key)) return DESC_ERR_FORMAT;
+        switch (key) {
+            case 1:                                 // is-master
+            case 2: {                               // is-private
+                uint8_t major;
+                if (!cbor_head(c, &major, &v) || major != CBOR_SIMPLE) return DESC_ERR_FORMAT;
+                if (v != CBOR_FALSE) return DESC_ERR_KEY;
+                break;
+            }
+            case 3:                                 // key-data
+                if (!cbor_bytes(c, k->public_key, 33)) return DESC_ERR_KEY;
+                if (k->public_key[0] != 0x02 && k->public_key[0] != 0x03) return DESC_ERR_KEY;
+                have_key = true;
+                break;
+            case 4:                                 // chain-code
+                if (!cbor_bytes(c, k->chain_code, 32)) return DESC_ERR_KEY;
+                have_chain = true;
+                break;
+            case 5:                                 // use-info: coin type and network
+                if (!cbor_expect_tag(c, TAG_COININFO) || !cbor_expect(c, CBOR_MAP, &m)) return DESC_ERR_FORMAT;
+                while (m-- > 0) {
+                    if (!cbor_expect(c, CBOR_UINT, &key)) return DESC_ERR_FORMAT;
+                    if (key == 1 || key == 2) {
+                        if (!cbor_expect(c, CBOR_UINT, &v)) return DESC_ERR_FORMAT;
+                        if (v != 0) return (key == 2) ? DESC_ERR_NETWORK : DESC_ERR_KEY;
+                    } else if (!cbor_skip(c)) {
+                        return DESC_ERR_FORMAT;
+                    }
+                }
+                break;
+            case 6:                                 // origin
+                if (!cbor_origin(c, k)) return DESC_ERR_FORMAT;
+                break;
+            default:                                // children, parent fingerprint, name...
+                if (!cbor_skip(c)) return DESC_ERR_FORMAT;
+                break;
+        }
+    }
+    return (have_key && have_chain) ? DESC_OK : DESC_ERR_KEY;
+}
+
+static desc_result_t parse_cbor_output(const uint8_t *data, uint32_t len, desc_wallet_t *w) {
+    cbor_t c = { data, data + len };
+    uint32_t tag, n, key, count, m = 0;
+
+    if (!cbor_expect(&c, CBOR_TAG, &tag)) return DESC_ERR_FORMAT;
+    if (tag == TAG_OUTPUT || tag == TAG_OUTPUT + TAG_V2) {
+        if (!cbor_expect(&c, CBOR_TAG, &tag)) return DESC_ERR_FORMAT;
+    }
+    if (tag != TAG_WSH) return DESC_ERR_SCRIPT;
+    if (!cbor_expect(&c, CBOR_TAG, &tag) || (tag != TAG_MULTI && tag != TAG_SORTEDMULTI)) return DESC_ERR_SCRIPT;
+    w->sorted = (tag == TAG_SORTEDMULTI);
+
+    if (!cbor_expect(&c, CBOR_MAP, &n)) return DESC_ERR_FORMAT;
+    while (n-- > 0) {
+        if (!cbor_expect(&c, CBOR_UINT, &key)) return DESC_ERR_FORMAT;
+        if (key == 1) {
+            if (!cbor_expect(&c, CBOR_UINT, &m)) return DESC_ERR_FORMAT;
+        } else if (key == 2) {
+            if (!cbor_expect(&c, CBOR_ARRAY, &count)) return DESC_ERR_FORMAT;
+            if (count > DESC_MAX_KEYS) return DESC_ERR_TOO_MANY;
+            for (uint32_t i = 0; i < count; i++) {
+                desc_result_t r = cbor_hdkey(&c, &w->keys[w->key_count]);
+                if (r != DESC_OK) return r;
+                w->key_count++;
+            }
+        } else if (!cbor_skip(&c)) {
+            return DESC_ERR_FORMAT;
+        }
+    }
+    if (c.p != c.end) return DESC_ERR_FORMAT;
+    if (m == 0 || m > w->key_count) return DESC_ERR_THRESHOLD;
+    w->threshold = (uint8_t)m;
+    w->has_checksum = true;
+    return DESC_OK;
+}
+
 // --- Public functions ---------------------------------------------------------
+
+// Final checks shared by the formats: the same key twice would weaken the
+// policy without showing it. Clears the wallet on any error.
+static desc_result_t desc_finish(desc_result_t r, desc_wallet_t *out) {
+    for (uint8_t i = 0; r == DESC_OK && i < out->key_count; i++) {
+        for (uint8_t j = i + 1; j < out->key_count; j++) {
+            if (memcmp(out->keys[i].public_key, out->keys[j].public_key, 33) == 0) r = DESC_ERR_DUPLICATE;
+        }
+    }
+    if (r != DESC_OK) memset(out, 0, sizeof(*out));
+    return r;
+}
+
+desc_result_t desc_parse_cbor(const uint8_t *data, uint32_t len, desc_wallet_t *out) {
+    memset(out, 0, sizeof(*out));
+    return desc_finish(parse_cbor_output(data, len, out), out);
+}
 
 desc_result_t desc_parse(const char *text, uint32_t len, desc_wallet_t *out) {
     const char *p = text, *end = text + len;
@@ -344,14 +559,7 @@ desc_result_t desc_parse(const char *text, uint32_t len, desc_wallet_t *out) {
         p = eol + 1;
     }
 
-    // The same key twice would weaken the policy without showing it
-    for (uint8_t i = 0; r == DESC_OK && i < out->key_count; i++) {
-        for (uint8_t j = i + 1; j < out->key_count; j++) {
-            if (memcmp(out->keys[i].public_key, out->keys[j].public_key, 33) == 0) r = DESC_ERR_DUPLICATE;
-        }
-    }
-    if (r != DESC_OK) memset(out, 0, sizeof(*out));
-    return r;
+    return desc_finish(r, out);
 }
 
 #define DESC_STR2(x) #x
