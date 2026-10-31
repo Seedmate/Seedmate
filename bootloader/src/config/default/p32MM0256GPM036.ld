@@ -31,7 +31,7 @@ _GEN_EXCPT_ADDR                = _ebase_address + 0x180;
 MEMORY
 {
   /* Allocate exactly 8KB (0x2000) of main flash for the bootloader's heavy code */
-  kseg0_program_mem     (rx)  : ORIGIN = 0x9D000000, LENGTH = 0x2000
+  kseg0_program_mem     (rx)  : ORIGIN = 0x9D000000, LENGTH = 0x1FF0
   
   debug_exec_mem              : ORIGIN = 0x9FC00490, LENGTH = 0x760
   kseg0_boot_mem        (rx)  : ORIGIN = 0x9FC00490, LENGTH = 0x0
@@ -48,9 +48,11 @@ MEMORY
   /* Gaps between the reset vector (ends 0x140) and the BEV exception
      (0x380), and after it (0x38C) up to the debug exception handler (0x480):
      the SHA-256 code */
-  boot_gap1_mem         (rx)  : ORIGIN = 0x9FC00140, LENGTH = 0x230
-  /* Version tag of the bootloader, read by the app at this fixed address */
-  boot_version_mem      (r)   : ORIGIN = 0x9FC00370, LENGTH = 0x10
+  boot_gap1_mem         (rx)  : ORIGIN = 0x9FC00140, LENGTH = 0x240
+  /* Version tag of the bootloader, read by the app at this fixed address: the
+     last 16 bytes of the 8 KB main flash (not the boot flash, where the app
+     read of the tag hung the device) */
+  boot_version_mem      (r)   : ORIGIN = 0x9D001FF0, LENGTH = 0x10
   boot_gap2_mem         (rx)  : ORIGIN = 0x9FC0038C, LENGTH = 0xF4
   
   config_BFC01744             : ORIGIN = 0xBFC01744, LENGTH = 0x4

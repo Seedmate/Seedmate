@@ -20,6 +20,7 @@
 extern int main_pointer;
 extern int obfuscation_pointer;
 extern bool seedqr_enabled;
+extern bool decoy_enabled;
 extern bool SD_ready;
 extern int SD_page;
 

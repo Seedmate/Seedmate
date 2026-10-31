@@ -25,7 +25,10 @@
 
 // Application flash area handled by the writer (physical addresses)
 #define HEXFLASH_APP_PHYS_BASE  0x1D002000u
-#define HEXFLASH_APP_PHYS_END   0x1D040000u     // Exclusive
+// The last 2 KB page (0x1D03F800) holds the app's settings: outside what the
+// bootloader erases and writes, so they survive firmware updates, and no hex
+// file can overwrite them
+#define HEXFLASH_APP_PHYS_END   0x1D03F800u     // Exclusive
 #define HEXFLASH_PAGE_SIZE      2048u           // PIC32MM erase page
 
 // Status values double as LED blink codes in main.c

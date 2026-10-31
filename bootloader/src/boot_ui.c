@@ -14,7 +14,7 @@
 #define GRID_X      63              // Same button grid position as the app
 #define BAR_Y       92              // Progress bar above the grid
 
-// Version tag at a fixed address (BOOT_TAG_ADDRESS, see the linker script) so
+// Version tag at a fixed address (BOOT_TAG_ADDRESS 0x9D001FF0, linker script) so
 // the app can show which bootloader is installed: "BOOT 1.0". 16 bytes.
 const char boot_version_tag[16] __attribute__((section(".boot_version"), used)) = "BOOT " BOOT_VERSION;
 

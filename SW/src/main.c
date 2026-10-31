@@ -87,6 +87,7 @@
 #include "psbt_sign.h"
 #include "descriptor.h"
 #include "snake.h"
+#include "settings.h"
 
 
 
@@ -132,7 +133,8 @@
 
 
 
-bool seedqr_enabled = false;
+bool seedqr_enabled = false;        // Permanent settings (settings.c), loaded at power-on
+bool decoy_enabled = true;
 int settings_pointer = 0;
 
 
@@ -752,6 +754,9 @@ typedef enum
     OBFUS_QR_VIEW,
     SEL_SETTINGS,
     WARNING_SEEDQR,
+    WARNING_SEEDQR_VIEW,
+    CONFIRM_SETTING,
+    SETTING_FAILED,
     SHOW_CARD_ENCODING,
         QR_SCANNING,
         SHOW_MCU_SERIAL,
@@ -6047,6 +6052,42 @@ static void check_scanned_address(void) {
     grid_confirm("SCAN");
 }
 
+// ============================================================================
+// Permanent settings (settings.c): changes are confirmed, then saved in flash
+// ============================================================================
+
+static uint8_t setting_pending;     // Flags to save when the user confirms
+
+static uint8_t settings_flags_now(void) {
+    return (uint8_t)(0xFCu | (decoy_enabled ? SETTING_DECOY_ON : 0u) | (seedqr_enabled ? 0u : SETTING_SEEDQR_OFF));
+}
+
+// Asks to confirm the change of the selected setting (SeedQR or decoy game)
+static void ask_setting_change(void) {
+    uint8_t flags = settings_flags_now();
+    bool new_on;
+
+    if (settings_pointer == cSETTINGS_SEEDQR) {
+        flags ^= SETTING_SEEDQR_OFF;
+        new_on = (flags & SETTING_SEEDQR_OFF) == 0;
+    } else {
+        flags ^= SETTING_DECOY_ON;
+        new_on = (flags & SETTING_DECOY_ON) != 0;
+    }
+    setting_pending = flags;
+    print_setting_confirm(settings_pointer, new_on);
+    estado = CONFIRM_SETTING;
+}
+
+// Draws the SeedQR of the seed on screen (after its warning)
+static void show_seedqr(void) {
+    white_screen();
+    BYTE *qr_buf = append_checksum(data_array_256b, 16 + size_pointer * 16);
+    draw_QRSEED(qr_buf, 16 + size_pointer * 16 + 1);
+    bip84_qr_return_to_menu = true;
+    estado = SHOW_QRSEED;
+}
+
 // Applies the selected obfuscation to the loaded entropy (same for every input)
 static void apply_obfuscation(void) {
     int n = 16 + size_pointer * 16;
@@ -6100,6 +6141,11 @@ static void show_qr_ready(int sss_k) {
 int main ( void ){
     /* Initialize all modules */
     SYS_Initialize ( NULL );
+    {
+        uint8_t saved = settings_load();    // Permanent settings; no record = factory defaults
+        decoy_enabled = (saved & SETTING_DECOY_ON) != 0;
+        seedqr_enabled = (saved & SETTING_SEEDQR_OFF) == 0;
+    }
     R_LCD=1;
     LED_LCD =1;
     A0_LCD=0;
@@ -6124,7 +6170,7 @@ int main ( void ){
 
 #if DECOY_SNAKE
     // Decoy: the device is a snake game unless OK + RIGHT are held at power-on
-    if (BT_OK != 0 || BT6 != 0) snake_run();        // Never returns
+    if (decoy_enabled && (BT_OK != 0 || BT6 != 0)) snake_run();     // Never returns
     while (BT_OK == 0 || BT6 == 0) SYS_Tasks();     // Keys released before the app reads them
 #endif
 
@@ -8158,13 +8204,8 @@ int SSS_N = 9;
                                 break;
                             }
 
-                            white_screen();
-                            {
-                                BYTE *qr_buf = append_checksum(data_array_256b, 16 + size_pointer * 16);
-                                draw_QRSEED(qr_buf, 16 + size_pointer * 16 + 1);                                
-                            }
-                            bip84_qr_return_to_menu = true;
-                            estado = SHOW_QRSEED;
+                            print_seedqr_warning("SHOW");     // Every time, before the QR
+                            estado = WARNING_SEEDQR_VIEW;
                         } else if (bip84_option() == cBIP84_SIGN) {
                             sign_menu_descriptor = false;
                             black_screen();
@@ -8550,14 +8591,14 @@ int SSS_N = 9;
                     case OK_BT:
                         if (settings_pointer == cSETTINGS_SEEDQR) {
                             if (!seedqr_enabled) {
-                                seedqr_enabled = true; // OFF -> ON
-                                print_seedqr_warning();
+                                print_seedqr_warning("ENABLE");     // OFF -> ON: warning first
                                 estado = WARNING_SEEDQR;
                             } else {
-                                seedqr_enabled = false; // ON -> OFF
-                                black_screen();
-                                print_settings_screen(settings_pointer);
+                                ask_setting_change();               // ON -> OFF
                             }
+                        }
+                        else if (settings_pointer == cSETTINGS_DECOY) {
+                            ask_setting_change();
                         }
                     else if (settings_pointer == cSETTINGS_MCU_SERIAL) {
                         print_mcu_serial_screen();
@@ -8586,6 +8627,47 @@ int SSS_N = 9;
             break;
 
             case WARNING_SEEDQR:
+            if (pulsed_bt == OK_BT) {
+                ask_setting_change();
+            } else if (pulsed_bt == BACK_BT) {
+                black_screen();
+                print_settings_screen(settings_pointer);
+                estado = SEL_SETTINGS;
+            }
+            break;
+            case WARNING_SEEDQR_VIEW:
+            if (pulsed_bt == OK_BT) {
+                show_seedqr();
+            } else if (pulsed_bt == BACK_BT) {
+                black_screen();
+                print_bip84_menu();
+            }
+            break;
+            case CONFIRM_SETTING:
+            if (pulsed_bt == OK_BT) {
+                black_screen();
+                if (settings_save(setting_pending)) {
+                    decoy_enabled = (setting_pending & SETTING_DECOY_ON) != 0;
+                    seedqr_enabled = (setting_pending & SETTING_SEEDQR_OFF) == 0;
+                    drawtext(5, 50, "SETTING SAVED", ST7735_GREEN, ST7735_BLACK, 1);
+                    delay_ms(800);
+                    black_screen();
+                    print_settings_screen(settings_pointer);
+                    estado = SEL_SETTINGS;
+                } else {
+                    drawtext(5, 40, "SETTING NOT SAVED", ST7735_RED, ST7735_BLACK, 1);
+                    drawtext(5, 52, "FLASH WRITE FAILED", ST7735_WHITE, ST7735_BLACK, 1);
+                    grid_OK_only();
+                    estado = SETTING_FAILED;
+                }
+                pulsed_bt = NONE;
+            } else if (pulsed_bt == BACK_BT) {
+                black_screen();
+                print_settings_screen(settings_pointer);
+                estado = SEL_SETTINGS;
+            }
+            break;
+            case SETTING_FAILED:
             if (pulsed_bt == OK_BT) {                
                 black_screen();
                 print_settings_screen(settings_pointer);

@@ -166,6 +166,11 @@ static void test_target(const char *app_hex) {
     const uint8_t seg_far[2] = {0x9D, 0x04};
     make_rec(rec, 4, 0, seg_far, 2);        CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
     make_rec(rec, 0, 0x0000, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_ERR_TARGET);
+    // The settings page (last 2 KB) belongs to the app: no file may write it
+    const uint8_t seg_set[2] = {0x9D, 0x03};
+    make_rec(rec, 4, 0, seg_set, 2);        CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
+    make_rec(rec, 0, 0xF800, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_ERR_TARGET);
+    make_rec(rec, 0, 0xF7FC, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
     // In range but nothing at the reset vector 0x1D002000
     make_rec(rec, 4, 0, seg_app, 2);        CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
     make_rec(rec, 0, 0x4000, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_OK);

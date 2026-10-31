@@ -10,8 +10,8 @@
 #ifndef APP_DEFS_H
 #define APP_DEFS_H
 
-#define cVersion "v1.8+"
-#define BOOT_TAG_ADDRESS 0x9FC00370u    // Bootloader version tag ("BOOT 1.0"), see bootloader boot_ui.c
+#define cVersion "v2.0b1"
+#define BOOT_TAG_ADDRESS 0x9D001FF0u    // Bootloader version tag ("BOOT 1.0"), see bootloader boot_ui.c
 #define cMAIN_n_opt 10
 #define cSEED_n_opt 6
 #define cSIZE_n_opt 2
@@ -25,10 +25,11 @@
 #define cDICE_MODE_n_opt 2
 #define cHASH_MODE_n_opt 2
 #define cRESOURCE_n_opt 5
-#define cSETTINGS_n_opt 3
+#define cSETTINGS_n_opt 4
 #define cSETTINGS_SEEDQR 0
-#define cSETTINGS_MCU_SERIAL 1
-#define cSETTINGS_UPDATE_FW 2
+#define cSETTINGS_DECOY 1
+#define cSETTINGS_MCU_SERIAL 2
+#define cSETTINGS_UPDATE_FW 3
 #define cEND_OF_LINE 150
 #define cENTROPY_BITS12W 127
 #define cENTROPY_BITS24W 255

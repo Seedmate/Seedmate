@@ -39,8 +39,9 @@ MEMORY
   exception_mem               : ORIGIN = 0x9D003000, LENGTH = 0x1000
   
   /* kseg0_program_mem starts after the IVT. Origin: 0x9D004000. */
-  /* Total memory (0x40000) - Bootloader (0x2000) - IVT and startup (0x2000) = 0x3C000 */
-  kseg0_program_mem     (rx)  : ORIGIN = 0x9D004000, LENGTH = 0x3C000
+  /* Total memory (0x40000) - Bootloader (0x2000) - IVT and startup (0x2000) - settings
+     page (0x800, 0x9D03F800, see settings.h: the bootloader does not touch it) = 0x3B800 */
+  kseg0_program_mem     (rx)  : ORIGIN = 0x9D004000, LENGTH = 0x3B800
   
   /* Configs and RAM remain standard */
   config_BFC01744             : ORIGIN = 0xBFC01744, LENGTH = 0x4

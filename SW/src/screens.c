@@ -1335,40 +1335,69 @@ void sel_sd_block_screen_merge(int sel,int id) {
 }
 
 void print_settings_screen(int sel) {
-    char* text_seedqr = seedqr_enabled ? "SeedQR ON " : "SeedQR OFF";
+    char* text_seedqr = seedqr_enabled ? "SEEDQR ON " : "SEEDQR OFF";
+    char* text_decoy = decoy_enabled ? "DECOY GAME ON " : "DECOY GAME OFF";
     uint16_t color_seedqr = (sel == cSETTINGS_SEEDQR) ? ST7735_ORANGE : ST7735_WHITE;
-    
+    uint16_t color_decoy = (sel == cSETTINGS_DECOY) ? ST7735_ORANGE : ST7735_WHITE;
+    uint16_t color_serial = (sel == cSETTINGS_MCU_SERIAL) ? ST7735_ORANGE : ST7735_WHITE;
+    uint16_t color_fw = (sel == cSETTINGS_UPDATE_FW) ? ST7735_ORANGE : ST7735_WHITE;
+
     drawtext(1, 1, (char*)menu_main[cMAIN_SETTINGS], ST7735_WHITE, ST7735_BLACK, 1);
     drawtext(1, 13, text_seedqr, color_seedqr, ST7735_BLACK, 1);
+    drawtext(1, 23, text_decoy, color_decoy, ST7735_BLACK, 1);
+    drawtext(1, 33, "MCU SERIAL NUMBER", color_serial, ST7735_BLACK, 1);
+    drawtext(1, 43, "UPDATE FIRMWARE", color_fw, ST7735_BLACK, 1);
 
-    uint16_t color_serial = (sel == cSETTINGS_MCU_SERIAL) ? ST7735_ORANGE : ST7735_WHITE;
-    drawtext(1, 23, "MCU SERIAL NUMBER", color_serial, ST7735_BLACK, 1);
-    
-    uint16_t color_fw = (sel == cSETTINGS_UPDATE_FW) ? ST7735_ORANGE : ST7735_WHITE;
-    drawtext(1, 33, "UPDATE FIRMWARE", color_fw, ST7735_BLACK, 1);
-
-    // Versions: this firmware and the bootloader, whose tag the bootloader
-    // keeps at a fixed boot flash address ("BOOT 1.0"; an older one has none)
-    char text[28];
+    // Versions at the bottom left, next to the button grid: this firmware and
+    // the bootloader, whose tag it keeps at a fixed boot flash address
+    // ("BOOT 1.0"; an older bootloader has none)
+    char text[16];
     const char *tag = (const char *)BOOT_TAG_ADDRESS;
-    strcpy(text, "FIRMWARE ");
+    strcpy(text, "FW ");
     strcat(text, cVersion);
-    drawtext(1, 60, text, ST7735_CYAN, ST7735_BLACK, 1);
-    strcpy(text, "BOOTLOADER ");
-    if (memcmp(tag, "BOOT ", 5) == 0 && tag[15] == '\0') strcat(text, tag + 5);
+    drawtext(5, 107, text, ST7735_CYAN, ST7735_BLACK, 1);
+    strcpy(text, "BOOT ");
+    if (memcmp(tag, "BOOT ", 5) == 0 && tag[15] == 0) strcat(text, tag + 5);
     else strcat(text, "?");
-    drawtext(1, 70, text, ST7735_CYAN, ST7735_BLACK, 1);
+    drawtext(5, 117, text, ST7735_CYAN, ST7735_BLACK, 1);
 
-    grid_menu2(); 
+    grid_menu2();
 }
 
-void print_seedqr_warning(void) {
-    rectan(0, 0, 159, 127, ST7735_RED); 
-    drawtext(20, 30, "SeedQR = seed phrase", ST7735_WHITE, ST7735_RED, 1);
-    drawtext(50, 45, "DO NOT SCAN", ST7735_WHITE, ST7735_RED, 1);
-    drawtext(50, 60, "WITH PHONE", ST7735_WHITE, ST7735_RED, 1);    
-    grid_OK_only(); 
-    
+// Red warning before a SeedQR is enabled or shown; BACK cancels, OK does ok_label
+void print_seedqr_warning(const char *ok_label) {
+    rectan(0, 0, 159, 127, ST7735_RED);
+    drawtext(1, 10, "SEEDQR EQUALS YOUR SEED", ST7735_WHITE, ST7735_RED, 1);
+    drawtext(1, 25, "DO NOT SCAN WITH A PHONE", ST7735_WHITE, ST7735_RED, 1);
+    drawtext(1, 40, "DO NOT TAKE PHOTOS", ST7735_WHITE, ST7735_RED, 1);
+    drawtext(1, 55, "KEEP IT OFFLINE", ST7735_WHITE, ST7735_RED, 1);
+    grid_confirm(ok_label);
+}
+
+// Confirmation of a setting change, which is permanent (row = cSETTINGS_*)
+void print_setting_confirm(int row, bool new_on) {
+    const char *l1, *l2 = "", *l3 = "";
+    rectan(0, 0, 159, 127, ST7735_BLACK);
+    drawtext(1, 1, "SAVE SETTING?", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 14, (row == cSETTINGS_SEEDQR) ? (new_on ? "SEEDQR: ON" : "SEEDQR: OFF")
+                                              : (new_on ? "DECOY GAME: ON" : "DECOY GAME: OFF"),
+             ST7735_CYAN, ST7735_BLACK, 1);
+    drawtext(1, 30, "PERMANENT SETTING:", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(1, 40, "KEPT AFTER POWER OFF AND", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(1, 50, "AFTER FIRMWARE UPDATES", ST7735_YELLOW, ST7735_BLACK, 1);
+    if (row == cSETTINGS_SEEDQR) {
+        l1 = new_on ? "SEEDQR WILL SHOW YOUR" : "SEEDQR WILL BE";
+        l2 = new_on ? "SEED AS A QR CODE" : "DISABLED";
+        l3 = new_on ? "IN THE WALLET MENU" : "";
+    } else {
+        l1 = new_on ? "IT STARTS AS A SNAKE GAME" : "IT STARTS DIRECTLY AS";
+        l2 = new_on ? "OK + RIGHT AT POWER-ON" : "SEEDMATE";
+        l3 = new_on ? "OPENS SEEDMATE" : "";
+    }
+    drawtext(1, 68, (char*)l1, ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 78, (char*)l2, ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 88, (char*)l3, ST7735_WHITE, ST7735_BLACK, 1);
+    grid_confirm("SAVE");
 }
 
 void print_mcu_serial_screen(void) {

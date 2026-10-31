@@ -52,6 +52,7 @@
       <itemPath>../src/psbt_sign.h</itemPath>
       <itemPath>../src/descriptor.h</itemPath>
       <itemPath>../src/snake.h</itemPath>
+      <itemPath>../src/settings.h</itemPath>
       <itemPath>../src/kdf.h</itemPath>
       <itemPath>../../bootloader/src/pff.h</itemPath>
       <itemPath>../../bootloader/src/pffconf.h</itemPath>
@@ -152,6 +153,7 @@
       <itemPath>../src/psbt_sign.c</itemPath>
       <itemPath>../src/descriptor.c</itemPath>
       <itemPath>../src/snake.c</itemPath>
+      <itemPath>../src/settings.c</itemPath>
       <itemPath>../src/kdf.c</itemPath>
       <itemPath>../src/sha512.c</itemPath>
       <itemPath>../src/EFF_short.c</itemPath>
