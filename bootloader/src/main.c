@@ -19,6 +19,7 @@
 #include "pff.h"
 #include "diskio.h"
 #include "hex_flash.h"
+#include "boot_ui.h"
 
 // --- Pin mapping for LED activity ---
 #define LED       PORTAbits.RA2
@@ -70,23 +71,13 @@ uint8_t asciiBuffer[2048]; // Increased buffer for safety
 uint8_t hexRec[200];
 
 // --- Function Prototypes ---
-void delay_ms(unsigned int milliseconds);
-void blink_error_and_jump(int blinks);
+void delay_ms(unsigned int milliseconds);   // From the app's SPI.c (spi_boot.c)
 void JumpToApp(void);
 void ConvertAsciiToHex(uint8_t* asciiRec, uint8_t* hexRec);
 
 // =========================================================================
 // BASIC HARDWARE CONTROL FUNCTIONS
 // =========================================================================
-
-void delay_ms(unsigned int milliseconds) {
-    volatile unsigned int count;
-    while (milliseconds > 0) {
-        count = 3000; 
-        while (count > 0) count--;
-        milliseconds--;
-    }
-}
 
 void JumpToApp(void)
 {
@@ -116,21 +107,6 @@ static bool forced_update_requested(void) {
     return BTN_BACK == 0 && BTN_OK == 0;
 }
 
-void blink_error_and_jump(int blinks) {
-    LED = 0;
-    delay_ms(500); 
-    
-    for (int i = 0; i < blinks; i++) {
-        LED = 1;
-        delay_ms(200);
-        LED = 0;
-        delay_ms(200);
-    }
-    
-    delay_ms(500); 
-    JumpToApp();
-}
-
 // A complete record: its checksum is right and it is as long as it claims
 // ('hex_chars' = characters after the ':')
 static bool record_is_valid(const uint8_t *rec, uint32_t hex_chars) {
@@ -153,6 +129,7 @@ static int process_hex_file(bool program) {
 
     if (pf_open("UPDATE.HEX") != FR_OK) return 3;
     record.status = REC_NOT_FOUND;
+    ui_progress(0, fs.fsize);
 
     while (true)
     {
@@ -207,6 +184,7 @@ static int process_hex_file(bool program) {
 
         led_counter++;
         if ((led_counter % 2) == 0) LED = !LED;
+        ui_progress(fs.fptr, fs.fsize);
     }
 
     return end_of_file_found ? 0 : 5;
@@ -236,9 +214,11 @@ int main(void)
     // =========================================================================
     // MAGIC WORD CHECK (SHARED MEMORY)
     // =========================================================================
-    // Update if the main application requested it, or if OK + BACK are held
+    // Update if the main application requested it, if OK + BACK are held,
+    // or if there is no app to start (factory state, failed update)
     bool forced = forced_update_requested();
-    if (!forced && *UPDATE_FLAG_ADDR != MAGIC_WORD_UPDATE) {
+    bool no_app = app_missing();
+    if (!forced && !no_app && *UPDATE_FLAG_ADDR != MAGIC_WORD_UPDATE) {
         // No update requested, jump straight to the application
         JumpToApp();
     }
@@ -257,39 +237,63 @@ int main(void)
         }
     }
 
+    ui_init();
+    ui_screen("FIRMWARE UPDATE");
+    if (forced) ui_text(20, "FORCED WITH OK + BACK", UI_CYAN);
+    else if (no_app) ui_text(20, "NO APP INSTALLED", UI_YELLOW);
     delay_ms(1000);
 
     // =========================================================================
     // FIRMWARE UPDATE CHECK WORKFLOW
     // =========================================================================
 
+    ui_text(82, "READING SD CARD", UI_CYAN);
     DSTATUS init_status = disk_initialize();
-    if (init_status != 0) blink_error_and_jump(init_status); 
-
-    if (pf_mount(&fs) != FR_OK) blink_error_and_jump(2);
+    if (init_status != 0) fail_app_intact(init_status, "SD CARD NOT READY");
+    if (pf_mount(&fs) != FR_OK) fail_app_intact(2, "SD CARD NOT FAT16");
 
     // Pass 1: read and check the whole file without touching the flash. A
     // damaged card or file is found here, while the current app still works.
+    ui_text(82, "CHECKING UPDATE.HEX", UI_CYAN);
     int err = process_hex_file(false);
-    if (err != 0) blink_error_and_jump(err);
+    if (err != 0) fail_app_intact(err, error_text(err));
+
+    // Confirmation before anything is erased (Rule 4)
+    ui_text(40, "FILE OK", UI_GREEN);
+    ui_text(52, "ERASE THE APP AND", UI_WHITE);
+    ui_text(62, "WRITE THE NEW ONE?", UI_WHITE);
+    ui_grid(true, true);
+    if (!wait_ok_back(true)) {
+        ui_text(52, "", UI_WHITE);
+        ui_text(62, "", UI_WHITE);
+        if (no_app) finish(1, "UPDATE CANCELLED", UI_YELLOW, "NO APP: OK RETRIES", UI_YELLOW);
+        finish(1, "UPDATE CANCELLED", UI_YELLOW, "APP NOT TOUCHED", UI_GREEN);
+    }
+    ui_text(40, "", UI_WHITE);
+    ui_text(52, "", UI_WHITE);
+    ui_text(62, "", UI_WHITE);
+    ui_grid(false, false);
 
     // =========================================================================
-    // FILE CHECKED! STARTING FLASH PROCESS
+    // FILE CHECKED AND CONFIRMED: FLASH PROCESS
     // =========================================================================
 
     // Pass 2: erase the app area and program it from the file
+    ui_text(82, "ERASING THE APP", UI_CYAN);
     hexflash_status_t flash_status = hexflash_begin();
-    if (flash_status != HEXFLASH_OK) blink_error_and_jump(flash_status);
+    if (flash_status != HEXFLASH_OK) fail_app_erased(flash_status, "FLASH ERASE FAILED");
 
+    ui_text(82, "WRITING THE NEW APP", UI_CYAN);
     err = process_hex_file(true);
-    if (err != 0) blink_error_and_jump(err);
+    if (err != 0) fail_app_erased(err, error_text(err));
 
     // Final verification check to ensure Flash is not entirely blank
     if (*(uint32_t *)USER_APP_RESET_ADDRESS == 0xFFFFFFFF) {
-        blink_error_and_jump(8); // Flash is physically empty
+        fail_app_erased(8, "FLASH IS EMPTY");
     }
-    
-    blink_error_and_jump(7); // Success indicator (7 blinks)
+
+    ui_text(82, "", UI_WHITE);
+    finish(7, "UPDATE DONE", UI_GREEN, "OK STARTS THE NEW APP", UI_WHITE);
 
     return (EXIT_FAILURE);
 }

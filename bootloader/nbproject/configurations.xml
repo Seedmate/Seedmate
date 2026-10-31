@@ -35,6 +35,7 @@
       <itemPath>src/diskio.h</itemPath>
       <itemPath>src/pff.h</itemPath>
       <itemPath>src/hex_flash.h</itemPath>
+      <itemPath>src/boot_ui.h</itemPath>
       <itemPath>src/pffconf.h</itemPath>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
@@ -99,6 +100,8 @@
       <itemPath>src/diskio.c</itemPath>
       <itemPath>src/pff.c</itemPath>
       <itemPath>src/hex_flash.c</itemPath>
+      <itemPath>src/spi_boot.c</itemPath>
+      <itemPath>src/boot_ui.c</itemPath>
       <itemPath>src/main.c</itemPath>
     </logicalFolder>
   </logicalFolder>

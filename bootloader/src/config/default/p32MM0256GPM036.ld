@@ -38,6 +38,13 @@ MEMORY
   
   /* Physical Boot Flash allocation for reset and exception vectors */
   kseg1_boot_mem        (rx)  : ORIGIN = 0xBFC00000, LENGTH = 0x1700
+
+  /* Free boot flash for the bootloader screen, through the cached KSEG0
+     alias so calls to and from the main flash (0x9D...) stay in reach:
+     the area kept for the debug executive (from 0x4B0, after the 40 byte
+     debug exception handler, to 0xFFF; unused in production builds) and the end after the exception vector */
+  boot_ui_code_mem      (rx)  : ORIGIN = 0x9FC004B0, LENGTH = 0xB50
+  boot_ui_data_mem      (rx)  : ORIGIN = 0x9FC01190, LENGTH = 0x570
   
   config_BFC01744             : ORIGIN = 0xBFC01744, LENGTH = 0x4
   config_BFC01748             : ORIGIN = 0xBFC01748, LENGTH = 0x4
@@ -109,6 +116,22 @@ SECTIONS
   {
     KEEP(*(.gen_handler))
   } > kseg1_boot_mem
+
+  /* Bootloader screen: boot_ui.o (with the app's TFT.c) and spi_boot.o
+     (the app's SPI.c) in the boot flash. The second area is listed first so
+     it takes the update flow helpers before .boot_ui takes the rest. */
+  .boot_ui_data :
+  {
+    *boot_ui.o(.rodata .rodata.*)
+    *boot_ui.o(.text.finish .text.fail_app_intact .text.fail_app_erased .text.error_text)
+    *boot_ui.o(.text.wait_ok_back .text.software_reset .text.app_missing)
+  } > boot_ui_data_mem
+
+  .boot_ui :
+  {
+    *boot_ui.o(.text .text.*)
+    *spi_boot.o(.text .text.* .rodata .rodata.*)
+  } > boot_ui_code_mem
 
   /* Move startup code and C runtime to 8KB main program memory */
   .startup :

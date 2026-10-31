@@ -62,7 +62,7 @@
 
 /*** FICD ***/
 #pragma config JTAGEN =     OFF
-#pragma config ICS =     PGx2
+#pragma config ICS =     PGx1   // Same as the app: the device keeps the bootloader config bits
 
 /*** FPOR ***/
 #pragma config BOREN =    BOR3
