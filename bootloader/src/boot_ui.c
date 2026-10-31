@@ -14,6 +14,10 @@
 #define GRID_X      63              // Same button grid position as the app
 #define BAR_Y       92              // Progress bar above the grid
 
+// Version tag at a fixed address (BOOT_TAG_ADDRESS, see the linker script) so
+// the app can show which bootloader is installed: "BOOT 1.0". 16 bytes.
+const char boot_version_tag[16] __attribute__((section(".boot_version"), used)) = "BOOT " BOOT_VERSION;
+
 // Same sequence as the app's main() before the LCD
 void ui_init(void) {
     R_LCD = 1;
@@ -31,6 +35,7 @@ void ui_init(void) {
 void ui_screen(const char *title) {
     rectan(0, 0, 159, 127, ST7735_BLACK);
     drawtext(1, 1, (char *)title, ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(110, 1, "BOOT " BOOT_VERSION, ST7735_WHITE, ST7735_BLACK, 1);
 }
 
 void ui_text(int y, const char *text, uint16_t color) {
@@ -111,6 +116,7 @@ const char *error_text(int code) {
         case 4:  return "SD READ ERROR";
         case 5:  return "FILE DAMAGED";
         case 6:  return "FLASH WRITE FAILED";
+        case 9:  return "HEX NOT FOR THIS DEVICE";
         default: return "UPDATE ERROR";
     }
 }

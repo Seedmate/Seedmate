@@ -86,6 +86,37 @@ static hexflash_status_t flush_dw(void) {
     return st;
 }
 
+hexflash_status_t hexflash_check_record(const uint8_t *rec) {
+    static uint32_t ext;
+    static bool has_reset;
+
+    switch (rec[3]) {
+        case EXT_LIN_ADRS_RECORD:
+            ext = (((uint32_t)rec[4] << 8) | rec[5]) << 16;
+            break;
+        case EXT_SEG_ADRS_RECORD:
+            ext = (((uint32_t)rec[4] << 8) | rec[5]) << 4;
+            break;
+        case DATA_RECORD:
+            if (rec[0] != 0) {
+                uint32_t first = ((((uint32_t)rec[1] << 8) | rec[2]) + ext) & 0x1FFFFFFFu;
+                uint32_t last = first + rec[0] - 1u;
+                if (first < HEXFLASH_APP_PHYS_BASE || last >= HEXFLASH_APP_PHYS_END) return HEXFLASH_ERR_TARGET;
+                if (first <= HEXFLASH_APP_PHYS_BASE && last >= HEXFLASH_APP_PHYS_BASE) has_reset = true;
+            }
+            break;
+        case END_OF_FILE_RECORD: {
+            bool ok = has_reset;
+            has_reset = false;
+            ext = 0;
+            return ok ? HEXFLASH_OK : HEXFLASH_ERR_TARGET;
+        }
+        default:
+            break;
+    }
+    return HEXFLASH_OK;
+}
+
 hexflash_status_t hexflash_begin(void) {
     ext_addr = 0;
     dw_mask = 0;

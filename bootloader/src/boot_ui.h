@@ -18,6 +18,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// Bootloader version, shown on every screen. MAJOR changes with the flash
+// layout (where the app starts: an app built for another layout does not
+// run), MINOR with changes in what it does.
+#define BOOT_VERSION "1.0"
+
 #define UI_WHITE    0xFFFF
 #define UI_YELLOW   0xFFE0
 #define UI_GREEN    0x07E0

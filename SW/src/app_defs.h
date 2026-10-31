@@ -11,6 +11,7 @@
 #define APP_DEFS_H
 
 #define cVersion "v1.8+"
+#define BOOT_TAG_ADDRESS 0x9FC00370u    // Bootloader version tag ("BOOT 1.0"), see bootloader boot_ui.c
 #define cMAIN_n_opt 10
 #define cSEED_n_opt 6
 #define cSIZE_n_opt 2

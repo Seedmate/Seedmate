@@ -45,6 +45,13 @@ MEMORY
      debug exception handler, to 0xFFF; unused in production builds) and the end after the exception vector */
   boot_ui_code_mem      (rx)  : ORIGIN = 0x9FC004B0, LENGTH = 0xB50
   boot_ui_data_mem      (rx)  : ORIGIN = 0x9FC01190, LENGTH = 0x570
+  /* Gaps between the reset vector (ends 0x140) and the BEV exception
+     (0x380), and after it (0x38C) up to the debug exception handler (0x480):
+     the SHA-256 code */
+  boot_gap1_mem         (rx)  : ORIGIN = 0x9FC00140, LENGTH = 0x230
+  /* Version tag of the bootloader, read by the app at this fixed address */
+  boot_version_mem      (r)   : ORIGIN = 0x9FC00370, LENGTH = 0x10
+  boot_gap2_mem         (rx)  : ORIGIN = 0x9FC0038C, LENGTH = 0xF4
   
   config_BFC01744             : ORIGIN = 0xBFC01744, LENGTH = 0x4
   config_BFC01748             : ORIGIN = 0xBFC01748, LENGTH = 0x4
@@ -117,6 +124,22 @@ SECTIONS
     KEEP(*(.gen_handler))
   } > kseg1_boot_mem
 
+  /* SHA-256 of the update file (boot_sha.o): code in the vector gaps */
+  .boot_sha_a :
+  {
+    *boot_sha.o(.text.transform .text.boot_sha_init .text.boot_sha_update)
+  } > boot_gap1_mem
+
+  .boot_version :
+  {
+    KEEP(*(.boot_version))
+  } > boot_version_mem
+
+  .boot_sha_b :
+  {
+    *boot_sha.o(.text.boot_sha_final)
+  } > boot_gap2_mem
+
   /* Bootloader screen: boot_ui.o (with the app's TFT.c) and spi_boot.o
      (the app's SPI.c) in the boot flash. The second area is listed first so
      it takes the update flow helpers before .boot_ui takes the rest. */
@@ -124,7 +147,7 @@ SECTIONS
   {
     *boot_ui.o(.rodata .rodata.*)
     *boot_ui.o(.text.finish .text.fail_app_intact .text.fail_app_erased .text.error_text)
-    *boot_ui.o(.text.wait_ok_back .text.software_reset .text.app_missing)
+    *boot_ui.o(.text.wait_ok_back .text.app_missing)
   } > boot_ui_data_mem
 
   .boot_ui :

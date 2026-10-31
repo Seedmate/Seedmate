@@ -1346,7 +1346,19 @@ void print_settings_screen(int sel) {
     
     uint16_t color_fw = (sel == cSETTINGS_UPDATE_FW) ? ST7735_ORANGE : ST7735_WHITE;
     drawtext(1, 33, "UPDATE FIRMWARE", color_fw, ST7735_BLACK, 1);
-    
+
+    // Versions: this firmware and the bootloader, whose tag the bootloader
+    // keeps at a fixed boot flash address ("BOOT 1.0"; an older one has none)
+    char text[28];
+    const char *tag = (const char *)BOOT_TAG_ADDRESS;
+    strcpy(text, "FIRMWARE ");
+    strcat(text, cVersion);
+    drawtext(1, 60, text, ST7735_CYAN, ST7735_BLACK, 1);
+    strcpy(text, "BOOTLOADER ");
+    if (memcmp(tag, "BOOT ", 5) == 0 && tag[15] == '\0') strcat(text, tag + 5);
+    else strcat(text, "?");
+    drawtext(1, 70, text, ST7735_CYAN, ST7735_BLACK, 1);
+
     grid_menu2(); 
 }
 

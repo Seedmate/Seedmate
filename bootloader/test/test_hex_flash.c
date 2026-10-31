@@ -83,6 +83,25 @@ static void reset_all(void) {
     page_rewrites = 0;
 }
 
+// Pass 1 target check of a whole HEX file, in file order
+static hexflash_status_t check_hex_file(const char *path) {
+    FILE *f = fopen(path, "r");
+    char line[600];
+    uint8_t rec[260];
+    hexflash_status_t st = HEXFLASH_OK;
+    if (!f) { printf("cannot open %s\n", path); failures++; return HEXFLASH_ERR_RECORD; }
+    while (st == HEXFLASH_OK && fgets(line, sizeof(line), f)) {
+        if (line[0] != ':') continue;
+        int n = 0;
+        for (char *p = line + 1; hexval(p[0]) >= 0 && hexval(p[0]) < 16 && hexval(p[1]) >= 0 && hexval(p[1]) < 16; p += 2) {
+            rec[n++] = (uint8_t)(hexval(p[0]) << 4 | hexval(p[1]));
+        }
+        st = hexflash_check_record(rec);
+    }
+    fclose(f);
+    return st;
+}
+
 static void test_file(const char *path) {
     reset_all();
     CHECK(flash_hex_file(path, true) == HEXFLASH_OK);
@@ -127,9 +146,40 @@ static void test_synthetic(void) {
     CHECK(hexflash_write_record(rec) == HEXFLASH_ERR_RECORD);
 }
 
+// The target check: an app hex passes, anything else is refused
+static void test_target(const char *app_hex) {
+    uint8_t rec[64];
+    const uint8_t seg_app[2] = {0x9D, 0x00}, seg_boot[2] = {0xBF, 0xC0}, code[4] = {1, 2, 3, 4};
+    const uint8_t seg_old[2] = {0x1D, 0x00};
+
+    CHECK(check_hex_file(app_hex) == HEXFLASH_OK);
+
+    // Data in the bootloader area (an old 64 KB device starts at 0x1D000000)
+    make_rec(rec, 4, 0, seg_old, 2);        CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
+    make_rec(rec, 0, 0x0000, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_ERR_TARGET);
+    make_rec(rec, 0, 0x1FFC, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_ERR_TARGET);
+    // Config words / boot flash
+    make_rec(rec, 4, 0, seg_boot, 2);       CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
+    make_rec(rec, 0, 0x17C0, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_ERR_TARGET);
+    // Past the end of the app area
+    make_rec(rec, 4, 0, seg_app, 2);        CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
+    const uint8_t seg_far[2] = {0x9D, 0x04};
+    make_rec(rec, 4, 0, seg_far, 2);        CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
+    make_rec(rec, 0, 0x0000, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_ERR_TARGET);
+    // In range but nothing at the reset vector 0x1D002000
+    make_rec(rec, 4, 0, seg_app, 2);        CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
+    make_rec(rec, 0, 0x4000, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
+    make_rec(rec, 1, 0, NULL, 0);           CHECK(hexflash_check_record(rec) == HEXFLASH_ERR_TARGET);
+    // With it, the same file is accepted (a new file starts with its address record)
+    make_rec(rec, 4, 0, seg_app, 2);        CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
+    make_rec(rec, 0, 0x2000, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
+    make_rec(rec, 1, 0, NULL, 0);           CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
+}
+
 int main(int argc, char **argv) {
     test_synthetic();
     for (int i = 1; i < argc; i++) test_file(argv[i]);
+    for (int i = 1; i < argc; i++) test_target(argv[i]);
     printf(failures ? "\n%d FAILURE(S)\n" : "\nALL TESTS PASSED\n", failures);
     return failures != 0;
 }

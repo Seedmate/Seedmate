@@ -32,11 +32,18 @@
 typedef enum {
     HEXFLASH_OK = 0,
     HEXFLASH_ERR_RECORD = 5,    // Bad checksum or malformed record
-    HEXFLASH_ERR_NVM = 6        // Flash controller reported an error
+    HEXFLASH_ERR_NVM = 6,       // Flash controller reported an error
+    HEXFLASH_ERR_TARGET = 9     // The file is not an app for this device
 } hexflash_status_t;
 
 // Erases the whole application area and resets the writer state.
 hexflash_status_t hexflash_begin(void);
+
+// Pass 1 check of one record (nothing is written): the file must only hold
+// data inside the app area, and a program at its reset vector, otherwise it is
+// not an app for this device (another hardware, a bootloader, an empty file).
+// Call it for every record in file order; the end record gives the verdict.
+hexflash_status_t hexflash_check_record(const uint8_t *rec);
 
 // Programs one binary HEX record: length, address (2 bytes), type, data,
 // checksum. Records outside the application area are ignored.

@@ -20,6 +20,7 @@
 #include "diskio.h"
 #include "hex_flash.h"
 #include "boot_ui.h"
+#include "boot_sha.h"
 
 // --- Pin mapping for LED activity ---
 #define LED       PORTAbits.RA2
@@ -107,6 +108,23 @@ static bool forced_update_requested(void) {
     return BTN_BACK == 0 && BTN_OK == 0;
 }
 
+// A SHA-256 as 4 lines of 2 groups of 8 hex digits, from y
+static void ui_hash(int y, const uint8_t hash[32], uint16_t color) {
+    static const char hex[] = "0123456789ABCDEF";
+    char line[18];
+    for (int l = 0; l < 4; l++) {
+        char *p = line;
+        for (int i = 0; i < 8; i++) {
+            uint8_t b = hash[l * 8 + i];
+            *p++ = hex[b >> 4];
+            *p++ = hex[b & 15];
+            if (i == 3) *p++ = ' ';
+        }
+        *p = '\0';
+        ui_text(y + l * 10, line, color);
+    }
+}
+
 // A complete record: its checksum is right and it is as long as it claims
 // ('hex_chars' = characters after the ':')
 static bool record_is_valid(const uint8_t *rec, uint32_t hex_chars) {
@@ -128,6 +146,7 @@ static int process_hex_file(bool program) {
     bool end_of_file_found = false;
 
     if (pf_open("UPDATE.HEX") != FR_OK) return 3;
+    boot_sha_init();                // Hash of every byte read, in both passes
     record.status = REC_NOT_FOUND;
     ui_progress(0, fs.fsize);
 
@@ -136,6 +155,7 @@ static int process_hex_file(bool program) {
         FRESULT res = pf_read(&asciiBuffer[pointer], 512, &readBytes);
         if (res != FR_OK) return 4;
         if (readBytes == 0) break; // EOF
+        boot_sha_update(&asciiBuffer[pointer], readBytes);
 
         for (uint32_t i = 0; i < (readBytes + pointer); i++)
         {
@@ -164,6 +184,9 @@ static int process_hex_file(bool program) {
                                 if (st != HEXFLASH_OK) return st;
                             } else if (!record_is_valid(hexRec, record.len - 1)) {
                                 return HEXFLASH_ERR_RECORD;
+                            } else {
+                                hexflash_status_t st = hexflash_check_record(hexRec);
+                                if (st != HEXFLASH_OK) return st;
                             }
                         }
                         record.status = REC_FLASHED;
@@ -257,22 +280,22 @@ int main(void)
     ui_text(82, "CHECKING UPDATE.HEX", UI_CYAN);
     int err = process_hex_file(false);
     if (err != 0) fail_app_intact(err, error_text(err));
+    uint8_t file_hash[32];
+    boot_sha_final(file_hash);
 
-    // Confirmation before anything is erased (Rule 4)
-    ui_text(40, "FILE OK", UI_GREEN);
-    ui_text(52, "ERASE THE APP AND", UI_WHITE);
-    ui_text(62, "WRITE THE NEW ONE?", UI_WHITE);
+    // Confirmation before anything is erased (Rule 4), with the SHA-256 of
+    // the file to compare with the published one
+    ui_text(11, "FILE OK", UI_GREEN);
+    ui_text(30, "SHA-256 OF UPDATE.HEX", UI_WHITE);
+    ui_hash(40, file_hash, UI_CYAN);
+    ui_text(82, "ERASE APP AND WRITE?", UI_WHITE);
     ui_grid(true, true);
     if (!wait_ok_back(true)) {
-        ui_text(52, "", UI_WHITE);
-        ui_text(62, "", UI_WHITE);
+        ui_screen("FIRMWARE UPDATE");
         if (no_app) finish(1, "UPDATE CANCELLED", UI_YELLOW, "NO APP: OK RETRIES", UI_YELLOW);
         finish(1, "UPDATE CANCELLED", UI_YELLOW, "APP NOT TOUCHED", UI_GREEN);
     }
-    ui_text(40, "", UI_WHITE);
-    ui_text(52, "", UI_WHITE);
-    ui_text(62, "", UI_WHITE);
-    ui_grid(false, false);
+    ui_screen("FIRMWARE UPDATE");
 
     // =========================================================================
     // FILE CHECKED AND CONFIRMED: FLASH PROCESS
@@ -286,6 +309,15 @@ int main(void)
     ui_text(82, "WRITING THE NEW APP", UI_CYAN);
     err = process_hex_file(true);
     if (err != 0) fail_app_erased(err, error_text(err));
+
+    // What was written must be the file the user saw: the card could answer
+    // differently the second time. If not, the app is erased again.
+    uint8_t written_hash[32];
+    boot_sha_final(written_hash);
+    if (memcmp(written_hash, file_hash, sizeof(file_hash)) != 0) {
+        hexflash_begin();
+        fail_app_erased(5, "FILE CHANGED");
+    }
 
     // Final verification check to ensure Flash is not entirely blank
     if (*(uint32_t *)USER_APP_RESET_ADDRESS == 0xFFFFFFFF) {
