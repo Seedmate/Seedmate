@@ -41,7 +41,7 @@ const uint16_t bmp_add_symbol[7]   = { 0x1000, 0x1000, 0x1000, 0xFE00, 0x1000, 0
 const char* const menu_main[]     = {"CREATE NEW SEED WORDS", "LOAD SEED WORDS", "BIP85 CHILD SEED", "SHAMIR SECRET SHARE", "SEED WORD XOR", "OBFUSCATION", "MNEMONIC TO CARDS", "ERASE SD", "RESOURCES", "SETTINGS"};
 const char* const menu_create[]   = {"THROW COINS", "ROLL DICE", "RANDOM WORD PICK", "DRAW CARDS", "STOPWATCH TEST ONLY", "TRIPLE MNEMONIC"};
 const char* const menu_dice[]     = {"RAW ENTROPY BITS", "STRING HASH"};
-const char* const menu_hash[]     = {"1-6 mode", "0-5 mode (Keystone)"};
+const char* const menu_hash[]     = {"1-6 MODE", "0-5 MODE (KEYSTONE)"};
 const char* const menu_size[]     = {"12 WORDS", "24 WORDS"};
 const char* const menu_qr[]       = {"STANDARD", "COMPACT"};
 const char* const menu_xor[]      = {"A XOR B = C", "A XOR B XOR C = D", "A XOR B XOR C XOR D = E"};
@@ -49,7 +49,8 @@ const char* const menu_sss[]      = {"SPLIT", "MERGE"};
 const char* const menu_resource[] = {"TUTORIAL", "BACKUP TOOL", "DICE TESTER", "PRINT WORDLIST", "BINARY WORDLIST"};
 const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB","1 WORD XOR","BYTE SWAP","HOW TO"};
 const char* const menu_erase[]    = {"ERASE SECTOR", "WIPE ALL CARD"};
-const char* const menu_bip84[] = {"RECEIVE ADDRESS", "CHANGE ADDRESS", "SEEDQR", "FINGERPRINT", "XPUB", "PASSPHRASE", "SIGN", "ACCOUNT", "MODE: SINGLE SIG"};
+const char* const menu_bip84[] = {"ADDRESSES", "SEEDQR", "FINGERPRINT", "XPUB", "PASSPHRASE", "SIGN", "ACCOUNT", "MODE: SINGLE SIG"};
+const char* const menu_addresses[] = {"RECEIVE ADDRESS", "CHANGE ADDRESS", "SCAN ADDRESS"};
 const char* const menu_bip84_multi[] = {"SEEDQR", "FINGERPRINT", "XPUB", "PASSPHRASE", "SIGN", "IMPORT DESCRIPTOR", "ACCOUNT", "MODE: MULTI SIG"};
 const char* const menu_sign[]     = {"FROM QR", "FROM SD"};
 const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD", "QR SCAN"};
@@ -294,20 +295,50 @@ void grid_OK_only(){
 
 void version_display(){
 
-    drawtext(120,119, cVersion, ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(5,117, cVersion, ST7735_WHITE, ST7735_WHITE, 1);    // Left of the button grid
 
 }
 
 // ============================================================================
 // Generic Menu Renderer
 // ============================================================================
+// Title of a menu, from its table (the strings of other menus are reused);
+// NULL for a menu without one
+static const char *menu_title(const char* const *options) {
+    if (options == menu_create)       return menu_main[cMAIN_create];
+    if (options == menu_xor)          return menu_main[cMAIN_XOR];
+    if (options == menu_sss)          return menu_main[cMAIN_SSS];
+    if (options == menu_obfus)        return menu_main[cMAIN_OBFUS];
+    if (options == menu_erase)        return menu_main[cMAIN_ERASESD];
+    if (options == menu_resource)     return menu_main[cMAIN_QR];
+    if (options == menu_addresses)    return menu_bip84[0];
+    if (options == menu_bip84)        return "SINGLE SIG WALLET";
+    if (options == menu_bip84_multi)  return "MULTISIG WALLET";
+    if (options == menu_input)        return "LOAD SEED FROM";
+    if (options == menu_size)         return "SEED SIZE";
+    if (options == menu_dice)         return "DICE MODE";
+    if (options == menu_hash)         return "DICE NUMBERING";
+    return NULL;
+}
+
 void print_generic_menu(const char* const *options, int n_opt, int sel) {
+    print_titled_menu(menu_title(options), options, n_opt, sel);
+}
+
+// Menu with a title on the top line (NULL: none) and the options below it
+void print_titled_menu(const char *title, const char* const *options, int n_opt, int sel) {
+    int top = 10;
+    if (title != NULL) {
+        drawtext(1, 1, (char*)title, ST7735_WHITE, ST7735_BLACK, 1);
+        top = 13;
+    }
     for (int i = 0; i < n_opt; i++) {
         uint16_t color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, 10 + i * 10, (char*)options[i], color, ST7735_BLACK, 1);
+        drawtext(1, top + i * 10, (char*)options[i], color, ST7735_BLACK, 1);
     }
     grid_menu2();
 }
+
 
 void main_screen(int sel) {
     for (int i = 0; i < cMAIN_n_opt; i++) {
@@ -440,7 +471,7 @@ void print_update_fw_warning(void) {
     black_screen();
     drawtext(20, 25, "SYSTEM UPDATE", ST7735_WHITE, ST7735_BLACK, 1);
     drawtext(10, 45, "1. INSERT SD CARD", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(10, 60, "   WITH update.hex file", ST7735_WHITE, ST7735_BLACK, 1);    
+    drawtext(10, 60, "   WITH UPDATE.HEX FILE", ST7735_WHITE, ST7735_BLACK, 1);    
     grid_OK_back();
 }
 
@@ -623,15 +654,16 @@ void print_diceroll_screen(int sel, int sel2){
 void print_TMR_screen(int size_TMR){
 
     // sel: 0 -> 128 bits, 1 -> 256 bits
-    drawtext(1,5, "STOP timer to set entropy", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1,5, "STOP TIMER TO SET ENTROPY", ST7735_WHITE, ST7735_BLACK, 1);
     char *text_TMR_SEED = size_TMR ? "000/256 bits" : "000/128 bits";
     drawtext(45,15, text_TMR_SEED, ST7735_WHITE, ST7735_BLACK, 1);
     grid_OK_only();
 }
 
 void print_child_config_screen(void) {
-    drawtext(1, 10, "CHILD SIZE:", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(80, 10, "BIP85 INDEX:", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 1, (char*)menu_main[cMAIN_BIP85], ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 13, "CHILD SIZE:", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(80, 13, "BIP85 INDEX:", ST7735_WHITE, ST7735_BLACK, 1);
 
     uint16_t size_color = (bip85_cursor == 0) ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t index_color = (bip85_cursor == 1) ? ST7735_ORANGE : ST7735_WHITE;
@@ -648,8 +680,9 @@ void print_child_config_screen(void) {
 }
 
 void print_obfus_config_screen(void) {
-    drawtext(1, 10, "Operation:", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(100, 10, "Amount:", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 1, (char*)menu_obfus[obfuscation_pointer], ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 13, "OPERATION:", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(100, 13, "AMOUNT:", ST7735_WHITE, ST7735_BLACK, 1);
 
     uint16_t op_color = (obfus_cursor == 0) ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t amt_color = (obfus_cursor == 1) ? ST7735_ORANGE : ST7735_WHITE;
@@ -1179,7 +1212,8 @@ void print_word_number_top(int word_number, char *word_number_text) {
 void print_selkn_screen(int k, int n, int sel){
     char k_text[3];
     char n_text[3];
-    drawtext(10,15, "Select ( k , n ):", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 1, "SHAMIR SPLIT", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(10,15, "SELECT ( K , N ):", ST7735_WHITE, ST7735_BLACK, 1);
     u16_to_str((unsigned int)k, k_text);
     u16_to_str((unsigned int)n, n_text);
     int color_k = (sel==0) ? ST7735_ORANGE : ST7735_WHITE;
@@ -1192,7 +1226,8 @@ void print_selkn_screen(int k, int n, int sel){
 
 void print_selk_screen(int k){
     char k_text[3];
-    drawtext(0,15, "N. of shares needed (k):", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 1, "SHAMIR MERGE", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(0,15, "N. OF SHARES NEEDED (K):", ST7735_WHITE, ST7735_BLACK, 1);
     u16_to_str((unsigned int)k, k_text);
     drawtext(70,30, k_text, ST7735_ORANGE, ST7735_BLACK, 2);
     grid_nbits();
@@ -1201,7 +1236,7 @@ void print_selk_screen(int k){
 
 void print_sel_share_screen(int k){
     char k_text[3];
-    drawtext(0,15, "Share id:", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(0,15, "SHARE ID:", ST7735_WHITE, ST7735_BLACK, 1);
     u16_to_str((unsigned int)k, k_text);
     drawtext(70,30, k_text, ST7735_ORANGE, ST7735_BLACK, 2);
     grid_nbits_noback();
@@ -1303,13 +1338,14 @@ void print_settings_screen(int sel) {
     char* text_seedqr = seedqr_enabled ? "SeedQR ON " : "SeedQR OFF";
     uint16_t color_seedqr = (sel == cSETTINGS_SEEDQR) ? ST7735_ORANGE : ST7735_WHITE;
     
-    drawtext(1, 10, text_seedqr, color_seedqr, ST7735_BLACK, 1);
+    drawtext(1, 1, (char*)menu_main[cMAIN_SETTINGS], ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 13, text_seedqr, color_seedqr, ST7735_BLACK, 1);
 
     uint16_t color_serial = (sel == cSETTINGS_MCU_SERIAL) ? ST7735_ORANGE : ST7735_WHITE;
-    drawtext(1, 20, "MCU SERIAL NUMBER", color_serial, ST7735_BLACK, 1);
+    drawtext(1, 23, "MCU SERIAL NUMBER", color_serial, ST7735_BLACK, 1);
     
     uint16_t color_fw = (sel == cSETTINGS_UPDATE_FW) ? ST7735_ORANGE : ST7735_WHITE;
-    drawtext(1, 30, "UPDATE FIRMWARE", color_fw, ST7735_BLACK, 1);
+    drawtext(1, 33, "UPDATE FIRMWARE", color_fw, ST7735_BLACK, 1);
     
     grid_menu2(); 
 }
@@ -1329,7 +1365,7 @@ void print_mcu_serial_screen(void) {
     int x_pos = 20;
 
     black_screen();
-    drawtext(10, 30, "MCU SERIAL NUMBER:", ST7735_ORANGE, ST7735_BLACK, 1);
+    drawtext(10, 30, "MCU SERIAL NUMBER:", ST7735_WHITE, ST7735_BLACK, 1);
     
     // The PIC32MM uses UDID1 to UDID4. We extract 64 bits using UDID2 and UDID1.
     parts[0] = (uint16_t)((UDID2 >> 16) & 0xFFFF);
@@ -1349,7 +1385,7 @@ void print_mcu_serial_screen(void) {
 
 void print_card_encoding_screen(void) {
     black_screen();
-    drawtext(1, 2, "MNEMONIC TO CARDS", ST7735_ORANGE, ST7735_BLACK, 1);
+    drawtext(1, 2, "MNEMONIC TO CARDS", ST7735_WHITE, ST7735_BLACK, 1);
     
     char decks_str[30] = "DECKS NEEDED: ";
     char num[4];

@@ -32,6 +32,7 @@ extern const char* const menu_obfus[];
 extern const char* const menu_erase[];
 extern const char* const menu_bip84[];
 extern const char* const menu_bip84_multi[];
+extern const char* const menu_addresses[];
 extern const char* const menu_sign[];
 extern const char* const menu_input[];
 
@@ -66,6 +67,7 @@ void grid_coins(void);
 void grid_OK_only(void);
 void version_display(void);
 void print_generic_menu(const char* const *options, int n_opt, int sel);
+void print_titled_menu(const char *title, const char* const *options, int n_opt, int sel);
 void black_screen(void);
 void white_screen(void);
 void print_logo(void);

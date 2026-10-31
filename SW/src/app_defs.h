@@ -47,8 +47,7 @@
 #define cRESOURCE_dice_test 2
 #define cRESOURCE_wordlist 3
 #define cRESOURCE_BINlist 4
-#define cBIP84_RECEIVE 0
-#define cBIP84_CHANGE 1
+#define cBIP84_ADDRESSES 1        // Opens the RECEIVE / CHANGE address menu (single sig only)
 #define cBIP84_SEEDQR 2
 #define cBIP84_FINGERPRINT 3
 #define cBIP84_XPUB 4
@@ -57,8 +56,12 @@
 #define cBIP84_MODE 7           // Toggles single sig / multisig
 #define cBIP84_DESCRIPTOR 8     // Multisig menu only
 #define cBIP84_ACCOUNT 9        // Account index of m/84'/0'/n' and m/48'/0'/n'/2'
-#define cBIP84_n_opt 9          // Single sig menu entries
-#define cBIP84_MULTI_n_opt 8    // Multisig menu entries (no address options)
+#define cBIP84_n_opt 8          // Single sig menu entries
+#define cBIP84_MULTI_n_opt 8    // Multisig menu entries (no addresses)
+#define cADDRESS_RECEIVE 0      // ADDRESSES menu entries = address chain
+#define cADDRESS_CHANGE 1
+#define cADDRESS_SCAN 2         // Checks a scanned address against our first ones
+#define cADDRESS_n_opt 3
 
 #define cSIGN_QR 0
 #define cSIGN_SD 1

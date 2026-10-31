@@ -62,14 +62,14 @@ Whenever a screen waits for a key, show the button grid (bottom right, x 63-153 
 ## Rule 7 - Consistent colors
 
 Every color has one meaning on every screen; reuse it, never pick a color for looks:
-- WHITE: normal text and values. Dark gray `0x8410`: disabled items and decoration (key outlines).
-- YELLOW: screen title (top line). In the body: warnings and unverified data ("NOT VERIFIED", "AMOUNTS NOT VERIFIED").
+- WHITE: normal text, values and screen titles (top line). Dark gray `0x8410`: disabled items and decoration (key outlines).
+- YELLOW: warnings and unverified data ("NOT VERIFIED", "AMOUNTS NOT VERIFIED", warnings that do not stop the flow), and the fee.
 - ORANGE: only the selected item or cursor (menus, keys, editable fields). Not for titles, hints or amounts.
-- GREEN: success and verified facts ("VERIFIED", "OK", "LOADED", our own key or fingerprint).
+- GREEN: success and verified facts ("VERIFIED", "OK", "LOADED", our own key or fingerprint), also as the title of a success screen.
 - RED: errors, refusals and dangerous actions ("PSBT PARSE ERROR", "KEY MISMATCH", wipe), also as the title of an error screen.
 - CYAN: secondary information and progress (derivation paths, counters, active layer, "CHECKING...", the running step above a progress bar).
 - Progress bar: white outline, green fill.
-Before adding a screen, look at a similar existing one and copy its colors.
+Texts are upper case. Before adding a screen, look at a similar existing one and copy its colors.
 
 ## Building and checking (no IDE needed)
 
@@ -94,7 +94,7 @@ With the project closed in the IDE, edit `configurations.xml` and regenerate the
   Text editor (`full_text_editor()`, BIP39 passphrase and notes): 3 alphabetical rows of 9 outlined keys plus CANCEL/SAVE/RETURN, the 2x3 control keys (aA, #@, cursor arrows) next to the untouched `grid_keyboard()`; NUM and SYM layers hold each printable ASCII symbol once. Passphrase mode adds a character counter and a review screen after SAVE (BACK edits again); `edit_bip39_passphrase()` edits a copy, so CANCEL keeps the old one, and `transition_to_main()` wipes it.
   BIP84/BIP48 keys are derived only when the user opens the wallet menu from the words screen (`load_wallet_keys()`: loading screen with progress phases, BACK cancels the PBKDF2). The key cache is bound to the seed on screen by `bip84_seed_tag` (truncated SHA256 of entropy, size and passphrase), so another Shamir share or a BIP85 child is never shown with stale keys.
   GM861 scanner (UART2, 115200, manual "GM861S User Manual V1.2.4", zone bits in chapter 10): its stored setup is command triggered mode with a 500 ms break between reads. For the UR animated scan only, `scan_ur_message()` writes to the scanner RAM (never its flash, `gm861_override()`): 0x0000 continuous mode, 0x0005 break 0, 0x0013 same-code delay 500 ms, 0x0060 CR tail; it receives through the UART2 interrupt into a 512 B ring buffer (`scan_rx_*`, the 4-byte hardware FIFO would overflow while a frame is processed) and restores every register on exit, mode first (`gm861_restore()`, error shown if it fails). If the setup fails it falls back to command trigger mode (trigger after each processed code, wait for the 7-byte ACK, resend after 50 ms). Frame end = CR or 15 ms of silence, timed with the core timer (`_CP0_GET_COUNT()`, 12 MHz). Other QR functions keep polled UART and the stored scanner setup.
-- `screens.c/h` - TFT drawing only: bitmaps, menu text tables, grids/arrows, menus, QR views and input screens. Screens that still mix drawing with mnemonic/SD/BIP84 logic remain in `main.c` until `mnemonic.c`, `sd_card.c` and `bip84.c` exist.
+- `screens.c/h` - TFT drawing only: bitmaps, menu text tables, grids/arrows, menus, QR views and input screens. Menus have a title on the top line: `print_generic_menu()` takes it from `menu_title()` (reusing the strings of other menus, e.g. `menu_main[]`), `print_titled_menu()` when it depends on the context; options start at y=13. Screens that still mix drawing with mnemonic/SD/BIP84 logic remain in `main.c` until `mnemonic.c`, `sd_card.c` and `bip84.c` exist.
 - `app_defs.h` - application constants (menu sizes/indices, option values, messages, `cVersion`). `app_state.h` - `extern` declarations of the state variables that `main.c` owns and `screens.c` reads. Keep it small; prefer passing parameters in new code.
 - `psbt.c/h` - zero-copy PSBT (BIP174 v0) parser: inputs/outputs, amounts, fee, BIP32 derivations, sighash, partial signatures, multisig scripts. No crypto inside; key verification against the seed lives in `main.c` (`psbt_check_owner`). Host tests in `../test/psbt/`.
 - `psbt_sign.c/h` - signing crypto: BIP143 sighash (P2WPKH and P2WSH), NON_WITNESS_UTXO txid check, ECDSA with RFC6979 nonces, low S and low R grinding, verified after signing, built on the vendored bignum/ecdsa (the trimmed `crypto/ecdsa.c` has no signing), and BIP32 public child derivation (`psbt_public_ckd()`, for cosigner xpubs). Host tests (`../test/psbt/test_sign.c`) check the BIP143 vector and that the firmware signs the abandon PSBT byte-identically to the Python signer. The decision of what to sign (`psbt_plan_signing`: mainnet only, SIGHASH_ALL only, txid check, key/change verification, confirmation screen) and key derivation live in `main.c` (`psbt_review_and_sign`).
