@@ -86,6 +86,7 @@
 #include "ur_encode.h"
 #include "psbt_sign.h"
 #include "descriptor.h"
+#include "snake.h"
 
 
 
@@ -6120,6 +6121,12 @@ int main ( void ){
     black_screen();
     LCDinit2();
     black_screen();
+
+#if DECOY_SNAKE
+    // Decoy: the device is a snake game unless OK + RIGHT are held at power-on
+    if (BT_OK != 0 || BT6 != 0) snake_run();        // Never returns
+    while (BT_OK == 0 || BT6 == 0) SYS_Tasks();     // Keys released before the app reads them
+#endif
 
     print_logo();
     drawtext(1,40, "KEEP YOUR SEEDS OFFLINE", ST7735_GREEN, ST7735_BLACK, 1);
