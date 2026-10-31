@@ -16,6 +16,7 @@
 #define QR_SCALE 4 // Size of each module in pixels
 #define SCREEN_WIDTH 160
 #define SCREEN_HEIGHT 128
+#define GRID_X 63           // Left line of the button grid (x 63-153, y 105-125)
 
 // Menu text tables (stored in flash)
 extern const char* const menu_main[];
@@ -69,6 +70,11 @@ void black_screen(void);
 void white_screen(void);
 void print_logo(void);
 void grid_OK_back(void);
+void grid_labels(const char *back, const char *up, const char *ok,
+                 const char *left, const char *down, const char *right);
+void grid_back_only(void);
+void grid_confirm(const char *ok_label);
+void grid_pager(const char *ok_label);
 void grid_scan_back(void);
 void print_update_fw_warning(void);
 void print_diceroll_screen(int sel, int sel2);

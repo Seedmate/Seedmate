@@ -46,6 +46,11 @@
 #define UPDATE_FLAG_ADDR ((volatile uint32_t *)0x80007F00)
 #define MAGIC_WORD_UPDATE 0x55AA1234
 
+// --- Forced update buttons: same pins as the app (active low, pull-ups set
+// by SYS_Initialize): BACK = RB2 (BT1), OK = RC1 (BT_OK) ---
+#define BTN_BACK  PORTBbits.RB2
+#define BTN_OK    PORTCbits.RC1
+
 // --- Hex Parser Structures ---
 typedef enum {
     REC_NOT_FOUND,
@@ -101,6 +106,16 @@ void JumpToApp(void)
     fptr(); 
 }
 
+// OK and BACK held together at power-on force an update from the SD card,
+// so a missing or broken application (which cannot set the update flag)
+// can still be replaced without a programmer. Checked twice, 50 ms apart.
+static bool forced_update_requested(void) {
+    delay_ms(20);                   // Let the pull-ups settle
+    if (BTN_BACK != 0 || BTN_OK != 0) return false;
+    delay_ms(50);
+    return BTN_BACK == 0 && BTN_OK == 0;
+}
+
 void blink_error_and_jump(int blinks) {
     LED = 0;
     delay_ms(500); 
@@ -116,16 +131,93 @@ void blink_error_and_jump(int blinks) {
     JumpToApp();
 }
 
+// A complete record: its checksum is right and it is as long as it claims
+// ('hex_chars' = characters after the ':')
+static bool record_is_valid(const uint8_t *rec, uint32_t hex_chars) {
+    uint32_t bytes = (uint32_t)rec[0] + 5u;
+    if (bytes * 2u > hex_chars) return false;
+    uint8_t sum = 0;
+    for (uint32_t i = 0; i < bytes; i++) sum += rec[i];
+    return sum == 0;
+}
+
+// Reads UPDATE.HEX from its start. With 'program' false every record is only
+// checked (nothing is written); with 'program' true each one goes to the
+// flash writer. Returns 0, or the LED blink code of the failure.
+static int process_hex_file(bool program) {
+    UINT pointer = 0;
+    UINT readBytes = 0;
+    T_REC record;
+    uint32_t led_counter = 0;
+    bool end_of_file_found = false;
+
+    if (pf_open("UPDATE.HEX") != FR_OK) return 3;
+    record.status = REC_NOT_FOUND;
+
+    while (true)
+    {
+        FRESULT res = pf_read(&asciiBuffer[pointer], 512, &readBytes);
+        if (res != FR_OK) return 4;
+        if (readBytes == 0) break; // EOF
+
+        for (uint32_t i = 0; i < (readBytes + pointer); i++)
+        {
+            switch (record.status)
+            {
+                case REC_FLASHED:
+                case REC_NOT_FOUND:
+                    if (asciiBuffer[i] == ':') {
+                        record.start = &asciiBuffer[i];
+                        record.len = 0;
+                        record.status = REC_FOUND_BUT_NOT_FLASHED;
+                    }
+                    break;
+
+                case REC_FOUND_BUT_NOT_FLASHED:
+                    // 0x0A is LF, 0x0D is CR
+                    if ((asciiBuffer[i] == 0x0A) || (asciiBuffer[i] == 0x0D)) {
+                        if (record.len > 0 && record.len < 190) { // Safety bound
+                            ConvertAsciiToHex(&record.start[1], hexRec);
+
+                            if (hexRec[3] == END_OF_FILE_RECORD) {
+                                end_of_file_found = true;
+                            }
+                            if (program) {
+                                hexflash_status_t st = hexflash_write_record(hexRec);
+                                if (st != HEXFLASH_OK) return st;
+                            } else if (!record_is_valid(hexRec, record.len - 1)) {
+                                return HEXFLASH_ERR_RECORD;
+                            }
+                        }
+                        record.status = REC_FLASHED;
+                    }
+                    break;
+            }
+            if (record.status == REC_FOUND_BUT_NOT_FLASHED) record.len++;
+        }
+
+        if (record.status == REC_FOUND_BUT_NOT_FLASHED) {
+            if (record.len > 1000) return 5;
+            memmove(asciiBuffer, record.start, record.len);
+            pointer = record.len;
+            record.status = REC_NOT_FOUND;
+        } else {
+            pointer = 0;
+        }
+
+        led_counter++;
+        if ((led_counter % 2) == 0) LED = !LED;
+    }
+
+    return end_of_file_found ? 0 : 5;
+}
+
 // =========================================================================
 // MAIN ROUTINE
 // =========================================================================
 
 int main(void)
 {
-    UINT pointer = 0;
-    UINT readBytes = 0;
-    T_REC record;
-    
     /* Initialize all Harmony modules (Clocks, Pins, Peripherals) */
     SYS_Initialize(NULL);
     
@@ -144,14 +236,26 @@ int main(void)
     // =========================================================================
     // MAGIC WORD CHECK (SHARED MEMORY)
     // =========================================================================
-    // Check if the main application requested a firmware update
-    if (*UPDATE_FLAG_ADDR != MAGIC_WORD_UPDATE) {
+    // Update if the main application requested it, or if OK + BACK are held
+    bool forced = forced_update_requested();
+    if (!forced && *UPDATE_FLAG_ADDR != MAGIC_WORD_UPDATE) {
         // No update requested, jump straight to the application
         JumpToApp();
     }
-    
+
     // Clear the flag immediately to prevent bootloops in case the update fails
     *UPDATE_FLAG_ADDR = 0;
+
+    // Forced update: 10 fast flickers (unlike the 200 ms result codes), so
+    // the buttons can be released
+    if (forced) {
+        for (int i = 0; i < 10; i++) {
+            LED = 0;
+            delay_ms(50);
+            LED = 1;
+            delay_ms(50);
+        }
+    }
 
     delay_ms(1000);
 
@@ -164,74 +268,22 @@ int main(void)
 
     if (pf_mount(&fs) != FR_OK) blink_error_and_jump(2);
 
-    if (pf_open("UPDATE.HEX") != FR_OK) blink_error_and_jump(3);
+    // Pass 1: read and check the whole file without touching the flash. A
+    // damaged card or file is found here, while the current app still works.
+    int err = process_hex_file(false);
+    if (err != 0) blink_error_and_jump(err);
 
     // =========================================================================
-    // FILE FOUND! STARTING FLASH PROCESS
+    // FILE CHECKED! STARTING FLASH PROCESS
     // =========================================================================
-    
+
+    // Pass 2: erase the app area and program it from the file
     hexflash_status_t flash_status = hexflash_begin();
     if (flash_status != HEXFLASH_OK) blink_error_and_jump(flash_status);
 
-    record.status = REC_NOT_FOUND;
-    uint32_t led_counter = 0;
-    bool end_of_file_found = false;
+    err = process_hex_file(true);
+    if (err != 0) blink_error_and_jump(err);
 
-    while (true)
-    {
-        FRESULT res = pf_read(&asciiBuffer[pointer], 512, &readBytes);
-        if (res != FR_OK) blink_error_and_jump(4); 
-        
-        if (readBytes == 0) break; // EOF
-
-        for (uint32_t i = 0; i < (readBytes + pointer); i++)
-        {
-            switch (record.status)
-            {
-                case REC_FLASHED:
-                case REC_NOT_FOUND:
-                    if (asciiBuffer[i] == ':') {
-                        record.start = &asciiBuffer[i];
-                        record.len = 0;
-                        record.status = REC_FOUND_BUT_NOT_FLASHED;
-                    }
-                    break;
-                    
-                case REC_FOUND_BUT_NOT_FLASHED:
-                    // 0x0A is LF, 0x0D is CR
-                    if ((asciiBuffer[i] == 0x0A) || (asciiBuffer[i] == 0x0D)) {
-                        if (record.len > 0 && record.len < 190) { // Safety bound
-                            ConvertAsciiToHex(&record.start[1], hexRec);
-                            
-                            if (hexRec[3] == END_OF_FILE_RECORD) {
-                                end_of_file_found = true;
-                            }
-                            
-                            flash_status = hexflash_write_record(hexRec);
-                            if (flash_status != HEXFLASH_OK) blink_error_and_jump(flash_status);
-                        }
-                        record.status = REC_FLASHED;
-                    }
-                    break;
-            }
-            if (record.status == REC_FOUND_BUT_NOT_FLASHED) record.len++;
-        }
-
-        if (record.status == REC_FOUND_BUT_NOT_FLASHED) {
-            if (record.len > 1000) blink_error_and_jump(5); 
-            memmove(asciiBuffer, record.start, record.len);
-            pointer = record.len;
-            record.status = REC_NOT_FOUND;
-        } else {
-            pointer = 0;
-        }
-
-        led_counter++;
-        if ((led_counter % 2) == 0) LED = !LED;
-    }
-
-    if (!end_of_file_found) blink_error_and_jump(5); 
-    
     // Final verification check to ensure Flash is not entirely blank
     if (*(uint32_t *)USER_APP_RESET_ADDRESS == 0xFFFFFFFF) {
         blink_error_and_jump(8); // Flash is physically empty

@@ -14,7 +14,7 @@
 #define cMAIN_n_opt 10
 #define cSEED_n_opt 6
 #define cSIZE_n_opt 2
-#define cOBFUS_n_opt 5
+#define cOBFUS_n_opt 6
 #define cXOR_n_opt 3
 #define cSSS_n_opt 2
 #define cQR_n_opt 2
@@ -67,7 +67,8 @@
 #define cOBFUS_NOT 1
 #define cOBFUS_ADD 2
 #define cOBFUS_1WORD_XOR 3
-#define cOBFUS_HOWTO 4
+#define cOBFUS_BYTE_SWAP 4      // Swaps bytes 0-1, 2-3...: applying it again undoes it
+#define cOBFUS_HOWTO 5
 #define cSEED_coin 0
 #define cSEED_dice 1
 #define cSEED_word 2

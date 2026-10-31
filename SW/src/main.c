@@ -180,7 +180,7 @@ char bip84_passphrase[200] = {0}; // Holds the optional BIP39 passphrase
 #define KBD_SIDE_RIGHT      158
 #define KBD_BOX_COLOR       0x8410  // Dark gray key outlines
 // 2x3 control keys (aA, up, #@ / left, down, right): rows aligned with the
-// button grid, the last column ends on its left line (x=60)
+// button grid, in their own box that ends 5 px left of it (x 1-58)
 #define KBD_CTRL_TOP        105
 #define KBD_CTRL_ROW_H      10
 
@@ -286,6 +286,7 @@ BYTE xor_merge_word1[32] = {0};
 BYTE xor_merge_word2[32] = {0};
 BYTE xor_merge_word3[32] = {0};
 int xor_merge_words_available = 0;
+int xor_merge_size = 0;         // Seed size of the first XOR input: QR inputs must match it
 
 int extract_word_offset = 0;
 int triple_view_state = 0;
@@ -355,6 +356,7 @@ static bool matches_last_word_checksum(BYTE *data_array, char *word_user, int se
 static void shift_left(BYTE *data, int N);
 static void shift_right(BYTE *data, int N);
 static void not_operator(BYTE *data, int N);
+static void byte_swap_pairs(BYTE *data, int N);
 void set_bit(BYTE data_array[36], int bit_index, int value);
 const char* get_confirmed_word_from_entropy(const BYTE data_array[36], int index);
 int read_11bit_value(const BYTE data_array[36], int index);
@@ -392,7 +394,7 @@ int card_view_page = 0;
 // ============================================================================
 // HMAC-SHA512 and PBKDF2 live in kdf.c. This callback keeps the MCU tasks
 // running during the 2048 BIP39 iterations and fills the green progress bar
-// (x = 10..150, y = 121..124) drawn by the caller.
+// (x = 10..150, y = 93..96) drawn by key_progress_phase().
 static bool pbkdf2_progress_bar(uint32_t done, uint32_t total) {
     static uint32_t drawn = 0;          // Bar end already painted (x offset)
     uint32_t fill = (140u * done) / total;
@@ -400,7 +402,7 @@ static bool pbkdf2_progress_bar(uint32_t done, uint32_t total) {
     SYS_Tasks();
     if (fill < drawn) drawn = 0;        // A new run started
     if (fill >= drawn + 7) {            // Repaint in 7 px steps, as before
-        rectan(10 + drawn, 121, 10 + fill, 124, ST7735_GREEN);
+        rectan(10 + drawn, 93, 10 + fill, 96, ST7735_GREEN);
         drawn = fill;
     }
     return true;
@@ -1053,13 +1055,14 @@ static void draw_keyboard_boxes(void) {
     drawFastVLine(KBD_SIDE_LEFT, KBD_TOP, height, KBD_BOX_COLOR);
     drawFastVLine(KBD_SIDE_RIGHT, KBD_TOP, height, KBD_BOX_COLOR);
 
-    // Control keys: columns at x 1, 21, 40 and the button grid line at 60
+    // Control keys: columns at x 1, 20, 39, 58, apart from the button grid
     for (int r = 0; r <= 2; r++) {
-        drawFastHLine(KBD_LEFT, KBD_CTRL_TOP + r * KBD_CTRL_ROW_H, 60, KBD_BOX_COLOR);
+        drawFastHLine(KBD_LEFT, KBD_CTRL_TOP + r * KBD_CTRL_ROW_H, 58, KBD_BOX_COLOR);
     }
     drawFastVLine(1, KBD_CTRL_TOP, 2 * KBD_CTRL_ROW_H + 1, KBD_BOX_COLOR);
-    drawFastVLine(21, KBD_CTRL_TOP, 2 * KBD_CTRL_ROW_H + 1, KBD_BOX_COLOR);
-    drawFastVLine(40, KBD_CTRL_TOP, 2 * KBD_CTRL_ROW_H + 1, KBD_BOX_COLOR);
+    drawFastVLine(20, KBD_CTRL_TOP, 2 * KBD_CTRL_ROW_H + 1, KBD_BOX_COLOR);
+    drawFastVLine(39, KBD_CTRL_TOP, 2 * KBD_CTRL_ROW_H + 1, KBD_BOX_COLOR);
+    drawFastVLine(58, KBD_CTRL_TOP, 2 * KBD_CTRL_ROW_H + 1, KBD_BOX_COLOR);
 }
 
 // --- Helper: Delta Renderer for a Single Key ---
@@ -1108,16 +1111,16 @@ static void draw_keyboard_key(int idx, int active_layer, bool is_selected, bool 
             uint16_t c = is_selected ? ST7735_ORANGE : ((active_layer == LAYER_ABC || active_layer == LAYER_ABC_UPPER) ? ST7735_CYAN : ST7735_WHITE);
             drawtext(5, 106, "aA", c, bg, 1);
         } else if (idx == 31) {            
-            print_up_arrow(28,113,color);
+            print_up_arrow(27,113,color);
         } else if (idx == 32) {
             uint16_t c = is_selected ? ST7735_ORANGE : ((active_layer == LAYER_NUM || active_layer == LAYER_SYM) ? ST7735_CYAN : ST7735_WHITE);
-            drawtext(45, 106, "#@", c, bg, 1);
+            drawtext(43, 106, "#@", c, bg, 1);
         } else if (idx == 33) {            
             print_left_arrow(8,123,color);
         } else if (idx == 34) {            
-            print_down_arrow(28,123,color);
+            print_down_arrow(27,123,color);
         } else if (idx == 35) {            
-            print_rigth_arrow(47,123,color);
+            print_rigth_arrow(46,123,color);
         }
     }
 }
@@ -1685,18 +1688,19 @@ static void hdnode_serialize_public(const HDNode *node, uint32_t fingerprint, ui
 
 // BIP39 seed of the loaded mnemonic and passphrase (the slow PBKDF2 draws the
 // green progress bar at the bottom) and its BIP32 root. Wipes the seed.
-// Footer progress while keys are computed (Rule 4): the running phase above
-// a bar. Phase 1 (PBKDF2) fills the bar from inside PBKDF2_HMAC_SHA512;
-// phase 2 advances one step per public key (elliptic curve multiplication).
+// Progress while keys are computed (Rule 4): the running phase above a bar,
+// both above the button grid (BACK may cancel). Phase 1 (PBKDF2) fills the
+// bar from inside PBKDF2_HMAC_SHA512; phase 2 advances one step per public
+// key (elliptic curve multiplication).
 static uint8_t key_steps_done;
 static uint8_t key_steps_total;
 
 static void key_progress_phase(const char *label, uint8_t total_steps) {
     char text[24];
     strcpy(text, label);
-    rectan(0, 108, 159, 127, BLACK);
-    drawtext(10, 110, text, ST7735_CYAN, ST7735_BLACK, 1);
-    rectan(9, 120, 151, 125, WHITE);
+    rectan(0, 80, 159, 98, BLACK);
+    drawtext(10, 82, text, ST7735_CYAN, ST7735_BLACK, 1);
+    rectan(9, 92, 151, 97, WHITE);
     key_steps_done = 0;
     key_steps_total = total_steps;
 }
@@ -1704,7 +1708,7 @@ static void key_progress_phase(const char *label, uint8_t total_steps) {
 static void key_progress_step(void) {
     if (key_steps_total == 0) return;
     key_steps_done++;
-    rectan(10, 121, 10 + (140u * key_steps_done) / key_steps_total, 124, ST7735_GREEN);
+    rectan(10, 93, 10 + (140u * key_steps_done) / key_steps_total, 96, ST7735_GREEN);
 }
 
 static bool derive_root_with_progress(HDNode *root, bool cancellable) {
@@ -1850,25 +1854,43 @@ static bool load_wallet_keys(void) {
     drawtext(5, 5, "LOADING WALLET", ST7735_YELLOW, ST7735_BLACK, 1);
     drawtext(5, 25, "DERIVING THE KEYS", ST7735_WHITE, ST7735_BLACK, 1);
     drawtext(5, 35, "OF THIS SEED", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(5, 60, "BACK = CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
+    grid_back_only();
 
     bool ok = bip84_derive_keys(true);
     while (BT1 == 0) SYS_Tasks();       // Do not let BACK reach the state machine
     return ok;
 }
 
-// Derives the multisig account on first use (PBKDF2 again: the root is not kept)
-static void precompute_multisig_account(void) {
-    if (ms_account_cached) return;
+static void fast_itoa(uint32_t val, char* buf);    // Defined with the PSBT viewer
+
+// Derives the multisig account on first use (PBKDF2 again: the root is not
+// kept), on a loading screen where BACK cancels. Returns false if cancelled.
+static bool precompute_multisig_account(void) {
+    char text[24];
+    char num[12];
+
+    if (ms_account_cached) return true;
+    black_screen();
+    drawtext(5, 5, "LOADING MULTISIG", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(5, 25, "DERIVING THE KEY", ST7735_WHITE, ST7735_BLACK, 1);
+    strcpy(text, "m/48'/0'/");
+    fast_itoa(bip84_account_index, num);
+    strcat(text, num);
+    strcat(text, "'/2'");
+    drawtext(5, 35, text, ST7735_CYAN, ST7735_BLACK, 1);
+    grid_back_only();
+
     HDNode root;
-    if (derive_root_with_progress(&root, false)) {
+    bool ok = derive_root_with_progress(&root, true);
+    if (ok) {
         key_progress_phase("2/2 PUBLIC KEYS", 2);
         derive_multisig_account(&root);
     }
     memzero(&root, sizeof(root));
+    while (BT1 == 0) SYS_Tasks();       // Do not let BACK reach the state machine
+    return ok;
 }
 
-static void fast_itoa(uint32_t val, char* buf);    // Defined with the PSBT viewer
 
 // Account key with its origin, as shown on screen: "[fingerprint/84h/0h/nh]"
 // plus the xpub/zpub, or "[fingerprint/48h/0h/nh/2h]" plus the multisig
@@ -1916,18 +1938,18 @@ static bool edit_account_index(uint32_t *value) {
     char text[32];
     char num[12];
 
+    black_screen();
+    drawtext(5, 5, "ACCOUNT INDEX", ST7735_YELLOW, ST7735_BLACK, 1);
+    grid_labels("BACK", "+1", "OK", "-10", "-1", "+10");
     while (1) {
-        black_screen();
-        drawtext(5, 5, "ACCOUNT INDEX", ST7735_YELLOW, ST7735_BLACK, 1);
+        // Only the number and the path are redrawn: no flicker
         fast_itoa(v, num);
+        rectan(0, 30, 159, 53, ST7735_BLACK);
         drawtext((160 - 18 * (int)strlen(num)) / 2, 30, num, ST7735_ORANGE, ST7735_BLACK, 3);
         strcpy(text, bip84_multisig_mode ? "m/48'/0'/" : "m/84'/0'/");
         strcat(text, num);
-        strcat(text, bip84_multisig_mode ? "'/2'" : "'");
+        strcat(text, bip84_multisig_mode ? "'/2'   " : "'   ");     // Clears a longer previous path
         drawtext(5, 65, text, ST7735_CYAN, ST7735_BLACK, 1);
-        drawtext(5, 85, "UP/DOWN +1/-1", ST7735_WHITE, ST7735_BLACK, 1);
-        drawtext(5, 95, "RIGHT/LEFT +10/-10", ST7735_WHITE, ST7735_BLACK, 1);
-        drawtext(5, 118, "OK=APPLY  BACK=CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
 
         // Wait for all keys up, then for one press
         while (BT_OK == 0 || BT1 == 0 || BT2 == 0 || BT4 == 0 || BT5 == 0 || BT6 == 0) SYS_Tasks();
@@ -3003,6 +3025,22 @@ static void not_operator(BYTE *data, int N)
 
     for (int i = 0; i < N; ++i) {
         data[i] = (BYTE)~data[i];
+    }
+}
+
+// Byte swap obfuscation: exchanges bytes 0 and 1, 2 and 3, and so on. The
+// entropy length (16 or 32 bytes) is even, and the operation is its own
+// inverse: applying it again restores the original entropy.
+static void byte_swap_pairs(BYTE *data, int N)
+{
+    if (!data || N <= 0) {
+        return;
+    }
+
+    for (int i = 0; i + 1 < N; i += 2) {
+        BYTE tmp = data[i];
+        data[i] = data[i + 1];
+        data[i + 1] = tmp;
     }
 }
 
@@ -4111,9 +4149,22 @@ static void psbt_view_multisig(int y, const psbt_t *psbt, bool is_input, uint32_
     strcat(line, num);
     drawtext(5, y, line, ST7735_CYAN, ST7735_BLACK, 1);
 
-    for (uint32_t k = 0; k < 6; k++) {
-        bool found = is_input ? psbt_input_keypath(psbt, index, k, &kp) : psbt_output_keypath(psbt, index, k, &kp);
-        if (!found) break;
+    // Three per row; the second row only has room left of the button grid:
+    // a 4th fingerprint, or "+n MORE" when there are more
+    uint32_t count = 0;
+    while (count < 16 && (is_input ? psbt_input_keypath(psbt, index, count, &kp)
+                                   : psbt_output_keypath(psbt, index, count, &kp))) count++;
+    for (uint32_t k = 0; k < count && k < 4; k++) {
+        if (k == 3 && count > 4) {
+            fast_itoa(count - 3, num);
+            strcpy(line, "+");
+            strcat(line, num);
+            strcat(line, " MORE");
+            drawtext(1, y + 20, line, ST7735_WHITE, ST7735_BLACK, 1);
+            break;
+        }
+        if (is_input) psbt_input_keypath(psbt, index, k, &kp);
+        else psbt_output_keypath(psbt, index, k, &kp);
         psbt_format_fingerprint(kp.fingerprint, line);
         drawtext(1 + (k % 3) * 54, y + 10 + (k / 3) * 10, line,
                  psbt_fp_is_mine(kp.fingerprint) ? ST7735_GREEN : ST7735_WHITE, ST7735_BLACK, 1);
@@ -4262,9 +4313,9 @@ static void psbt_view_input(const psbt_t *psbt, uint32_t index) {
     bool odd_sighash = in.has_sighash && in.sighash != PSBT_SIGHASH_ALL;
     strcat(line, " SIGHASH:");
     strcat(line, in.has_sighash ? psbt_sighash_name(in.sighash) : "ALL");
-    drawtext(5, 77, line, odd_sighash ? ST7735_RED : ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 72, line, odd_sighash ? ST7735_RED : ST7735_WHITE, ST7735_BLACK, 1);
 
-    psbt_view_multisig(88, psbt, true, index, in.witness_script, in.witness_script_len,
+    psbt_view_multisig(83, psbt, true, index, in.witness_script, in.witness_script_len,
                        in.redeem_script, in.redeem_script_len);
 }
 
@@ -4295,19 +4346,19 @@ static void psbt_view_output(const psbt_t *psbt, uint32_t index) {
     psbt_view_address(out.script, out.script_len, addr);
     draw_bip84_wrapped_text(addr, 5, 27, PSBT_VIEW_LINE_CHARS, 3);
 
-    if (ms_wallet_active()) drawtext(5, 59, "CHECKING COSIGNERS...", ST7735_CYAN, ST7735_BLACK, 1);
+    if (ms_wallet_active()) drawtext(5, 55, "CHECKING COSIGNERS...", ST7735_CYAN, ST7735_BLACK, 1);
     psbt_owner_t owner = psbt_check_owner(psbt, false, index, out.script, out.script_len,
                                           out.witness_script, out.witness_script_len, &kp);
-    rectan(0, 59, 159, 67, ST7735_BLACK);
-    psbt_view_owner(59, owner, &kp, true);
+    rectan(0, 55, 159, 63, ST7735_BLACK);
+    psbt_view_owner(55, owner, &kp, true);
 
-    psbt_view_multisig(88, psbt, false, index, out.witness_script, out.witness_script_len,
+    psbt_view_multisig(83, psbt, false, index, out.witness_script, out.witness_script_len,
                        out.redeem_script, out.redeem_script_len);
 }
 
-// Parses a PSBT and lets the user page through summary, inputs and outputs.
-// OK = next page, UP = previous page, BACK = exit.
-static void show_psbt_details(const uint8_t *data, uint32_t len) {
+// Parses a PSBT and lets the user page through summary, inputs and outputs:
+// UP/DOWN change page, OK goes on to signing (returns true), BACK cancels.
+static bool show_psbt_details(const uint8_t *data, uint32_t len) {
     psbt_t psbt;
     psbt_status_t status = psbt_parse(data, len, &psbt);
 
@@ -4317,10 +4368,10 @@ static void show_psbt_details(const uint8_t *data, uint32_t len) {
         black_screen();
         drawtext(5, 5, "PSBT PARSE ERROR", ST7735_RED, ST7735_BLACK, 1);
         drawtext(5, 20, reason, ST7735_WHITE, ST7735_BLACK, 1);
-        drawtext(5, 110, "BACK=EXIT", ST7735_WHITE, ST7735_BLACK, 1);
+        grid_back_only();
         while (BT1 == 0) SYS_Tasks();   // Release the key that opened us
         while (BT1 == 1) SYS_Tasks();
-        return;
+        return false;
     }
 
     uint32_t page_count = 1 + psbt.input_count + psbt.output_count;
@@ -4335,15 +4386,19 @@ static void show_psbt_details(const uint8_t *data, uint32_t len) {
         } else {
             psbt_view_output(&psbt, page - 1 - psbt.input_count);
         }
-        drawtext(5, 118, "OK=NEXT UP=PREV BACK=EXIT", ST7735_WHITE, ST7735_BLACK, 1);
+        grid_pager("SIGN");
 
-        while (BT_OK == 0 || BT1 == 0 || BT5 == 0) SYS_Tasks();   // Wait for release
+        while (BT_OK == 0 || BT1 == 0 || BT5 == 0 || BT4 == 0) SYS_Tasks();   // Wait for release
         delay_ms(30);
-        while (BT_OK == 1 && BT1 == 1 && BT5 == 1) SYS_Tasks();   // Wait for a press
+        while (BT_OK == 1 && BT1 == 1 && BT5 == 1 && BT4 == 1) SYS_Tasks();   // Wait for a press
         delay_ms(30);
 
-        if (BT1 == 0) break;
-        if (BT_OK == 0) {
+        if (BT1 == 0 || BT_OK == 0) {
+            bool sign = (BT_OK == 0);
+            while (BT1 == 0 || BT_OK == 0) SYS_Tasks();
+            return sign;
+        }
+        if (BT4 == 0) {
             page = (page + 1) % page_count;
         } else if (BT5 == 0) {
             page = (page == 0) ? page_count - 1 : page - 1;
@@ -4375,7 +4430,7 @@ static void psbt_sd_message(char *title, char *detail) {
     black_screen();
     drawtext(5, 5, title, ST7735_RED, ST7735_BLACK, 1);
     drawtext(5, 20, detail, ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(5, 118, "PRESS ANY KEY", ST7735_WHITE, ST7735_BLACK, 1);
+    grid_OK_back();                 // Either key goes back
     psbt_wait_key();
 }
 
@@ -4479,7 +4534,7 @@ static bool sd_pick_file(const char *title, const char *none_title, const char *
             strcat(line, "B");
             drawtext(5, 17 + i * 10, line, (first + i == *sel) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
         }
-        drawtext(5, 118, "OK=OPEN UP/DN BACK=EXIT", ST7735_WHITE, ST7735_BLACK, 1);
+        grid_menu2();
 
         int key = psbt_wait_key();
         if (key == BACK_BT) return false;
@@ -4559,14 +4614,14 @@ static bool desc_review(const desc_wallet_t *w, int mine) {
         drawtext(1 + (i % 3) * 54, 39 + (i / 3) * 10, line, (i == mine) ? ST7735_GREEN : ST7735_WHITE, ST7735_BLACK, 1);
     }
     if (!addr_ok) {
-        drawtext(5, 71, "BAD COSIGNER KEY", ST7735_RED, ST7735_BLACK, 1);
-        drawtext(5, 118, "BACK=CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 69, "BAD COSIGNER KEY", ST7735_RED, ST7735_BLACK, 1);
+        grid_back_only();
         while (psbt_wait_key() != BACK_BT) {}
         return false;
     }
-    drawtext(5, 71, "RECEIVE 0, COMPARE:", ST7735_CYAN, ST7735_BLACK, 1);
-    draw_bip84_wrapped_text(addr, 5, 81, PSBT_VIEW_LINE_CHARS, 3);
-    drawtext(5, 118, "OK=LOAD  BACK=CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 69, "RECEIVE 0, COMPARE:", ST7735_CYAN, ST7735_BLACK, 1);
+    draw_bip84_wrapped_text(addr, 5, 79, PSBT_VIEW_LINE_CHARS, 3);   // Ends at y 104
+    grid_confirm("LOAD");
 
     int key;
     do {
@@ -4666,7 +4721,7 @@ static void descriptor_check_and_load(const desc_wallet_t *w) {
         drawtext(5, 45, "COSIGNER KEYS.", ST7735_WHITE, ST7735_BLACK, 1);
         drawtext(5, 65, "KEPT UNTIL THE SEED", ST7735_WHITE, ST7735_BLACK, 1);
         drawtext(5, 75, "IS UNLOADED", ST7735_WHITE, ST7735_BLACK, 1);
-        drawtext(5, 118, "PRESS ANY KEY", ST7735_WHITE, ST7735_BLACK, 1);
+        grid_OK_back();
         psbt_wait_key();
     }
     while (BT1 == 0 || BT_OK == 0) SYS_Tasks();
@@ -4932,7 +4987,7 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
 static bool psbt_confirm_signing(const psbt_t *psbt, const psbt_sign_plan_t *plan) {
     char line[32];
     char num[12];
-    int y = 63;
+    int y = 61;                     // Warnings 9 px apart: the last one ends above the grid
 
     black_screen();
     drawtext(5, 5, "SIGN TRANSACTION?", ST7735_YELLOW, ST7735_BLACK, 1);
@@ -4954,19 +5009,19 @@ static bool psbt_confirm_signing(const psbt_t *psbt, const psbt_sign_plan_t *pla
         fast_itoa(plan->already_signed, num);
         strcat(line, num);
         drawtext(5, y, line, ST7735_CYAN, ST7735_BLACK, 1);
-        y += 10;
+        y += 9;
     }
     if (plan->amounts_unverified) {
         drawtext(5, y, "AMOUNTS NOT VERIFIED", ST7735_YELLOW, ST7735_BLACK, 1);
-        y += 10;
+        y += 9;
     }
     if (plan->high_change_index) {
         drawtext(5, y, "HIGH CHANGE INDEX", ST7735_YELLOW, ST7735_BLACK, 1);
-        y += 10;
+        y += 9;
     }
     if (plan->change_unverified) {
         drawtext(5, y, "CHANGE NOT VERIFIED", ST7735_YELLOW, ST7735_BLACK, 1);
-        drawtext(5, y + 10, "IMPORT DESCRIPTOR FIRST", ST7735_YELLOW, ST7735_BLACK, 1);
+        drawtext(5, y + 9, "IMPORT DESCRIPTOR FIRST", ST7735_YELLOW, ST7735_BLACK, 1);
     } else if (bip84_multisig_mode && ms_wallet_active()) {
         strcpy(line, "WALLET ");
         fast_itoa(ms_wallet.threshold, num);
@@ -4977,7 +5032,7 @@ static bool psbt_confirm_signing(const psbt_t *psbt, const psbt_sign_plan_t *pla
         strcat(line, " CHECKED");
         drawtext(5, y, line, ST7735_CYAN, ST7735_BLACK, 1);
     }
-    drawtext(5, 118, "OK=SIGN  BACK=CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
+    grid_confirm("SIGN");
 
     int key;
     do {
@@ -5096,8 +5151,8 @@ static void psbt_review_and_sign(uint8_t *buf, uint32_t len, uint32_t capacity) 
     char text[32];
     char num[12];
 
-    show_psbt_details(buf, len);
-    if (psbt_parse(buf, len, &psbt) != PSBT_OK) return;     // The viewer showed the error
+    if (!show_psbt_details(buf, len)) return;               // Cancelled, or the viewer showed the error
+    if (psbt_parse(buf, len, &psbt) != PSBT_OK) return;
 
     // Drop the CBOR wrapper of QR input so the PSBT can be edited in place
     if (psbt.buf != buf) {
@@ -5132,7 +5187,7 @@ static void psbt_review_and_sign(uint8_t *buf, uint32_t len, uint32_t capacity) 
     drawtext(5, 5, text, ST7735_GREEN, ST7735_BLACK, 1);
     drawtext(5, 25, "SCAN THE NEXT QR", ST7735_WHITE, ST7735_BLACK, 1);
     drawtext(5, 35, "WITH YOUR WALLET", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(5, 118, "PRESS ANY KEY", ST7735_WHITE, ST7735_BLACK, 1);
+    grid_OK_back();                 // Either key shows the QR
     psbt_wait_key();
     show_ur_animated_qr(buf, len);
 }
@@ -5309,9 +5364,9 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
     strcpy(title_text, title);
     black_screen();
     drawtext(10, 10, title_text, ST7735_YELLOW, ST7735_BLACK, 1);
-    drawtext(10, 105, "PRESS BACK TO CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
-    // Same progress bar outline as precompute_bip84_account()
-    rectan(9, 120, 151, 125, WHITE);
+    grid_back_only();
+    // Progress bar above the button grid
+    rectan(9, 92, 151, 97, WHITE);
 
     init_bytewords_lookup();
     fountain_init();
@@ -5483,7 +5538,7 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
                                         uint32_t pure = fountain_get_pure_count();
                                         if (pure > cbor_total) pure = cbor_total;
                                         uint32_t fill = (140u * pure) / cbor_total;
-                                        if (fill > 0) rectan(10, 121, 10 + fill, 124, ST7735_GREEN);
+                                        if (fill > 0) rectan(10, 93, 10 + fill, 96, ST7735_GREEN);
                                     }
 
                                     if (complete) {
@@ -5511,7 +5566,7 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
                                             break; // Break the URXDA loop
                                         } else {
                                             // HALT ON ERROR SO WE CAN READ THE EXACT VALUES
-                                            rectan(5, 62, 159, 112, BLACK);
+                                            rectan(5, 62, 159, 103, BLACK);
                                             drawtext(5, 62, "CRC FAIL! (PAUSED)", ST7735_RED, ST7735_BLACK, 1);
                                             
                                             char hex_dbg[24];
@@ -5526,7 +5581,7 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
                                             drawtext(40, 86, hex_dbg, ST7735_CYAN, ST7735_BLACK, 1);
 
                                             // Extract and display the first byte of up to 6 parts (P0-P5) to check for XOR corruption
-                                            drawtext(5, 98, "P0-P5:", ST7735_WHITE, ST7735_BLACK, 1);
+                                            drawtext(5, 96, "P0-P5:", ST7735_WHITE, ST7735_BLACK, 1);
                                             memset(hex_dbg, 0, sizeof(hex_dbg));
                                             for (int i = 0; i < cbor_total && i < 6; i++) {
                                                 uint8_t *p = fountain_get_part(i);
@@ -5538,10 +5593,10 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
                                                     strcat(hex_dbg, "--");
                                                 }
                                             }
-                                            drawtext(45, 98, hex_dbg, ST7735_ORANGE, ST7735_BLACK, 1);
+                                            drawtext(45, 96, hex_dbg, ST7735_ORANGE, ST7735_BLACK, 1);
                                             
                                             // Force override option
-                                            drawtext(5, 110, "OK=FORCE  BACK=EXIT", ST7735_WHITE, ST7735_BLACK, 1);
+                                            grid_confirm("USE");    // OK uses the data anyway
 
                                             // Wait for button press
                                             while (BT1 == 1 && BT_OK == 1) SYS_Tasks();
@@ -5554,9 +5609,11 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
                                             }
 
                                             if (BT1 == 0) break;
-                                            rectan(5, 62, 159, 112, BLACK);
-                                            drawtext(10, 105, "PRESS BACK TO CANCEL", ST7735_WHITE, ST7735_BLACK, 1);
-                                            rectan(10, 121, 150, 124, BLACK); // Restart the progress bar
+                                            rectan(5, 62, 159, 103, BLACK);
+                                            rectan(GRID_X, 105, GRID_X + 90, 125, BLACK);
+                                            grid_back_only();
+                                            rectan(9, 92, 151, 97, WHITE);     // Restart the progress bar
+                                            rectan(10, 93, 150, 96, BLACK);
                                             fountain_init();
                                         }
                                     }
@@ -5610,7 +5667,7 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
         drawtext(5, 25, "TURN THE DEVICE OFF", ST7735_WHITE, ST7735_BLACK, 1);
         drawtext(5, 35, "AND ON BEFORE USING", ST7735_WHITE, ST7735_BLACK, 1);
         drawtext(5, 45, "OTHER QR FUNCTIONS", ST7735_WHITE, ST7735_BLACK, 1);
-        drawtext(5, 118, "PRESS ANY KEY", ST7735_WHITE, ST7735_BLACK, 1);
+        grid_OK_back();
         psbt_wait_key();
     }
 
@@ -5631,7 +5688,7 @@ void scan_ur_animated_qr(void) {
 
     if (!scan_ur_message("UR:CRYPTO-PSBT/", "SCANNING PSBT", &msg, &len)) return;
     if (msg == NULL) {
-        show_psbt_details(NULL, 0);     // Shows the error
+        (void)show_psbt_details(NULL, 0);   // Shows the error
     } else {
         uint32_t capacity;
         (void)fountain_scratch_buffer(&capacity);   // Same buffer; the message starts at its base
@@ -5727,6 +5784,56 @@ void test_sampler_to_screen(void) {
     delay_ms(5000);
 }
 
+
+// Applies the selected obfuscation to the loaded entropy (same for every input)
+static void apply_obfuscation(void) {
+    int n = 16 + size_pointer * 16;
+    if (obfuscation_pointer == cOBFUS_NOT) {
+        not_operator(data_array_256b, n);
+    } else if (obfuscation_pointer == cOBFUS_BYTE_SWAP) {
+        byte_swap_pairs(data_array_256b, n);
+    } else if (obfuscation_pointer == cOBFUS_SHIFT) {
+        for (int i = 0; i < obfus_amount; i++) {
+            if (obfus_dir_op == 0) shift_left(data_array_256b, n);
+            else shift_right(data_array_256b, n);
+        }
+    } else if (obfuscation_pointer == cOBFUS_ADD) {
+        addsub_11bit_groups(n, obfus_amount, obfus_dir_op);
+    } else if (obfuscation_pointer == cOBFUS_1WORD_XOR) {
+        apply_1word_xor(obfus_xor_word_idx, size_pointer);
+    }
+}
+
+// "READY TO SCAN" with the BACK / SCAN grid, and which input is expected
+// when the function needs several (XOR seeds, Shamir shares)
+static void show_qr_ready(int sss_k) {
+    char line[24];
+    char num[12];
+
+    drawtext(10, 10, "READY TO SCAN", ST7735_YELLOW, ST7735_BLACK, 1);
+    line[0] = '\0';
+    if (main_pointer == cMAIN_XOR) {
+        strcpy(line, "SEED ");
+        fast_itoa((uint32_t)xor_merge_words_available + 1, num);
+        strcat(line, num);
+        strcat(line, " OF ");
+        fast_itoa((uint32_t)xor_pointer + 2, num);
+        strcat(line, num);
+    } else if (main_pointer == cMAIN_SSS && sss_pointer == cMERGE) {
+        strcpy(line, "SHARE ID ");
+        fast_itoa(selected_share_id, num);
+        strcat(line, num);
+        strcat(line, " (");
+        fast_itoa((uint32_t)shares_loaded + 1, num);
+        strcat(line, num);
+        strcat(line, " OF ");
+        fast_itoa((uint32_t)sss_k, num);
+        strcat(line, num);
+        strcat(line, ")");
+    }
+    if (line[0] != '\0') drawtext(10, 22, line, ST7735_CYAN, ST7735_BLACK, 1);
+    grid_scan_back();
+}
 
 int main ( void ){
     /* Initialize all modules */
@@ -6260,7 +6367,8 @@ int main ( void ){
                             print_camera(2, 65, cSAFE);
                             print_left_arrow_black(5, 123);
                             estado = OBFUS_QR_VIEW;
-                        } else if (obfuscation_pointer == cOBFUS_NOT) { // Negate seed words
+                        } else if (obfuscation_pointer == cOBFUS_NOT ||
+                                   obfuscation_pointer == cOBFUS_BYTE_SWAP) { // No parameters
                             transition_to_input(selinput_pointer);
                         } else if (obfuscation_pointer == cOBFUS_1WORD_XOR) {
                             black_screen();
@@ -6673,19 +6781,7 @@ int main ( void ){
                                 }else if (main_pointer==cMAIN_OBFUS) {
                                     drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
                                     black_screen();
-                                    if (obfuscation_pointer==cOBFUS_NOT){
-                                        not_operator(data_array_256b,16 + size_pointer*16);
-                                    } else if (obfuscation_pointer==cOBFUS_SHIFT){
-                                        if (obfus_dir_op == 0){
-                                            for (int i = 0; i < obfus_amount; i++) shift_left(data_array_256b,16 + size_pointer*16);
-                                        } else {
-                                            for (int i = 0; i < obfus_amount; i++) shift_right(data_array_256b,16 + size_pointer*16);
-                                        }
-                                    } else if (obfuscation_pointer==cOBFUS_ADD){
-                                        addsub_11bit_groups(16 + size_pointer*16, obfus_amount, obfus_dir_op);
-                                    } else if (obfuscation_pointer == cOBFUS_1WORD_XOR) {
-                                        apply_1word_xor(obfus_xor_word_idx, size_pointer); // Apply 1 Word XOR
-                                    }
+                                    apply_obfuscation();
                                 }else if (main_pointer==cMAIN_BIP85) {
                                     drawtext(70, 20 + 10*SDblock_pointer, LOAD_OK, ST7735_GREEN, ST7735_BLACK, 1);
                                     black_screen();
@@ -6708,6 +6804,7 @@ int main ( void ){
                             } else {
                                 black_screen();
                                 drawtext(10, 30, "SD ERROR", ST7735_RED, ST7735_BLACK, 1);
+                                grid_OK_back();
                                 estado = END_MODE;
                                 break;
                             }
@@ -6872,6 +6969,7 @@ int main ( void ){
                             } else {
                                 black_screen();
                                 drawtext(10, 30, "SD ERROR", ST7735_RED, ST7735_BLACK, 1);
+                                grid_OK_back();
                                 estado = END_MODE;
                                 break;
                             }
@@ -6946,6 +7044,7 @@ int main ( void ){
                                     black_screen();
                                     if (!shamir_interpolate(SSS_result,0,share_indices, shares_input,SSS_K,LEN)){
                                         drawtext(5,39, "Shamir Error", ST7735_RED, ST7735_BLACK, 1);
+                                        grid_OK_back();
                                         estado = END_MODE;
                                         break;
                                     }
@@ -6964,6 +7063,7 @@ int main ( void ){
                             } else {
                                 black_screen();
                                 drawtext(10, 30, "SD ERROR", ST7735_RED, ST7735_BLACK, 1);
+                                grid_OK_back();
                                 estado = END_MODE;
                                 break;
                             }
@@ -7024,9 +7124,30 @@ int main ( void ){
                             }
                         } else if (selinput_pointer==cQRSCAN) {
                             black_screen();
-                            drawtext(10, 10, "READY TO SCAN", ST7735_YELLOW, ST7735_BLACK, 1);
-                            grid_scan_back();
-                            estado = QR_SCANNING;
+                            if (main_pointer == cMAIN_XOR) {
+                                xor_merge_words_available = 0;
+                                memset(xor_merge_word1, 0, sizeof(xor_merge_word1));
+                                memset(xor_merge_word2, 0, sizeof(xor_merge_word2));
+                                memset(xor_merge_word3, 0, sizeof(xor_merge_word3));
+                            }
+                            if ((main_pointer==cMAIN_SSS) & (sss_pointer==cMERGE)) {
+                                // Each share: its ID first, then its QR
+                                shares_loaded = 0;
+                                print_sel_share_screen(selected_share_id);
+                                estado = SEL_SHARE;
+                            } else if ((main_pointer==cMAIN_SSS) & (sss_pointer==cSPLIT)) {
+                                // Timer entropy for the coefficients, as from the SD
+                                estado = TMR_INPUT;
+                                dice_x_pointer = 0;
+                                dice_y_pointer = 25;
+                                bit_count_dice = 0;
+                                size_pointer=cSIZE_24;
+                                entropy_bits = cENTROPY_BITS24W;
+                                print_TMR_screen(size_pointer);
+                            } else {
+                                show_qr_ready(SSS_K);
+                                estado = QR_SCANNING;
+                            }
                         
                         } else { // cFROMSD
                             black_screen();
@@ -7201,6 +7322,11 @@ int main ( void ){
                             break; 
                         }
                         black_screen();
+                        if (selinput_pointer == cQRSCAN) {
+                            show_qr_ready(SSS_K);
+                            estado = QR_SCANNING;
+                            break;
+                        }
                         estado = WRITE_WORD;
                         word_number=1;
                         lt_idx=0;
@@ -7242,7 +7368,13 @@ int main ( void ){
                         dice_xy_pointer_line_adjust();
                         if (check_dice_count_end()){
                             if (main_pointer==cMAIN_SSS){ // This time was used to fill the coefficients
-                                transition_to_sd_block(SDblock_pointer);
+                                if (selinput_pointer == cQRSCAN) {
+                                    black_screen();
+                                    show_qr_ready(SSS_K);
+                                    estado = QR_SCANNING;
+                                } else {
+                                    transition_to_sd_block(SDblock_pointer);
+                                }
                             }
                             break;
                         }
@@ -7510,6 +7642,7 @@ int main ( void ){
                                             } else {
                                                 black_screen();
                                                 drawtext(10,10, INCORRECT_MSG, ST7735_RED, ST7735_BLACK, 1);
+                                                grid_OK_back();
                                                 estado = END_MODE;
                                             }
                                             break;
@@ -7524,23 +7657,7 @@ int main ( void ){
                                     }
                                     
                                     if (main_pointer==cMAIN_OBFUS) {
-                                        if (obfuscation_pointer==cOBFUS_SHIFT){
-                                            if (obfus_dir_op == 0){
-                                                for (int i = 0; i < obfus_amount; i++) {
-                                                    shift_left(data_array_256b, 16 + size_pointer*16);
-                                                }
-                                            } else {
-                                                for (int i = 0; i < obfus_amount; i++) {
-                                                    shift_right(data_array_256b, 16 + size_pointer*16);
-                                                }
-                                            }
-                                        } else if (obfuscation_pointer==cOBFUS_NOT){
-                                            not_operator(data_array_256b,16 +size_pointer*16);
-                                        } else if (obfuscation_pointer==cOBFUS_ADD){
-                                            addsub_11bit_groups(16 + size_pointer*16, obfus_amount, obfus_dir_op);
-                                        } else if (obfuscation_pointer == cOBFUS_1WORD_XOR) {
-                                            apply_1word_xor(obfus_xor_word_idx, size_pointer); // Apply 1 Word XOR
-                                        }
+                                        apply_obfuscation();
                                     } else if ((main_pointer==cMAIN_SSS) & (sss_pointer==cSPLIT)){
                                         expand_sss_coefficients();
                                         sss_split_kofm(data_array_256b /* c0 */,
@@ -7560,6 +7677,7 @@ int main ( void ){
                                             black_screen();
                                             if (!shamir_interpolate(SSS_result,0,share_indices, shares_input,SSS_K,LEN)){
                                                 drawtext(10,39, "(Shamir error)", ST7735_RED, ST7735_BLACK, 1);
+                                                grid_OK_back();
                                                 estado = END_MODE;
                                                 break;
                                             }
@@ -7828,7 +7946,9 @@ int main ( void ){
                             black_screen();
                             bip84_multisig_mode = !bip84_multisig_mode;
                             if (bip84_multisig_mode && !ms_account_cached) {
-                                precompute_multisig_account();
+                                if (!precompute_multisig_account()) {
+                                    bip84_multisig_mode = false;    // Cancelled: stay in single sig
+                                }
                                 black_screen();
                             }
                             bip84_menu_pointer = bip84_option_count() - 1;   // Stay on MODE
@@ -8014,7 +8134,6 @@ int main ( void ){
                         }
                         break;
                     case BACK_BT:
-                    case LEFT_BT:
                         transition_to_input(selinput_pointer);
                         break;
                     default:
@@ -8349,8 +8468,79 @@ int main ( void ){
                                 if (valid_res) {
                                     drawtext(10, 40, "OK!", ST7735_GREEN, ST7735_BLACK, 1);
                                     delay_ms(500); 
-                                    redraw_show_seed_with_offset();
+                                    entropy_bits = (size_pointer == cSIZE_12) ? cENTROPY_BITS12W : cENTROPY_BITS24W;
                                     success = true;
+
+                                    // The seed goes through the same step as one typed or
+                                    // read from the SD for the function that asked for it
+                                    if (main_pointer == cMAIN_create && seed_pointer == cSEED_triple) {
+                                        if (size_pointer != cSIZE_24) {
+                                            drawtext(10, 40, "TRIPLE NEEDS 24 WORDS", ST7735_RED, ST7735_BLACK, 1);
+                                            success = false;
+                                        } else {
+                                            black_screen();
+                                            estado = PROCESS_TRIPLE;
+                                        }
+                                    } else if (main_pointer == cMAIN_MNEM2CARD) {
+                                        black_screen();
+                                        calculate_card_encoding();
+                                        estado = SHOW_CARD_ENCODING;
+                                        print_card_encoding_screen();
+                                    } else if (main_pointer == cMAIN_BIP85) {
+                                        black_screen();
+                                        drawtext(30, 30, "COMPUTING CHILD", ST7735_WHITE, ST7735_BLACK, 1);
+                                        drawtext(30, 45, "MNEMONIC...", ST7735_WHITE, ST7735_BLACK, 1);
+                                        estado = PROCESS_BIP85;
+                                    } else if (main_pointer == cMAIN_OBFUS) {
+                                        apply_obfuscation();
+                                        redraw_show_seed_with_offset();
+                                    } else if ((main_pointer==cMAIN_SSS) & (sss_pointer==cSPLIT)) {
+                                        expand_sss_coefficients();
+                                        sss_split_kofm(data_array_256b, coeffs, SSS_K, LEN, cN_MAX, shares);
+                                        for (int i = 0; i < 16 + size_pointer*16; i++) data_array_256b[i] = shares[selected_share_id-1][i];
+                                        redraw_show_seed_with_offset();
+                                    } else if ((main_pointer==cMAIN_SSS) & (sss_pointer==cMERGE)) {
+                                        for (int i = 0; i < 32; i++) shares_input[shares_loaded][i] = data_array_256b[i];
+                                        share_indices[shares_loaded] = selected_share_id;
+                                        shares_loaded++;
+                                        if (shares_loaded >= SSS_K) {
+                                            black_screen();
+                                            if (!shamir_interpolate(SSS_result, 0, share_indices, shares_input, SSS_K, LEN)) {
+                                                drawtext(10, 39, "(Shamir error)", ST7735_RED, ST7735_BLACK, 1);
+                                                grid_OK_back();
+                                                estado = END_MODE;
+                                            } else {
+                                                for (int i = 0; i < 32; i++) data_array_256b[i] = SSS_result[i];
+                                                redraw_show_seed_with_offset();
+                                            }
+                                        } else {
+                                            // Next share: its ID, then its QR
+                                            black_screen();
+                                            print_sel_share_screen(selected_share_id);
+                                            estado = SEL_SHARE;
+                                        }
+                                    } else if (main_pointer == cMAIN_XOR) {
+                                        if (xor_merge_words_available > 0 && size_pointer != xor_merge_size) {
+                                            drawtext(10, 40, "SIZE DIFFERS FROM 1ST", ST7735_RED, ST7735_BLACK, 1);
+                                            success = false;
+                                        } else if (xor_merge_words_available <= xor_pointer) {
+                                            // Keep this seed and scan the next one
+                                            if (xor_merge_words_available == 0) xor_merge_size = size_pointer;
+                                            BYTE *slot = (xor_merge_words_available == 0) ? xor_merge_word1 :
+                                                         (xor_merge_words_available == 1) ? xor_merge_word2 : xor_merge_word3;
+                                            for (int i = 0; i < 32; i++) slot[i] = data_array_256b[i];
+                                            xor_merge_words_available++;
+                                            black_screen();
+                                            show_qr_ready(SSS_K);
+                                        } else {
+                                            for (int i = 0; i < 16 + size_pointer*16; i++) {
+                                                data_array_256b[i] ^= xor_merge_word1[i] ^ xor_merge_word2[i] ^ xor_merge_word3[i];
+                                            }
+                                            redraw_show_seed_with_offset();
+                                        }
+                                    } else {
+                                        redraw_show_seed_with_offset();
+                                    }
                                 } else {
                                     drawtext(10, 40, "NO SEED or BAD CHECKSUM", ST7735_RED, ST7735_BLACK, 1);
                                 }
@@ -8365,8 +8555,7 @@ int main ( void ){
                         if (!success) {
                             delay_ms(1000); 
                             black_screen();
-                            drawtext(10, 10, "READY TO SCAN", ST7735_YELLOW, ST7735_BLACK, 1);
-                            grid_scan_back();
+                            show_qr_ready(SSS_K);
                         }
                         break;
                     }

@@ -47,7 +47,7 @@ const char* const menu_qr[]       = {"STANDARD", "COMPACT"};
 const char* const menu_xor[]      = {"A XOR B = C", "A XOR B XOR C = D", "A XOR B XOR C XOR D = E"};
 const char* const menu_sss[]      = {"SPLIT", "MERGE"};
 const char* const menu_resource[] = {"TUTORIAL", "BACKUP TOOL", "DICE TESTER", "PRINT WORDLIST", "BINARY WORDLIST"};
-const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB","1 WORD XOR","HOW TO"}; 
+const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB","1 WORD XOR","BYTE SWAP","HOW TO"};
 const char* const menu_erase[]    = {"ERASE SECTOR", "WIPE ALL CARD"};
 const char* const menu_bip84[] = {"RECEIVE ADDRESS", "CHANGE ADDRESS", "SEEDQR", "FINGERPRINT", "XPUB", "PASSPHRASE", "SIGN", "ACCOUNT", "MODE: SINGLE SIG"};
 const char* const menu_bip84_multi[] = {"SEEDQR", "FINGERPRINT", "XPUB", "PASSPHRASE", "SIGN", "IMPORT DESCRIPTOR", "ACCOUNT", "MODE: MULTI SIG"};
@@ -109,13 +109,13 @@ void print_camera(int x, int y, int safe) {
 
 
 void print_cursor_grid(){
-    drawFastHLine(60,105,90,WHITE);
-    drawFastHLine(60,115,90,WHITE);
-    drawFastHLine(60,125,90,WHITE);
-    drawFastVLine(60,105,20,WHITE);
-    drawFastVLine(90,105,20,WHITE);
-    drawFastVLine(120,105,20,WHITE);
-    drawFastVLine(150,105,20,WHITE);
+    drawFastHLine(63,105,90,WHITE);
+    drawFastHLine(63,115,90,WHITE);
+    drawFastHLine(63,125,90,WHITE);
+    drawFastVLine(63,105,20,WHITE);
+    drawFastVLine(93,105,20,WHITE);
+    drawFastVLine(123,105,20,WHITE);
+    drawFastVLine(153,105,20,WHITE);
 }
 
 void print_minus_symbol(int x,int y){
@@ -123,34 +123,34 @@ void print_minus_symbol(int x,int y){
 }
 
 void print_ok(){
-    drawtext(130,107, OK_MSG, ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(133,107, OK_MSG, ST7735_WHITE, ST7735_WHITE, 1);
 }
 
 void grid_menu1(){
     print_cursor_grid();
-    print_up_arrow(103,114, ST7735_WHITE);
-    print_down_arrow(103,123, ST7735_WHITE);
+    print_up_arrow(106,114, ST7735_WHITE);
+    print_down_arrow(106,123, ST7735_WHITE);
     print_ok();
 }
 
 void grid_menuwr(){
     print_cursor_grid();
-    print_up_arrow(103,114, ST7735_WHITE);
-    print_down_arrow(103,123, ST7735_WHITE);
+    print_up_arrow(106,114, ST7735_WHITE);
+    print_down_arrow(106,123, ST7735_WHITE);
     print_ok();
-    drawtext(64,107, "LIST", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(122,117, "PAGE+", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(62,117, "PAGE-", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(67,107, "LIST", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(125,117, "PAGE+", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(65,117, "PAGE-", ST7735_WHITE, ST7735_WHITE, 1);
 }
 
 void print_back(){
-    drawtext(64,107, "BACK", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(67,107, "BACK", ST7735_WHITE, ST7735_WHITE, 1);
 }
 
 void grid_menu2(){
     print_cursor_grid();
-    print_up_arrow(103,114, ST7735_WHITE);
-    print_down_arrow(103,123, ST7735_WHITE);
+    print_up_arrow(106,114, ST7735_WHITE);
+    print_down_arrow(106,123, ST7735_WHITE);
     print_ok();
     print_back();
 
@@ -158,73 +158,73 @@ void grid_menu2(){
 
 void grid_menuSD(){
     print_cursor_grid();
-    print_up_arrow(103,114, ST7735_WHITE);
-    print_down_arrow(103,123, ST7735_WHITE);
+    print_up_arrow(106,114, ST7735_WHITE);
+    print_down_arrow(106,123, ST7735_WHITE);
     print_ok();
     print_back();
-    drawtext(122,117, "PAGE+", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(62,117, "PAGE-", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(125,117, "PAGE+", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(65,117, "PAGE-", ST7735_WHITE, ST7735_WHITE, 1);
 }
 
 void grid_menu2_merge(){
     print_cursor_grid();
-    print_up_arrow(103,114, ST7735_WHITE);
-    print_down_arrow(103,123, ST7735_WHITE);
+    print_up_arrow(106,114, ST7735_WHITE);
+    print_down_arrow(106,123, ST7735_WHITE);
     print_ok();
     print_back();
-    drawtext(125,117, "ID++", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(64,117, "ID--", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(128,117, "ID++", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(67,117, "ID--", ST7735_WHITE, ST7735_WHITE, 1);
 }
 
 void grid_nbits(){
     print_cursor_grid();
-    print_add_symbol(103,114);
-    print_minus_symbol(103,123);
+    print_add_symbol(106,114);
+    print_minus_symbol(106,123);
     print_ok();
     print_back();
 }
 
 void grid_nbits_noback(){
     print_cursor_grid();
-    print_add_symbol(103,114);
-    print_minus_symbol(103,123);
+    print_add_symbol(106,114);
+    print_minus_symbol(106,123);
     print_ok();
 }
 
 void grid_nbits_LR(){
     print_cursor_grid();
-    print_add_symbol(103,114);
-    print_minus_symbol(103,123);
+    print_add_symbol(106,114);
+    print_minus_symbol(106,123);
     print_ok();
     print_back();
-    print_left_arrow(73,123, ST7735_WHITE);
-    print_rigth_arrow(133,123, ST7735_WHITE);
+    print_left_arrow(76,123, ST7735_WHITE);
+    print_rigth_arrow(136,123, ST7735_WHITE);
 }
 
 void grid_keyboard(){
     print_cursor_grid();
-    print_up_arrow(103,114, ST7735_WHITE);
-    print_down_arrow(103,123, ST7735_WHITE);
-    print_left_arrow(73,123, ST7735_WHITE);
-    print_rigth_arrow(133,123, ST7735_WHITE);
+    print_up_arrow(106,114, ST7735_WHITE);
+    print_down_arrow(106,123, ST7735_WHITE);
+    print_left_arrow(76,123, ST7735_WHITE);
+    print_rigth_arrow(136,123, ST7735_WHITE);
     print_ok();
-    drawtext(67,107, "DEL", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(70,107, "DEL", ST7735_WHITE, ST7735_WHITE, 1);
 }
 
 void grid_keyboard_dice_hash(){
     print_cursor_grid();
-    print_left_arrow(73,123, ST7735_WHITE);
-    print_rigth_arrow(133,123, ST7735_WHITE);
+    print_left_arrow(76,123, ST7735_WHITE);
+    print_rigth_arrow(136,123, ST7735_WHITE);
     print_ok();
-    drawtext(67,107, "DEL", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(70,107, "DEL", ST7735_WHITE, ST7735_WHITE, 1);
 }
 
 void grid_bip85(){
     print_cursor_grid();
-    print_up_arrow(103,114, ST7735_WHITE);
-    print_down_arrow(103,123, ST7735_WHITE);
-    print_left_arrow(73,123, ST7735_WHITE);
-    print_rigth_arrow(133,123, ST7735_WHITE);
+    print_up_arrow(106,114, ST7735_WHITE);
+    print_down_arrow(106,123, ST7735_WHITE);
+    print_left_arrow(76,123, ST7735_WHITE);
+    print_rigth_arrow(136,123, ST7735_WHITE);
     print_ok();
     print_back();
 }
@@ -259,32 +259,32 @@ void grid_dices(){
     print_cursor_grid();
     
     // Row 1: Dice 1, 2, 3
-    draw_mini_dice(62, 107, 1);
-    drawtext(71, 107, "=01", ST7735_WHITE, ST7735_BLACK, 1);
+    draw_mini_dice(65, 107, 1);
+    drawtext(74, 107, "=01", ST7735_WHITE, ST7735_BLACK, 1);
 
-    draw_mini_dice(92, 107, 2);
-    drawtext(101, 107, "=10", ST7735_WHITE, ST7735_BLACK, 1);
+    draw_mini_dice(95, 107, 2);
+    drawtext(104, 107, "=10", ST7735_WHITE, ST7735_BLACK, 1);
 
-    draw_mini_dice(122, 107, 3);
-    drawtext(131, 107, "=11", ST7735_WHITE, ST7735_BLACK, 1);
+    draw_mini_dice(125, 107, 3);
+    drawtext(134, 107, "=11", ST7735_WHITE, ST7735_BLACK, 1);
 
     // Row 2: Dice 4, 5, 6
-    draw_mini_dice(65, 117, 4);
-    drawtext(74, 117, "=0", ST7735_WHITE, ST7735_BLACK, 1);
+    draw_mini_dice(68, 117, 4);
+    drawtext(77, 117, "=0", ST7735_WHITE, ST7735_BLACK, 1);
 
-    draw_mini_dice(95, 117, 5);
-    drawtext(104, 117, "=1", ST7735_WHITE, ST7735_BLACK, 1);
+    draw_mini_dice(98, 117, 5);
+    drawtext(107, 117, "=1", ST7735_WHITE, ST7735_BLACK, 1);
 
-    draw_mini_dice(122, 117, 6);
-    drawtext(131, 117, "=00", ST7735_WHITE, ST7735_BLACK, 1);
+    draw_mini_dice(125, 117, 6);
+    drawtext(134, 117, "=00", ST7735_WHITE, ST7735_BLACK, 1);
 }
 
 void grid_coins(){              // Heads tails
     print_cursor_grid();
-    drawtext(64,117, "HEAD", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(94,117, "TAIL", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(67,117, "HEAD", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(97,117, "TAIL", ST7735_WHITE, ST7735_WHITE, 1);
     // Added DEL button logic to grid representation for coins
-    drawtext(67,107, "DEL", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(70,107, "DEL", ST7735_WHITE, ST7735_WHITE, 1);
 }
 
 void grid_OK_only(){
@@ -385,6 +385,44 @@ void draw_bip84_wrapped_text(const char *text, int x, int y,
     }
 }
 
+// Button grid with a short text label (up to 4 characters) centered in each
+// cell, NULL for a button that does nothing. Top row: BACK, UP, OK; bottom
+// row: LEFT, DOWN, RIGHT.
+void grid_labels(const char *back, const char *up, const char *ok,
+                 const char *left, const char *down, const char *right) {
+    const char *labels[6] = {back, up, ok, left, down, right};
+    char text[6];
+
+    print_cursor_grid();
+    for (int i = 0; i < 6; i++) {
+        if (labels[i] == NULL) continue;
+        size_t n = strlen(labels[i]);
+        if (n > 4) n = 4;
+        memcpy(text, labels[i], n);
+        text[n] = '\0';
+        int x = GRID_X + (i % 3) * 30 + 1 + (29 - 6 * (int)n) / 2;
+        drawtext(x, (i < 3) ? 107 : 117, text, ST7735_WHITE, ST7735_WHITE, 1);
+    }
+}
+
+// BACK as the only action (cancel a running operation, leave an error)
+void grid_back_only(void) {
+    print_cursor_grid();
+    print_back();
+}
+
+// BACK cancels, OK does 'ok_label' ("SIGN", "LOAD"...)
+void grid_confirm(const char *ok_label) {
+    grid_labels("BACK", NULL, ok_label, NULL, NULL, NULL);
+}
+
+// Pages: UP previous, DOWN next, OK does 'ok_label', BACK leaves
+void grid_pager(const char *ok_label) {
+    grid_labels("BACK", NULL, ok_label, NULL, NULL, NULL);
+    print_up_arrow(106, 114, ST7735_WHITE);
+    print_down_arrow(106, 123, ST7735_WHITE);
+}
+
 void grid_OK_back(void) {
     print_cursor_grid();
     print_ok();
@@ -395,7 +433,7 @@ void grid_OK_back(void) {
 void grid_scan_back(void) {
     print_cursor_grid();
     print_back();
-    drawtext(123, 107, "SCAN", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(126, 107, "SCAN", ST7735_WHITE, ST7735_WHITE, 1);
 }
 
 void print_update_fw_warning(void) {
@@ -978,7 +1016,8 @@ void draw_xpub_qr(const char *text) {
 void show_word_list_retry_error(void) {
     black_screen();
     drawtext(10,10, INCORRECT_MSG, ST7735_RED, ST7735_BLACK, 1);
-    drawtext(10,25, "PRESS ANY BUTTON", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(10,25, "ANY BUTTON: TRY AGAIN", ST7735_WHITE, ST7735_BLACK, 1);
+    grid_OK_back();
 }
 
 void clear_write_word_current_display() {
@@ -1354,8 +1393,9 @@ void print_card_encoding_screen(void) {
         }
     }
     
-    if (card_view_page > 0) print_up_arrow(72, 123, ST7735_WHITE);
-    if (start_idx + cards_per_page < card_sequence_len) print_down_arrow(80, 123, ST7735_WHITE);
-    
-    print_left_arrow(5, 123,ST7735_WHITE);
+    // BACK leaves; UP/DOWN only when there is another page
+    print_cursor_grid();
+    print_back();
+    if (card_view_page > 0) print_up_arrow(106, 114, ST7735_WHITE);
+    if (start_idx + cards_per_page < card_sequence_len) print_down_arrow(106, 123, ST7735_WHITE);
 }
