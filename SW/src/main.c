@@ -276,11 +276,11 @@ static uint32_t ms_wallet_account;
 // Menu position -> cBIP84_* option for each mode
 static const uint8_t bip84_single_options[cBIP84_n_opt] = {
     cBIP84_SIGN, cBIP84_DERIVE, cBIP84_VAULT, cBIP84_XPUB, cBIP84_ADDRESSES,
-    cBIP84_PASSPHRASE, cBIP84_ACCOUNT, cBIP84_MODE
+    cBIP84_PASSPHRASE, cBIP84_ACCOUNT, cBIP84_MODE, cBIP84_UNLOAD
 };
 static const uint8_t bip84_multi_options[cBIP84_MULTI_n_opt] = {
     cBIP84_SIGN, cBIP84_DERIVE, cBIP84_VAULT, cBIP84_XPUB, cBIP84_DESCRIPTOR,
-    cBIP84_PASSPHRASE, cBIP84_ACCOUNT, cBIP84_MODE
+    cBIP84_PASSPHRASE, cBIP84_ACCOUNT, cBIP84_MODE, cBIP84_UNLOAD
 };
 
 static int bip84_option(void) {
@@ -637,7 +637,7 @@ void debug_print_sss_state(void) {
             char page_str[2] = {'1' + page, '\0'};
             strcat(title, page_str);
             strcat(title, "/4");
-            drawtext(5, 5, title, ST7735_LIGHTGREY, ST7735_BLACK, 1);
+            draw_title(title, ST7735_LIGHTGREY);
             
             char line[30];
             int y = 25;
@@ -800,6 +800,7 @@ typedef enum
     CONFIRM_WIPE_SD,
     PROCESS_WIPE_SD,
     CONFIRM_INIT_SD,
+    CONFIRM_UNLOAD,
     PROCESS_INIT_SD,
     END_MODE // Final
 } state_t;
@@ -1232,9 +1233,9 @@ static void draw_editor_counter(int len, int max_chars) {
 // typo is seen before any key is derived. OK accepts, BACK edits again. ---
 static bool editor_review_passphrase(const char* text, int len) {
     black_screen();
-    drawtext(2, 2, "CHECK PASSPHRASE", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title("CHECK PASSPHRASE", ST7735_LIGHTGREY);
     if (len == 0) {
-        drawtext(5, 20, "NO PASSPHRASE", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        drawtext(5, 20, "NO PASSPHRASE", ST7735_WHITE, ST7735_BLACK, 1);
     }
     // Same 25 characters per line as the editor (drawn one by one: no copy)
     for (int i = 0; i < len; i++) {
@@ -1893,9 +1894,9 @@ static bool load_wallet_keys(void) {
     bip84_account_cached = false;
     ms_account_cached = false;
     black_screen();
-    drawtext(5, 5, "LOADING WALLET", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-    drawtext(5, 25, "DERIVING THE KEYS", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-    drawtext(5, 35, "OF THIS SEED", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title("LOADING WALLET", ST7735_LIGHTGREY);
+    drawtext(5, 25, "DERIVING THE KEYS", ST7735_CYAN, ST7735_BLACK, 1);
+    drawtext(5, 35, "OF THIS SEED", ST7735_CYAN, ST7735_BLACK, 1);
     grid_back_only();
 
     bool ok = bip84_derive_keys(true);
@@ -1913,8 +1914,8 @@ static bool precompute_multisig_account(void) {
 
     if (ms_account_cached) return true;
     black_screen();
-    drawtext(5, 5, "LOADING MULTISIG", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-    drawtext(5, 25, "DERIVING THE KEY", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title("LOADING MULTISIG", ST7735_LIGHTGREY);
+    drawtext(5, 25, "DERIVING THE KEY", ST7735_CYAN, ST7735_BLACK, 1);
     strcpy(text, "m/48'/0'/");
     fast_itoa(bip84_account_index, num);
     strcat(text, num);
@@ -1967,7 +1968,7 @@ static void set_account_index(uint32_t index) {
     strcpy(text, "ACCOUNT ");
     fast_itoa(index, num);
     strcat(text, num);
-    drawtext(5, 5, text, ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title(text, ST7735_LIGHTGREY);
     key_progress_phase("PUBLIC KEYS", ms_account_cached ? 3 : 1);
     derive_bip84_account();
     if (ms_account_cached) derive_multisig_from_coin();
@@ -1981,7 +1982,7 @@ static bool edit_account_index(uint32_t *value) {
     char num[12];
 
     black_screen();
-    drawtext(5, 5, "ACCOUNT INDEX", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title("ACCOUNT INDEX", ST7735_LIGHTGREY);
     grid_labels("BACK", "+1", "OK", "-10", "-1", "+10");
     while (1) {
         // Only the number and the path are redrawn: no flicker
@@ -2107,6 +2108,7 @@ static bool get_current_bip84_result(uint32_t chain, uint32_t address_index, Bit
 // included (the child changes with it, as in Krux). The parent stays loaded
 // until the user chooses LOAD on the child's words.
 static bool derive_from_wallet = false;     // CHILD_CONFIG belongs to DERIVE, not to the main menu
+static bool unload_from_menu = false;       // CONFIRM_UNLOAD came from the wallet menu (else from the words)
 static uint8_t derive_child[36];            // Entropy of the child seed
 static uint32_t derive_child_fp;            // Master fingerprint of the key it comes from
 
@@ -2115,9 +2117,9 @@ static void derive_child_seed(void) {
     HDNode root;
 
     black_screen();
-    drawtext(5, 5, (char*)menu_main[cMAIN_BIP85], ST7735_LIGHTGREY, ST7735_BLACK, 1);
-    drawtext(5, 25, "DERIVING FROM THE KEY", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-    drawtext(5, 35, "ON SCREEN", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title((char*)menu_main[cMAIN_BIP85], ST7735_LIGHTGREY);
+    drawtext(5, 25, "DERIVING FROM THE KEY", ST7735_CYAN, ST7735_BLACK, 1);
+    drawtext(5, 35, "ON SCREEN", ST7735_CYAN, ST7735_BLACK, 1);
     grid_back_only();
 
     bool ok = derive_root_with_progress(&root, true);
@@ -2221,12 +2223,12 @@ static void print_bip84_info_screen(void)
         bool derived = get_current_bip84_result(chain, bip84_address_index, &result);
         
         title = menu_addresses[chain];
-        drawtext(1, 5, (char *)title, ST7735_LIGHTGREY, ST7735_BLACK, 1);
-        drawtext(1, 15, "INDEX:", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        draw_title((char *)title, ST7735_LIGHTGREY);
+        drawtext(1, 15, "INDEX:", ST7735_WHITE, ST7735_BLACK, 1);
         
         u16_to_str((unsigned int)bip84_address_index, index_text);
         drawtext(45, 15, index_text, ST7735_CYAN, ST7735_BLACK, 1);
-        drawtext(100, 15, "ACC", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        drawtext(100, 15, "ACC", ST7735_WHITE, ST7735_BLACK, 1);
         fast_itoa(bip84_account_index, index_text);
         drawtext(124, 15, index_text, ST7735_CYAN, ST7735_BLACK, 1);
 
@@ -2244,7 +2246,7 @@ static void print_bip84_info_screen(void)
         } else {
             title = (bip84_extended_key_page == 0) ? "XPUB" : "ZPUB";
         }
-        drawtext(1, 5, (char *)title, ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        draw_title((char *)title, ST7735_LIGHTGREY);
         draw_bip84_wrapped_text(ms_key, 1, 18, 25, 7);
     }
 
@@ -2392,18 +2394,18 @@ void print_checksum_screen(void) {
         
         uint16_t r_color = (r_val == c_val) ? ST7735_GREEN : ST7735_RED;
 
-        drawtext(1, y_cursor, "USER WORD:", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        drawtext(1, y_cursor, "USER WORD:", ST7735_WHITE, ST7735_BLACK, 1);
         y_cursor += 10;
         
         drawtext(1, y_cursor, b_str, ST7735_ORANGE, ST7735_BLACK, 1);
         drawtext(1 + (b_len * 6), y_cursor, r_str, r_color, ST7735_BLACK, 1);
         y_cursor += 10;
         
-        drawtext(1, y_cursor, "DECIMAL: ", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        drawtext(1, y_cursor, "DECIMAL: ", ST7735_WHITE, ST7735_BLACK, 1);
         drawtext(55, y_cursor, user_dec_str, ST7735_YELLOW, ST7735_BLACK, 1);
         y_cursor += 10;
         
-        drawtext(1, y_cursor, "WORD: ", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        drawtext(1, y_cursor, "WORD: ", ST7735_WHITE, ST7735_BLACK, 1);
         drawtext(37, y_cursor, (char*)get_word(user_group), r_color, ST7735_BLACK, 1);
         y_cursor += 15;
     } else if (bit_count_dice > target_bits) {
@@ -2414,7 +2416,7 @@ void print_checksum_screen(void) {
             r_str[i] = read_entropy_bit(data_array_256b, target_bits + i) ? '1' : '0';
         }
         
-        drawtext(1, y_cursor, "EXCESS BITS (DISCARDED):", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        drawtext(1, y_cursor, "EXCESS BITS (DISCARDED):", ST7735_WHITE, ST7735_BLACK, 1);
         y_cursor += 10;
         drawtext(1, y_cursor, b_str, ST7735_ORANGE, ST7735_BLACK, 1);
         drawtext(1 + (b_len * 6), y_cursor, r_str, ST7735_RED, ST7735_BLACK, 1);
@@ -2422,17 +2424,17 @@ void print_checksum_screen(void) {
     }
 
     // Unified Correct Checksum Section
-    drawtext(1, y_cursor, "CHECKSUM WORD:", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    drawtext(1, y_cursor, "CHECKSUM WORD:", ST7735_WHITE, ST7735_BLACK, 1);
     y_cursor += 10;
     drawtext(1, y_cursor, b_str, ST7735_ORANGE, ST7735_BLACK, 1);
     drawtext(1 + (b_len * 6), y_cursor, c_str, ST7735_CYAN, ST7735_BLACK, 1);
     y_cursor += 10;
     
-    drawtext(1, y_cursor, "DECIMAL: ", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    drawtext(1, y_cursor, "DECIMAL: ", ST7735_WHITE, ST7735_BLACK, 1);
     drawtext(55, y_cursor, correct_dec_str, ST7735_YELLOW, ST7735_BLACK, 1);
     y_cursor += 10;
     
-    drawtext(1, y_cursor, "WORD: ", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    drawtext(1, y_cursor, "WORD: ", ST7735_WHITE, ST7735_BLACK, 1);
     drawtext(37, y_cursor, (char*)correct_word, ST7735_GREEN, ST7735_BLACK, 1);
 
     grid_OK_only(); 
@@ -2445,7 +2447,7 @@ void print_triple_checksum(int word_target) {
 
     if (word_target == 12) {
         b_len = 7; c_len = 4; b_start = 121;
-        drawtext(1, 5, "WORD 12 CHECKSUM:", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        draw_title("WORD 12 CHECKSUM:", ST7735_LIGHTGREY);
         for(int i=0; i<7; i++) {
             int bit = read_entropy_bit(data_array_256b, b_start + i);
             b_str[i] = bit ? '1' : '0';
@@ -2458,7 +2460,7 @@ void print_triple_checksum(int word_target) {
         }
     } else {
         b_len = 3; c_len = 8; b_start = 253;
-        drawtext(1, 5, "WORD 24 CHECKSUM:", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        draw_title("WORD 24 CHECKSUM:", ST7735_LIGHTGREY);
         for(int i=0; i<3; i++) {
             int bit = read_entropy_bit(data_array_256b, b_start + i);
             b_str[i] = bit ? '1' : '0';
@@ -2481,11 +2483,11 @@ void print_triple_checksum(int word_target) {
     drawtext(1 + (b_len * 6), y_cursor, c_str, ST7735_CYAN, ST7735_BLACK, 1);
     y_cursor += 15;
 
-    drawtext(1, y_cursor, "DECIMAL: ", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    drawtext(1, y_cursor, "DECIMAL: ", ST7735_WHITE, ST7735_BLACK, 1);
     drawtext(55, y_cursor, correct_dec_str, ST7735_YELLOW, ST7735_BLACK, 1);
     y_cursor += 15;
 
-    drawtext(1, y_cursor, "WORD: ", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    drawtext(1, y_cursor, "WORD: ", ST7735_WHITE, ST7735_BLACK, 1);
     drawtext(37, y_cursor, (char*)correct_word, ST7735_GREEN, ST7735_BLACK, 1);
     grid_OK_only(); 
 }
@@ -4296,7 +4298,7 @@ static void psbt_view_owner(int y, psbt_owner_t owner, const psbt_keypath_t *kp,
 
     switch (owner) {
         case PSBT_OWNER_NO_INFO:
-            drawtext(5, y, is_output ? "EXTERNAL" : "NO KEY INFO", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+            drawtext(5, y, is_output ? "EXTERNAL" : "NO KEY INFO", ST7735_WHITE, ST7735_BLACK, 1);
             return;
         case PSBT_OWNER_OTHER:
             strcpy(text, psbt_inspect_only ? "FP " : "OTHER FP ");
@@ -4380,7 +4382,7 @@ static void psbt_view_multisig(int y, const psbt_t *psbt, bool is_input, uint32_
             strcpy(line, "+");
             strcat(line, num);
             strcat(line, " MORE");
-            drawtext(1, y + 20, line, ST7735_LIGHTGREY, ST7735_BLACK, 1);
+            drawtext(1, y + 20, line, ST7735_WHITE, ST7735_BLACK, 1);
             break;
         }
         if (is_input) psbt_input_keypath(psbt, index, k, &kp);
@@ -4414,7 +4416,7 @@ static void psbt_view_summary(const psbt_t *psbt) {
         }
     }
 
-    drawtext(5, 5, "TRANSACTION SUMMARY", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title("TRANSACTION SUMMARY", ST7735_LIGHTGREY);
 
     strcpy(line, "INPUTS: ");
     fast_itoa(psbt->input_count, num);
@@ -4494,16 +4496,14 @@ static void psbt_view_input(const psbt_t *psbt, uint32_t index) {
     strcat(line, "/");
     fast_itoa(psbt->input_count, num);
     strcat(line, num);
-    drawtext(5, 5, line, ST7735_LIGHTGREY, ST7735_BLACK, 1);
-
     if (!psbt_get_input(psbt, index, &in)) {
+        draw_title(line, ST7735_LIGHTGREY);
         drawtext(5, 22, "READ ERROR", ST7735_RED, ST7735_BLACK, 1);
         return;
     }
-    if (in.has_amount) {
-        strcpy(line, psbt_script_type_name(psbt_script_type(in.script, in.script_len)));
-        drawtext(90, 5, line, ST7735_CYAN, ST7735_BLACK, 1);
-    }
+    draw_title_pair(line, ST7735_LIGHTGREY,
+                    in.has_amount ? psbt_script_type_name(psbt_script_type(in.script, in.script_len)) : "",
+                    ST7735_CYAN);
 
     // Shortened outpoint: first and last 8 txid chars, then ":vout"
     psbt_format_txid(in.prev_txid, text);
@@ -4556,14 +4556,13 @@ static void psbt_view_output(const psbt_t *psbt, uint32_t index) {
     strcat(line, "/");
     fast_itoa(psbt->output_count, num);
     strcat(line, num);
-    drawtext(5, 5, line, ST7735_LIGHTGREY, ST7735_BLACK, 1);
-
     if (!psbt_get_output(psbt, index, &out)) {
+        draw_title(line, ST7735_LIGHTGREY);
         drawtext(5, 22, "READ ERROR", ST7735_RED, ST7735_BLACK, 1);
         return;
     }
-    strcpy(line, psbt_script_type_name(psbt_script_type(out.script, out.script_len)));
-    drawtext(90, 5, line, ST7735_CYAN, ST7735_BLACK, 1);
+    draw_title_pair(line, ST7735_LIGHTGREY, psbt_script_type_name(psbt_script_type(out.script, out.script_len)),
+                    ST7735_CYAN);
 
     psbt_view_amount_line(15, "AMT: ", true, out.amount, ST7735_WHITE);
 
@@ -4590,8 +4589,8 @@ static bool show_psbt_details(const uint8_t *data, uint32_t len) {
         char reason[24];
         strcpy(reason, psbt_status_name(status));   // drawtext() takes a non-const string
         black_screen();
-        drawtext(5, 5, "PSBT PARSE ERROR", ST7735_RED, ST7735_BLACK, 1);
-        drawtext(5, 20, reason, ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        draw_title("PSBT PARSE ERROR", ST7735_RED);
+        drawtext(5, 20, reason, ST7735_WHITE, ST7735_BLACK, 1);
         grid_back_only();
         while (BT1 == 0) SYS_Tasks();   // Release the key that opened us
         while (BT1 == 1) SYS_Tasks();
@@ -4658,8 +4657,8 @@ static int psbt_wait_key(void) {
 
 static void psbt_sd_message(char *title, char *detail) {
     black_screen();
-    drawtext(5, 5, title, ST7735_RED, ST7735_BLACK, 1);
-    drawtext(5, 20, detail, ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title(title, ST7735_RED);
+    drawtext(5, 20, detail, ST7735_WHITE, ST7735_BLACK, 1);
     grid_OK_back();                 // Either key goes back
     psbt_wait_key();
 }
@@ -4749,7 +4748,7 @@ static bool sd_pick_file(const char *title, const char *none_title, const char *
     uint32_t count = 0;
 
     black_screen();
-    drawtext(5, 5, "READING SD CARD...", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title("READING SD CARD...", ST7735_CYAN);
     if (!sd_files_mount()) {
         psbt_sd_message("SD CARD ERROR", "NO CARD OR NOT FAT16");
         return false;
@@ -4767,7 +4766,7 @@ static bool sd_pick_file(const char *title, const char *none_title, const char *
     // redraws the list, a move inside the page only the two rows involved
     black_screen();
     strcpy(text, title);
-    drawtext(5, 5, text, ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title(text, ST7735_LIGHTGREY);
     grid_menu2();
     uint32_t shown_first = 0xFFFFFFFFu;     // Page on screen (none yet)
     uint32_t shown_sel = *sel;
@@ -4807,7 +4806,7 @@ static void load_psbt_from_sd(void) {
     while (sd_pick_file("SELECT PSBT FILE", "NO PSBT FILES", "NEED .PSB OR .TXT FILE",
                         psbt_sd_exts, 2, &sel, name, &size)) {
         black_screen();
-        drawtext(5, 5, "LOADING PSBT...", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        draw_title("LOADING PSBT...", ST7735_CYAN);
         uint32_t buf_size;
         uint8_t *buf = fountain_scratch_buffer(&buf_size);
         uint32_t len = psbt_sd_load(name, size, buf, buf_size, err);
@@ -4838,7 +4837,7 @@ static bool desc_review(const desc_wallet_t *w, int mine) {
     SHA256_CTX ctx;
 
     black_screen();
-    drawtext(5, 5, "MULTISIG WALLET", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title("MULTISIG WALLET", ST7735_LIGHTGREY);
     drawtext(5, 17, "DERIVING ADDRESS...", ST7735_CYAN, ST7735_BLACK, 1);
     uint32_t len = ms_wallet_script(w, 0, 0, ws);
     bool addr_ok = len > 0;
@@ -4898,7 +4897,7 @@ static __attribute__((noinline)) void import_descriptor_from_sd(void) {
         return;
     }
     black_screen();
-    drawtext(5, 5, "READING DESCRIPTOR", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title("READING DESCRIPTOR", ST7735_CYAN);
     uint32_t buf_size, len = 0;
     char *buf = (char *)fountain_scratch_buffer(&buf_size);
     if (size >= buf_size) {
@@ -4964,12 +4963,12 @@ static void descriptor_check_and_load(const desc_wallet_t *w) {
         memcpy(ms_wallet_seed_tag, bip84_seed_tag, sizeof(ms_wallet_seed_tag));
         ms_wallet_account = bip84_account_index;
         black_screen();
-        drawtext(5, 5, "DESCRIPTOR LOADED", ST7735_GREEN, ST7735_BLACK, 1);
-        drawtext(5, 25, "MULTISIG CHANGE IS NOW", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-        drawtext(5, 35, "CHECKED AGAINST ALL", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-        drawtext(5, 45, "COSIGNER KEYS.", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-        drawtext(5, 65, "KEPT UNTIL THE SEED", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-        drawtext(5, 75, "IS UNLOADED", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        draw_title("DESCRIPTOR LOADED", ST7735_GREEN);
+        drawtext(5, 25, "MULTISIG CHANGE IS NOW", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 35, "CHECKED AGAINST ALL", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 45, "COSIGNER KEYS.", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 65, "KEPT UNTIL THE SEED", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 75, "IS UNLOADED", ST7735_WHITE, ST7735_BLACK, 1);
         grid_OK_back();
         psbt_wait_key();
     }
@@ -5079,7 +5078,7 @@ static void psbt_progress_begin(const char *title) {
     char text[24];
     strcpy(text, title);
     black_screen();
-    drawtext(5, 5, text, ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title(text, ST7735_LIGHTGREY);
     rectan(9, 120, 151, 125, WHITE);
 }
 
@@ -5092,7 +5091,7 @@ static void psbt_progress_step(const char *what, const char *detail, const char 
     rectan(0, 20, 159, 72, BLACK);
     if (what != NULL) {
         strcpy(text, what);
-        drawtext(5, 25, text, ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        drawtext(5, 25, text, ST7735_CYAN, ST7735_BLACK, 1);
     }
     if (detail != NULL) {
         strcpy(text, detail);
@@ -5239,7 +5238,7 @@ static bool psbt_confirm_signing(const psbt_t *psbt, const psbt_sign_plan_t *pla
     int y = 61;                     // Warnings 9 px apart: the last one ends above the grid
 
     black_screen();
-    drawtext(5, 5, "SIGN TRANSACTION?", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title("SIGN TRANSACTION?", ST7735_LIGHTGREY);
     psbt_view_amount_line(19, "SEND:   ", true, plan->send, ST7735_WHITE);
     psbt_view_amount_line(29, "CHANGE: ", true, plan->change, ST7735_CYAN);
     psbt_view_amount_line(39, "FEE:    ", true, plan->fee, ST7735_YELLOW);
@@ -5437,9 +5436,9 @@ static void psbt_review_and_sign(uint8_t *buf, uint32_t len, uint32_t capacity) 
     fast_itoa(signed_count, num);
     strcat(text, num);
     strcat(text, signed_count == 1 ? " INPUT" : " INPUTS");
-    drawtext(5, 5, text, ST7735_GREEN, ST7735_BLACK, 1);
-    drawtext(5, 25, "SCAN THE NEXT QR", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-    drawtext(5, 35, "WITH YOUR WALLET", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title(text, ST7735_GREEN);
+    drawtext(5, 25, "SCAN THE NEXT QR", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 35, "WITH YOUR WALLET", ST7735_WHITE, ST7735_BLACK, 1);
     grid_labels(NULL, NULL, "QR", NULL, NULL, NULL);     // Either key shows the QR
     psbt_wait_key();
     show_ur_animated_qr(buf, len);
@@ -5616,7 +5615,7 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
     *msg_len = 0;
     strcpy(title_text, title);
     black_screen();
-    drawtext(10, 10, title_text, ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title(title_text, ST7735_LIGHTGREY);
     grid_back_only();
     // Progress bar above the button grid
     rectan(9, 92, 151, 97, WHITE);
@@ -5823,18 +5822,18 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
                                             drawtext(5, 62, "CRC FAIL! (PAUSED)", ST7735_RED, ST7735_BLACK, 1);
                                             
                                             char hex_dbg[24];
-                                            drawtext(5, 74, "CALC:", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+                                            drawtext(5, 74, "CALC:", ST7735_WHITE, ST7735_BLACK, 1);
                                             u16_to_hex4((crc >> 16) & 0xFFFF, hex_dbg);
                                             u16_to_hex4(crc & 0xFFFF, &hex_dbg[4]);
                                             drawtext(40, 74, hex_dbg, ST7735_YELLOW, ST7735_BLACK, 1);
 
-                                            drawtext(5, 86, "CBOR:", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+                                            drawtext(5, 86, "CBOR:", ST7735_WHITE, ST7735_BLACK, 1);
                                             u16_to_hex4((cbor_checksum >> 16) & 0xFFFF, hex_dbg);
                                             u16_to_hex4(cbor_checksum & 0xFFFF, &hex_dbg[4]);
                                             drawtext(40, 86, hex_dbg, ST7735_CYAN, ST7735_BLACK, 1);
 
                                             // Extract and display the first byte of up to 6 parts (P0-P5) to check for XOR corruption
-                                            drawtext(5, 96, "P0-P5:", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+                                            drawtext(5, 96, "P0-P5:", ST7735_WHITE, ST7735_BLACK, 1);
                                             memset(hex_dbg, 0, sizeof(hex_dbg));
                                             for (int i = 0; i < cbor_total && i < 6; i++) {
                                                 uint8_t *p = fountain_get_part(i);
@@ -5916,10 +5915,10 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
     }
     if (!gm861_restored) {
         black_screen();
-        drawtext(5, 5, "SCANNER RESET FAILED", ST7735_RED, ST7735_BLACK, 1);
-        drawtext(5, 25, "TURN THE DEVICE OFF", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-        drawtext(5, 35, "AND ON BEFORE USING", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-        drawtext(5, 45, "OTHER QR FUNCTIONS", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        draw_title("SCANNER RESET FAILED", ST7735_RED);
+        drawtext(5, 25, "TURN THE DEVICE OFF", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 35, "AND ON BEFORE USING", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 45, "OTHER QR FUNCTIONS", ST7735_WHITE, ST7735_BLACK, 1);
         grid_OK_back();
         psbt_wait_key();
     }
@@ -5987,7 +5986,7 @@ static void uint64_to_hex(uint64_t val, char *out_str) {
 
 void test_prng_to_screen(void) {
     black_screen();
-    drawtext(10, 10, "XOSHIRO256** TEST", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title("XOSHIRO256** TEST", ST7735_LIGHTGREY);
     
     // Seed with seq, total, msg_len, and checksum
     prng_seed(369, 5, 446, 0);
@@ -6009,7 +6008,7 @@ void test_prng_to_screen(void) {
 
 void test_sampler_to_screen(void) {
     black_screen();
-    drawtext(10, 10, "FOUNTAIN SAMPLER", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title("FOUNTAIN SAMPLER", ST7735_LIGHTGREY);
     
     uint32_t degree = 0;
     uint32_t fragments[MAX_UR_TOTAL_PARTS];
@@ -6133,11 +6132,11 @@ static int qr_read_text(char *out, int cap) {
 // Screen of SCAN ADDRESS before a scan
 static void print_address_scan_screen(void) {
     black_screen();
-    drawtext(1, 1, (char*)menu_addresses[cADDRESS_SCAN], ST7735_LIGHTGREY, ST7735_BLACK, 1);
-    drawtext(5, 20, "SCAN THE ADDRESS QR", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-    drawtext(5, 30, "TO CHECK IF IT IS IN", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-    drawtext(5, 40, "THE FIRST 20 RECEIVE", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-    drawtext(5, 50, "AND CHANGE ADDRESSES", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title((char*)menu_addresses[cADDRESS_SCAN], ST7735_LIGHTGREY);
+    drawtext(5, 20, "SCAN THE ADDRESS QR", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 30, "TO CHECK IF IT IS IN", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 40, "THE FIRST 20 RECEIVE", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 50, "AND CHANGE ADDRESSES", ST7735_WHITE, ST7735_BLACK, 1);
     grid_scan_back();
 }
 
@@ -6172,13 +6171,13 @@ static void check_scanned_address(void) {
     draw_bip84_wrapped_text(addr, 5, 15, PSBT_VIEW_LINE_CHARS, 3);
     if (!segwit_addr_decode(&ver, prog, &prog_len, "bc", addr)) {
         drawtext(5, 50, "NOT A BITCOIN ADDRESS", ST7735_RED, ST7735_BLACK, 1);
-        drawtext(5, 60, "(OR NOT BC1 / MAINNET)", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        drawtext(5, 60, "(OR NOT BC1 / MAINNET)", ST7735_WHITE, ST7735_BLACK, 1);
         grid_confirm("SCAN");
         return;
     }
     if (ver != 0 || prog_len != 20) {
         drawtext(5, 50, "NOT A BC1Q ADDRESS", ST7735_YELLOW, ST7735_BLACK, 1);
-        drawtext(5, 60, "NOT FROM THIS WALLET", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        drawtext(5, 60, "NOT FROM THIS WALLET", ST7735_WHITE, ST7735_BLACK, 1);
         grid_confirm("SCAN");
         return;
     }
@@ -6228,11 +6227,11 @@ static void check_scanned_address(void) {
         drawtext(5, 70, line, ST7735_CYAN, ST7735_BLACK, 1);
     } else {
         drawtext(5, 50, "NOT IN THE FIRST 20", ST7735_YELLOW, ST7735_BLACK, 1);
-        drawtext(5, 60, "RECEIVE / CHANGE OF", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        drawtext(5, 60, "RECEIVE / CHANGE OF", ST7735_WHITE, ST7735_BLACK, 1);
         strcpy(line, "ACCOUNT ");
         fast_itoa(bip84_account_index, num);
         strcat(line, num);
-        drawtext(5, 70, line, ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        drawtext(5, 70, line, ST7735_WHITE, ST7735_BLACK, 1);
     }
     rectan(GRID_X, 105, GRID_X + 90, 125, ST7735_BLACK);
     grid_confirm("SCAN");
@@ -6280,9 +6279,16 @@ static int qr_tiles = 0;            // Tiles per side of the QR on screen
 static bool qr_view_text = false;   // The viewer shows QR FROM TEXT (text in buffer), not the seed
 static bool qr_from_eff = false;    // That text is an EFF PASSWORD: BACK returns to it, not to the editor
 
+// SEED BACKUP menu; BACK returns to the word list, so its key says LIST
+static void draw_backup_menu(void) {
+    print_generic_menu(menu_backup, cBACKUP_n_opt, backup_pointer);
+    rectan(GRID_X + 1, 106, GRID_X + 29, 114, ST7735_BLACK);
+    drawtext(GRID_X + 4, 107, "LIST", ST7735_WHITE, ST7735_WHITE, 1);
+}
+
 static void print_backup_menu(void) {
     black_screen();
-    print_generic_menu(menu_backup, cBACKUP_n_opt, backup_pointer);
+    draw_backup_menu();
     estado = BACKUP_MENU;
 }
 
@@ -6440,9 +6446,9 @@ static void print_eff_config(bool full) {
     char num[12];
     if (full) {
         black_screen();
-        drawtext(1, 1, (char *)menu_tools[cTOOLS_EFF], ST7735_LIGHTGREY, ST7735_BLACK, 1);
-        drawtext(1, 13, "WORDS:", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-        drawtext(80, 13, "NUMBERS:", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        draw_title((char *)menu_tools[cTOOLS_EFF], ST7735_LIGHTGREY);
+        drawtext(1, 13, "WORDS:", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(80, 13, "NUMBERS:", ST7735_WHITE, ST7735_BLACK, 1);
         drawtext(1, 50, "4 DICE PER WORD", ST7735_CYAN, ST7735_BLACK, 1);
         grid_bip85();
     }
@@ -6472,7 +6478,7 @@ static void print_eff_roll(uint8_t parts) {
     char num[12];
     if (parts & EFF_DRAW_FULL) {
         black_screen();
-        drawtext(1, 1, (char *)menu_tools[cTOOLS_EFF], ST7735_LIGHTGREY, ST7735_BLACK, 1);
+        draw_title((char *)menu_tools[cTOOLS_EFF], ST7735_LIGHTGREY);
         grid_keyboard_dice_hash();          // DEL, OK, LEFT / RIGHT
     }
     if (parts & (EFF_DRAW_FULL | EFF_DRAW_WORDS)) {
@@ -6503,7 +6509,7 @@ static void print_eff_roll(uint8_t parts) {
 // The password exactly as it must be typed: lower case, one space between words
 static void print_eff_result(void) {
     black_screen();
-    drawtext(1, 1, (char *)menu_tools[cTOOLS_EFF], ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title((char *)menu_tools[cTOOLS_EFF], ST7735_LIGHTGREY);
     drawtext(1, 12, "LOWER CASE, SPACES BETWEEN", ST7735_CYAN, ST7735_BLACK, 1);
     eff_draw_words(26, false);
 
@@ -6620,19 +6626,19 @@ static void print_reader_screen(void) {
     uint16_t color = ST7735_CYAN;
 
     black_screen();
-    drawtext(1, 1, (char *)reader_title(), ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title((char *)reader_title(), ST7735_LIGHTGREY);
     if (reader_len <= 0) {
         if (reader_len < 0) {
             drawtext(5, 20, "QR TOO LONG OR", ST7735_RED, ST7735_BLACK, 1);
             drawtext(5, 30, "DATA LOST", ST7735_RED, ST7735_BLACK, 1);
         } else if (reader_page < 0 && reader_passphrase) {     // Nothing scanned yet
-            drawtext(5, 20, "SCAN THE PASSPHRASE QR", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-            drawtext(5, 35, "IT IS SHOWN TO CONFIRM", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-            drawtext(5, 45, "IT BEFORE IT IS USED", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+            drawtext(5, 20, "SCAN THE PASSPHRASE QR", ST7735_WHITE, ST7735_BLACK, 1);
+            drawtext(5, 35, "IT IS SHOWN TO CONFIRM", ST7735_WHITE, ST7735_BLACK, 1);
+            drawtext(5, 45, "IT BEFORE IT IS USED", ST7735_WHITE, ST7735_BLACK, 1);
         } else if (reader_page < 0) {
-            drawtext(5, 20, "SCAN A QR CODE", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-            drawtext(5, 35, "ITS CONTENT IS ONLY SHOWN", ST7735_LIGHTGREY, ST7735_BLACK, 1);
-            drawtext(5, 45, "NOTHING IS LOADED OR SAVED", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+            drawtext(5, 20, "SCAN A QR CODE", ST7735_WHITE, ST7735_BLACK, 1);
+            drawtext(5, 35, "ITS CONTENT IS ONLY SHOWN", ST7735_WHITE, ST7735_BLACK, 1);
+            drawtext(5, 45, "NOTHING IS LOADED OR SAVED", ST7735_WHITE, ST7735_BLACK, 1);
         } else {
             drawtext(5, 20, "NO QR DETECTED", ST7735_RED, ST7735_BLACK, 1);
         }
@@ -6852,7 +6858,7 @@ static void show_qr_ready(int sss_k) {
     char line[24];
     char num[12];
 
-    drawtext(10, 10, "READY TO SCAN", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+    draw_title("READY TO SCAN", ST7735_CYAN);
     line[0] = '\0';
     if (main_pointer == cMAIN_XOR) {
         strcpy(line, "SEED ");
@@ -6922,7 +6928,7 @@ int main ( void ){
     drawtext(23,87, "=QR SAFE FOR PHONE", ST7735_GREEN, ST7735_BLACK, 1);
     print_camera(5,110,cNOTSAFE);
     drawtext(23,102, "=QR NOT SAFE FOR PHONE", ST7735_RED, ST7735_BLACK, 1);
-    drawtext(5,119, "(PRESS ANY BUTTON)", ST7735_LIGHTGREY, ST7735_BLACK, 1);  // Start screen: no grid
+    drawtext(5,119, "(PRESS ANY BUTTON)", ST7735_WHITE, ST7735_BLACK, 1);  // Start screen: no grid
     version_display();
 
     PULSED_BT_t pulsed_bt = NONE;
@@ -7643,6 +7649,42 @@ int SSS_N = 9;
                 }
                 break;
 
+            case CONFIRM_UNLOAD:
+                if (pulsed_bt == OK_BT) {
+                    // Every place that holds the seed or something derived from it
+                    memzero(data_array_256b, sizeof(data_array_256b));
+                    memzero(triple_backup_256b, sizeof(triple_backup_256b));
+                    memzero(xor_merge_word1, sizeof(xor_merge_word1));
+                    memzero(xor_merge_word2, sizeof(xor_merge_word2));
+                    memzero(xor_merge_word3, sizeof(xor_merge_word3));
+                    for (int i = 0; i < 5; i++) memzero(coefficient_buffers[i], BYTES_PER_COEFF);
+                    for (int i = 0; i < cN_MAX; i++) memzero(shares[i], LEN);
+                    multi_input_wipe(shares_input, SSS_result, LEN);
+                    memzero(derive_child, sizeof(derive_child));
+                    memzero(card_sequence, sizeof(card_sequence));
+                    memzero(dice_string_buf, sizeof(dice_string_buf));
+                    (void)append_checksum(data_array_256b, 32);     // Its static copy, now zeros
+                    memzero(buffer, sizeof(buffer));
+                    {
+                        uint32_t cap;
+                        uint8_t *scratch = fountain_scratch_buffer(&cap);
+                        memzero(scratch, cap);
+                    }
+                    black_screen();
+                    drawtext(5, 50, "SEED UNLOADED", ST7735_GREEN, ST7735_BLACK, 1);
+                    delay_ms(800);
+                    main_pointer = cMAIN_LOAD;      // Back to the main menu, not to OPSEC
+                    transition_to_main();           // Passphrase, wallet keys, multisig wallet
+                    pulsed_bt = NONE;
+                } else if (pulsed_bt == BACK_BT) {
+                    if (unload_from_menu) {
+                        black_screen();
+                        print_bip84_menu();
+                    } else {
+                        redraw_show_seed_with_offset();
+                    }
+                }
+                break;
             case CONFIRM_INIT_SD:
                 switch (pulsed_bt) {
                     case OK_BT:
@@ -8976,7 +9018,10 @@ int SSS_N = 9;
                         black_screen();
                         print_bip84_menu();
                         break;
-                    case BACK_BT:
+                    case BACK_BT:                   // Unload the seed, after confirmation
+                        unload_from_menu = false;
+                        print_unload_confirm();
+                        estado = CONFIRM_UNLOAD;
                         break;
                     case UP_BT:
                         if ((main_pointer==cMAIN_SSS) & (sss_pointer==cSPLIT) & (selected_share_id>1)){ // Shamir split: show previous share
@@ -9041,7 +9086,7 @@ int SSS_N = 9;
                                 }
                                 black_screen();
                             }
-                            bip84_menu_pointer = bip84_option_count() - 1;   // Stay on MODE
+                            bip84_menu_pointer = bip84_option_count() - 2;   // Stay on MODE (UNLOAD SEED is last)
                             print_bip84_menu();
                             pulsed_bt = NONE;   // Ignore keys pressed during the derivation
                         } else if (bip84_option() == cBIP84_ACCOUNT) {
@@ -9067,6 +9112,10 @@ int SSS_N = 9;
                             black_screen();
                             print_child_config_screen();
                             estado = CHILD_CONFIG;
+                        } else if (bip84_option() == cBIP84_UNLOAD) {
+                            unload_from_menu = true;
+                            print_unload_confirm();
+                            estado = CONFIRM_UNLOAD;
                         } else if (bip84_option() == cBIP84_VAULT) {
                             // Placeholder: nothing yet
                         } else {
@@ -9076,16 +9125,12 @@ int SSS_N = 9;
                     case BACK_BT:
                         redraw_show_seed_with_offset();
                         break;
-                    case UP_BT:
-                        if (bip84_menu_pointer > 0) {
-                            bip84_menu_pointer--;
-                        }
+                    case UP_BT:                     // Circular: from the first to the last
+                        bip84_menu_pointer = (bip84_menu_pointer > 0) ? bip84_menu_pointer - 1 : bip84_option_count() - 1;
                         print_bip84_menu();
                         break;
-                    case DOWN_BT:
-                        if (bip84_menu_pointer < (bip84_option_count() - 1)) {
-                            bip84_menu_pointer++;
-                        }
+                    case DOWN_BT:                   // and from the last to the first
+                        bip84_menu_pointer = (bip84_menu_pointer < bip84_option_count() - 1) ? bip84_menu_pointer + 1 : 0;
                         print_bip84_menu();
                         break;
                     default:
@@ -9559,11 +9604,11 @@ int SSS_N = 9;
                         break;
                     case UP_BT:
                         if (backup_pointer > 0) backup_pointer--;
-                        print_generic_menu(menu_backup, cBACKUP_n_opt, backup_pointer);
+                        draw_backup_menu();
                         break;
                     case DOWN_BT:
                         if (backup_pointer < (cBACKUP_n_opt - 1)) backup_pointer++;
-                        print_generic_menu(menu_backup, cBACKUP_n_opt, backup_pointer);
+                        draw_backup_menu();
                         break;
                     default:
                         break;
@@ -9792,7 +9837,7 @@ int SSS_N = 9;
                             break;
                         }
                         black_screen();
-                        drawtext(1, 1, (char *)reader_title(), ST7735_LIGHTGREY, ST7735_BLACK, 1);
+                        draw_title((char *)reader_title(), ST7735_LIGHTGREY);
                         drawtext(5, 20, "SCANNING...", ST7735_CYAN, ST7735_BLACK, 1);
                         reader_wipe();
                         reader_len = qr_read_raw(reader_data, reader_cap);
@@ -9846,7 +9891,7 @@ int SSS_N = 9;
                     estado = SEL_SETTINGS;
                 } else {
                     drawtext(5, 40, "SETTING NOT SAVED", ST7735_RED, ST7735_BLACK, 1);
-                    drawtext(5, 52, "FLASH WRITE FAILED", ST7735_LIGHTGREY, ST7735_BLACK, 1);
+                    drawtext(5, 52, "FLASH WRITE FAILED", ST7735_WHITE, ST7735_BLACK, 1);
                     grid_OK_only();
                     estado = SETTING_FAILED;
                 }

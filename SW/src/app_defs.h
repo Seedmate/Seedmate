@@ -90,8 +90,9 @@
 #define cBIP84_ACCOUNT 9        // Account index of m/84'/0'/n' and m/48'/0'/n'/2'
 #define cBIP84_DERIVE 10        // BIP85 child seed from the key on screen
 #define cBIP84_VAULT 11         // Placeholder, does nothing yet
-#define cBIP84_n_opt 8          // Single sig menu entries
-#define cBIP84_MULTI_n_opt 8    // Multisig menu entries (no addresses)
+#define cBIP84_UNLOAD 12        // Wipes the seed and every secret, back to the main menu
+#define cBIP84_n_opt 9          // Single sig menu entries
+#define cBIP84_MULTI_n_opt 9    // Multisig menu entries (no addresses)
 #define cADDRESS_RECEIVE 0      // ADDRESSES menu entries = address chain
 #define cADDRESS_CHANGE 1
 #define cADDRESS_SCAN 2         // Checks a scanned address against our first ones
