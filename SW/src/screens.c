@@ -1068,58 +1068,57 @@ static bool seed_qr_make(QRCode *qr, uint8_t *modules, const unsigned char *data
     return len <= 101 && qrcode_initText(qr, modules, 3, ECC_MEDIUM, text) >= 0;
 }
 
-// Seed QR on the screen (data and size as in seedqr_text()). quad < 0: the
-// whole code. quad 0..3 (top left, top right, bottom left, bottom right): one
-// quadrant zoomed, with one module of overlap and the row / column numbers, to
-// copy it by hand.
-void draw_seed_qr_view(const unsigned char *data, size_t size, bool compact, int quad) {
-    uint8_t modules[qrcode_getBufferSize(3)];
-    QRCode qr;
+// Tiles per side of the zoomed view of a QR of n modules: at most 15 modules
+// per tile side (7 px or more each), neighbouring tiles share one module
+static int qr_tiles_per_side(int n) {
+    return (n + 12) / 14;
+}
 
-    white_screen();
-    if (!seed_qr_make(&qr, modules, data, size, compact)) {
-        drawtext(1, 50, "QR ERROR", ST7735_RED, ST7735_WHITE, 1);
-        return;
-    }
-    int n = qr.size;
+// Draws a QR on the white screen: whole (tile < 0, the largest scale up to
+// QR_SCALE that fits) or one zoomed tile (row major) with grid lines and the
+// row / column numbers every 5 modules, to copy it by hand. Returns the
+// number of tiles per side.
+static int draw_qr_view(QRCode *qr, int tile) {
+    int n = qr->size;
+    int per = qr_tiles_per_side(n);
+    char num[6];
 
-    if (quad < 0) {
-        int x0 = (SCREEN_WIDTH - n * QR_SCALE) / 2;
-        int y0 = (SCREEN_HEIGHT - n * QR_SCALE) / 2;
+    if (tile < 0) {
+        int scale = SCREEN_HEIGHT / (n + 2);
+        if (scale > QR_SCALE) scale = QR_SCALE;
+        int x0 = (SCREEN_WIDTH - n * scale) / 2;
+        int y0 = (SCREEN_HEIGHT - n * scale) / 2;
         for (int y = 0; y < n; y++) {
             for (int x = 0; x < n; x++) {
-                if (qrcode_getModule(&qr, x, y)) {
-                    fillRect(x0 + x * QR_SCALE, y0 + y * QR_SCALE, QR_SCALE, QR_SCALE, ST7735_BLACK);
+                if (qrcode_getModule(qr, x, y)) {
+                    fillRect(x0 + x * scale, y0 + y * scale, scale, scale, ST7735_BLACK);
                 }
             }
         }
-        print_camera(2, 50, cNOTSAFE);
-        print_camera(2, 80, cNOTSAFE);
-        print_camera(145, 50, cNOTSAFE);
-        print_camera(145, 80, cNOTSAFE);
-        return;
+        return per;
     }
 
-    int half = (n + 1) / 2;                     // The two halves share the middle module
-    int gx = (quad & 1) ? n - half : 0;
-    int gy = (quad & 2) ? n - half : 0;
-    int scale = 118 / half;
+    int t = (n - 1 + per - 1) / per + 1;        // Modules per tile side
+    int gx = (tile % per) * (t - 1);
+    int gy = (tile / per) * (t - 1);
+    if (gx > n - t) gx = n - t;
+    if (gy > n - t) gy = n - t;
+    int scale = 118 / t;
     int x0 = 14;                                // Room for the row numbers
     int y0 = 10;                                // Room for the column numbers
-    char num[6];
 
-    for (int j = 0; j < half; j++) {
-        for (int i = 0; i < half; i++) {
-            if (qrcode_getModule(&qr, gx + i, gy + j)) {
+    for (int j = 0; j < t; j++) {
+        for (int i = 0; i < t; i++) {
+            if (qrcode_getModule(qr, gx + i, gy + j)) {
                 fillRect(x0 + i * scale, y0 + j * scale, scale, scale, ST7735_BLACK);
             }
         }
     }
-    for (int k = 0; k <= half; k++) {           // Grid lines to count modules
-        drawFastVLine(x0 + k * scale, y0, half * scale + 1, ST7735_GREY);
-        drawFastHLine(x0, y0 + k * scale, half * scale + 1, ST7735_GREY);
+    for (int k = 0; k <= t; k++) {              // Grid lines to count modules
+        drawFastVLine(x0 + k * scale, y0, t * scale + 1, ST7735_GREY);
+        drawFastHLine(x0, y0 + k * scale, t * scale + 1, ST7735_GREY);
     }
-    for (int k = 0; k < half; k++) {            // Numbers every 5 modules
+    for (int k = 0; k < t; k++) {               // Numbers every 5 modules
         if ((gx + k) % 5 == 0) {
             u16_to_str((unsigned int)(gx + k), num);
             drawtext(x0 + k * scale + (scale - 6 * (int)strlen(num)) / 2, 1, num, ST7735_BLACK, ST7735_WHITE, 1);
@@ -1129,6 +1128,72 @@ void draw_seed_qr_view(const unsigned char *data, size_t size, bool compact, int
             drawtext(1, y0 + k * scale + (scale - 7) / 2, num, ST7735_BLACK, ST7735_WHITE, 1);
         }
     }
+    return per;
+}
+
+// Seed QR on the screen (data and size as in seedqr_text()), whole or one
+// zoomed tile. Returns the tiles per side (0 if the QR could not be built).
+int draw_seed_qr_view(const unsigned char *data, size_t size, bool compact, int tile) {
+    uint8_t modules[qrcode_getBufferSize(3)];
+    QRCode qr;
+
+    white_screen();
+    if (!seed_qr_make(&qr, modules, data, size, compact)) {
+        drawtext(1, 50, "QR ERROR", ST7735_RED, ST7735_WHITE, 1);
+        return 0;
+    }
+    int per = draw_qr_view(&qr, tile);
+    if (tile < 0) {
+        print_camera(2, 50, cNOTSAFE);
+        print_camera(2, 80, cNOTSAFE);
+        print_camera(145, 50, cNOTSAFE);
+        print_camera(145, 80, cNOTSAFE);
+    }
+    return per;
+}
+
+// Data codewords of versions 1..11 at error correction L and M (ISO 18004)
+static const uint16_t qr_data_bytes[2][11] = {
+    {19, 34, 55, 80, 108, 136, 156, 194, 232, 274, 324},    // L
+    {16, 28, 44, 64, 86, 108, 124, 154, 182, 216, 254},     // M
+};
+
+// Bits the QR library needs for text in a version (it picks numeric,
+// alphanumeric or byte mode from the content); the library does not check
+// the capacity itself
+static uint32_t text_qr_bits(const char *text, int version) {
+    uint32_t len = (uint32_t)strlen(text);
+    bool numeric = true, alnum = true;
+    int range = (version < 10) ? 0 : 1;         // Character count width changes at version 10
+
+    for (uint32_t i = 0; i < len; i++) {
+        char c = text[i];
+        if (c < '0' || c > '9') numeric = false;
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || strchr(" $%*+-./:", c) != NULL)) alnum = false;
+    }
+    if (numeric) return 4 + (range ? 12 : 10) + 10 * (len / 3) + ((len % 3) == 2 ? 7 : (len % 3) == 1 ? 4 : 0);
+    if (alnum) return 4 + (range ? 11 : 9) + 11 * (len / 2) + 6 * (len % 2);
+    return 4 + (range ? 16 : 8) + 8 * len;
+}
+
+// QR of a text (QR FROM TEXT), whole or one zoomed tile: the smallest version
+// up to 11 with error correction M, or L if M does not fit (more robust for a
+// QR copied by hand). Returns the tiles per side, 0 if the text does not fit.
+int draw_text_qr_view(const char *text, int tile) {
+    uint8_t modules[qrcode_getBufferSize(11)];
+    QRCode qr;
+
+    white_screen();
+    for (int level = 1; level >= 0; level--) {  // 1 = M, 0 = L
+        for (int v = 1; v <= 11; v++) {
+            if (text_qr_bits(text, v) <= 8u * qr_data_bytes[level][v - 1]) {
+                qrcode_initText(&qr, modules, (uint8_t)v, level ? ECC_MEDIUM : ECC_LOW, text);
+                return draw_qr_view(&qr, tile);
+            }
+        }
+    }
+    drawtext(1, 50, "TEXT TOO LONG", ST7735_RED, ST7735_WHITE, 1);
+    return 0;
 }
 
 void print_word_number_top(int word_number, char *word_number_text) {
@@ -1419,6 +1484,18 @@ void print_derive_info(uint32_t fingerprint) {
     strcpy(text, (bip85_size == cSIZE_12) ? "12 WORDS, INDEX " : "24 WORDS, INDEX ");
     u16_to_str((unsigned int)bip85_index, &text[16]);
     drawtext(1, 72, text, ST7735_CYAN, ST7735_BLACK, 1);
+    grid_confirm("SHOW");
+}
+
+// Red warning before the QR of a text that is a seed (QR FROM TEXT); BACK
+// returns to the text, OK shows the QR
+void print_text_seed_warning(void) {
+    rectan(0, 0, 159, 127, ST7735_RED);
+    drawtext(1, 10, "THIS TEXT IS A SEED", ST7735_WHITE, ST7735_RED, 1);
+    drawtext(1, 25, "ITS QR EQUALS YOUR SEED", ST7735_WHITE, ST7735_RED, 1);
+    drawtext(1, 40, "DO NOT SCAN WITH A PHONE", ST7735_WHITE, ST7735_RED, 1);
+    drawtext(1, 55, "DO NOT TAKE PHOTOS", ST7735_WHITE, ST7735_RED, 1);
+    drawtext(1, 70, "KEEP IT OFFLINE", ST7735_WHITE, ST7735_RED, 1);
     grid_confirm("SHOW");
 }
 

@@ -15,6 +15,10 @@
 #define cMAIN_n_opt 8               // Entries of the main menu (positions)
 #define cOPSEC_n_opt 4              // Entries of the OPSEC menu
 #define cTOOLS_n_opt 3              // Entries of the TOOLS menu
+#define cTOOLS_READER 0
+#define cTOOLS_TEXTQR 1
+#define cTOOLS_DICEPW 2
+#define cTEXTQR_MAX 320             // QR FROM TEXT: fits a version 11 code (61 modules, 2 px each)
 #define cSEED_n_opt 6
 #define cSIZE_n_opt 2
 #define cOBFUS_n_opt 6

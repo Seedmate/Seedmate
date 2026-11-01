@@ -776,7 +776,9 @@ typedef enum
     WARNING_SD,
     WARNING_SD_SETTING,
     CONFIRM_SD_OVERWRITE,
-    VIEW_SEEDQR,
+    VIEW_QR,
+    QR_READER,
+    WARNING_TEXTQR,
     DERIVE_RESULT,
     DERIVE_WORDS,
     SHOW_CARD_ENCODING,
@@ -6003,6 +6005,48 @@ static bool bip84_address_hash(uint32_t chain, uint32_t index, uint8_t hash160[2
     return ok;
 }
 
+// One code from the GM861 with its stored setup (command triggered), as raw
+// bytes: spaces and binary data kept, the trigger ACK removed. Received
+// through the UART2 interrupt ring, so long codes are not lost. Returns its
+// length (out is NUL terminated), 0 if nothing was read, -1 if it did not
+// fit in cap - 1 bytes or bytes were dropped.
+static int qr_read_raw(uint8_t *out, uint32_t cap) {
+    static const uint8_t scan_ack[7] = {0x02, 0x00, 0x00, 0x01, 0x00, 0x33, 0x31};
+    uint32_t n = 0;
+    bool ack_checked = false, too_long = false;
+    uint8_t b;
+
+    if (U2STAbits.OERR) U2STAbits.OERR = 0;
+    while (U2STAbits.URXDA) (void)U2RXREG;
+    scan_rx_start();
+    trigger_gm861_scanner();
+    uint32_t start = _CP0_GET_COUNT();
+    uint32_t last = start;
+    while (true) {
+        uint32_t now = _CP0_GET_COUNT();
+        if (scan_rx_get(&b)) {
+            if (n < cap - 1) out[n++] = b;
+            else too_long = true;
+            last = now;
+            if (!ack_checked && n == sizeof(scan_ack)) {
+                ack_checked = true;
+                if (memcmp(out, scan_ack, sizeof(scan_ack)) == 0) n = 0;    // Only the ACK so far
+            }
+            continue;
+        }
+        if (n == 0 && !too_long) {
+            if ((uint32_t)(now - start) > 5000u * CORE_TICKS_PER_MS) break;     // No code
+        } else if ((uint32_t)(now - last) > 50u * CORE_TICKS_PER_MS) {
+            break;                                                          // End of the code
+        }
+    }
+    scan_rx_stop();
+    while (n > 0 && (out[n - 1] == '\r' || out[n - 1] == '\n')) n--;      // Tail of the scanner, if any
+    out[n] = 0;
+    if (too_long || scan_rx_overflow) return -1;
+    return (int)n;
+}
+
 // One code from the GM861 with its stored setup (command triggered): the
 // text read, without the trigger ACK and without control characters.
 // Returns its length, 0 if nothing was read.
@@ -6175,7 +6219,9 @@ static void ask_setting_change(void) {
 
 static int backup_pointer = 0;      // Selected entry of the SEED BACKUP menu
 static bool backup_compact;         // The QR to show is the compact one
-static int qr_quad = -1;            // QR viewer: -1 whole code, 0..3 zoomed quadrant
+static int qr_tile = -1;            // QR viewer: -1 whole code, else the zoomed tile (row major)
+static int qr_tiles = 0;            // Tiles per side of the QR on screen
+static bool qr_view_text = false;   // The viewer shows QR FROM TEXT (text in buffer), not the seed
 
 static void print_backup_menu(void) {
     black_screen();
@@ -6183,17 +6229,214 @@ static void print_backup_menu(void) {
     estado = BACKUP_MENU;
 }
 
-// Draws the QR of the seed (whole or zoomed quadrant, see qr_quad)
-static void redraw_seed_qr(void) {
+// Draws the QR on screen (seed or text, whole or zoomed tile, see qr_tile)
+static void redraw_qr(void) {
+    if (qr_view_text) {
+        qr_tiles = draw_text_qr_view((const char *)buffer, qr_tile);
+        return;
+    }
     BYTE *qr_buf = append_checksum(data_array_256b, 16 + size_pointer * 16);
-    draw_seed_qr_view(qr_buf, 16 + size_pointer * 16 + 1, backup_compact, qr_quad);
+    qr_tiles = draw_seed_qr_view(qr_buf, 16 + size_pointer * 16 + 1, backup_compact, qr_tile);
 }
 
 // Shows the QR of the seed (after its warning)
 static void show_seedqr(void) {
-    qr_quad = -1;
-    redraw_seed_qr();
-    estado = VIEW_SEEDQR;
+    qr_view_text = false;
+    qr_tile = -1;
+    redraw_qr();
+    estado = VIEW_QR;
+}
+
+// ============================================================================
+// TOOLS: QR FROM TEXT and QR READER
+// ============================================================================
+
+// True if the text is a seed: 12 to 24 BIP39 words (a multiple of 3, any
+// case, separated by spaces or new lines) or the 48 / 96 digits of a SeedQR
+static bool text_looks_like_seed(const char *s, size_t len) {
+    bool all_digits = len > 0;
+    char w[9];
+    size_t wl = 0;
+    int words = 0;
+    bool ok = true;
+
+    for (size_t i = 0; i < len; i++) {
+        if (s[i] < '0' || s[i] > '9') all_digits = false;
+    }
+    if (all_digits) return len == 48 || len == 96;
+    for (size_t i = 0; i <= len && ok; i++) {
+        char c = (i < len) ? s[i] : ' ';
+        if (c == ' ' || c == '\n' || c == '\r' || c == '\t') {
+            if (wl > 0) {
+                w[wl] = '\0';
+                ok = find_word_index(w) >= 0;
+                words++;
+                wl = 0;
+            }
+        } else if (wl < 8) {
+            w[wl++] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+        } else {
+            ok = false;                     // Longer than any BIP39 word
+        }
+    }
+    memzero(w, sizeof(w));
+    return ok && words >= 12 && words <= 24 && (words % 3) == 0;
+}
+
+// QR FROM TEXT: edits the text (kept in buffer while its QR is shown) and
+// shows its QR, after a red warning if the text is a seed. CANCEL wipes the
+// text and returns to TOOLS; an empty text opens the editor again.
+static void text_qr_edit(void) {
+    char title[25] = "QR FROM TEXT";
+
+    do {
+        if (!full_text_editor(title, sizeof(title), (char *)buffer, cTEXTQR_MAX + 1, NOTE_MODE)) {
+            memzero(buffer, sizeof(buffer));
+            black_screen();
+            print_generic_menu(menu_tools, cTOOLS_n_opt, tools_pointer);
+            estado = TOOLS_MENU;
+            return;
+        }
+    } while (buffer[0] == 0);
+
+    qr_view_text = true;
+    qr_tile = -1;
+    if (text_looks_like_seed((const char *)buffer, strlen((const char *)buffer))) {
+        print_text_seed_warning();
+        estado = WARNING_TEXTQR;
+        return;
+    }
+    redraw_qr();
+    estado = VIEW_QR;
+}
+
+// QR READER: the last code read, kept in the fountain buffer while it is shown
+static uint8_t *reader_data;
+static uint32_t reader_cap;
+static int reader_len;              // Bytes read; 0 none, -1 too long or bytes lost
+static int reader_page;
+static bool reader_hex;             // Not printable: shown in hexadecimal
+
+#define READER_COLS 25
+#define READER_ROWS 9
+
+static char reader_char(int i) {
+    static const char hex[] = "0123456789ABCDEF";
+    if (reader_hex) return hex[(reader_data[i / 2] >> ((i & 1) ? 0 : 4)) & 0x0F];
+    return (reader_data[i] == '\t') ? ' ' : (char)reader_data[i];
+}
+
+// Lines of the content (wrapped at READER_COLS or at a new line); with draw,
+// paints the ones of reader_page
+static int reader_lines(bool draw) {
+    int total = reader_hex ? 2 * reader_len : reader_len;
+    int first = reader_page * READER_ROWS;
+    int line = 0, rl = 0;
+    char row[READER_COLS + 1];
+
+    for (int i = 0; i <= total; i++) {
+        char c = (i < total) ? reader_char(i) : '\0';
+        if (i == total || c == '\n' || rl == READER_COLS) {
+            if (draw && line >= first && line < first + READER_ROWS) {
+                row[rl] = '\0';
+                drawtext(5, 24 + 9 * (line - first), row, ST7735_WHITE, ST7735_BLACK, 1);
+            }
+            line++;
+            rl = 0;
+            if (i == total) break;
+            if (c == '\n') continue;
+        }
+        if (c != '\r') row[rl++] = c;
+    }
+    return line;
+}
+
+static void print_reader_screen(void) {
+    char text[24];
+    char num[12];
+    const char *kind;
+    uint16_t color = ST7735_CYAN;
+
+    black_screen();
+    drawtext(1, 1, (char *)menu_tools[cTOOLS_READER], ST7735_WHITE, ST7735_BLACK, 1);
+    if (reader_len <= 0) {
+        if (reader_len < 0) {
+            drawtext(5, 20, "QR TOO LONG OR", ST7735_RED, ST7735_BLACK, 1);
+            drawtext(5, 30, "DATA LOST", ST7735_RED, ST7735_BLACK, 1);
+        } else if (reader_page < 0) {               // Nothing scanned yet
+            drawtext(5, 20, "SCAN A QR CODE", ST7735_WHITE, ST7735_BLACK, 1);
+            drawtext(5, 35, "ITS CONTENT IS ONLY SHOWN", ST7735_WHITE, ST7735_BLACK, 1);
+            drawtext(5, 45, "NOTHING IS LOADED OR SAVED", ST7735_WHITE, ST7735_BLACK, 1);
+        } else {
+            drawtext(5, 20, "NO QR DETECTED", ST7735_RED, ST7735_BLACK, 1);
+        }
+        grid_scan_back();
+        return;
+    }
+
+    // What it is, for information only
+    char *t = (char *)reader_data;
+    int ver = -1;
+    uint8_t prog[40];
+    size_t prog_len = 0;
+    if (reader_hex) {
+        if (reader_len == 16 || reader_len == 32) {
+            kind = "LOOKS LIKE A COMPACT SEEDQR";
+            color = ST7735_YELLOW;
+        } else {
+            kind = "BINARY, ";
+        }
+    } else if (text_looks_like_seed(t, (size_t)reader_len)) {
+        kind = "LOOKS LIKE A SEED";
+        color = ST7735_YELLOW;
+    } else if (strncmp(t, "UR:", 3) == 0 || strncmp(t, "ur:", 3) == 0) {
+        kind = "ONE PART OF A UR CODE";
+    } else if (strncmp(t, "bitcoin:", 8) == 0 || strncmp(t, "BITCOIN:", 8) == 0) {
+        kind = "BITCOIN PAYMENT URI";
+    } else if (segwit_addr_decode(&ver, prog, &prog_len, "bc", t)) {
+        kind = "BITCOIN ADDRESS (BC1)";
+    } else {
+        kind = "TEXT, ";
+    }
+    strcpy(text, kind);
+    if (kind[strlen(kind) - 1] == ' ') {            // Plain text or binary: add the size
+        fast_itoa((uint32_t)reader_len, num);
+        strcat(text, num);
+        strcat(text, reader_hex ? " BYTES" : " CHARS");
+    }
+    drawtext(1, 12, text, color, ST7735_BLACK, 1);
+
+    int pages = (reader_lines(true) + READER_ROWS - 1) / READER_ROWS;
+    if (pages > 1) {
+        strcpy(text, "PAGE ");
+        fast_itoa((uint32_t)(reader_page + 1), num);
+        strcat(text, num);
+        strcat(text, "/");
+        fast_itoa((uint32_t)pages, num);
+        strcat(text, num);
+        drawtext(1, 112, text, ST7735_CYAN, ST7735_BLACK, 1);
+        grid_pager("SCAN");
+    } else {
+        grid_scan_back();
+    }
+}
+
+static int reader_pages(void) {
+    return (reader_lines(false) + READER_ROWS - 1) / READER_ROWS;
+}
+
+static void reader_wipe(void) {
+    if (reader_data != NULL) memzero(reader_data, reader_cap);
+    reader_len = 0;
+}
+
+// Opens QR READER with nothing scanned
+static void reader_open(void) {
+    reader_data = fountain_scratch_buffer(&reader_cap);
+    reader_wipe();
+    reader_page = -1;
+    print_reader_screen();
+    estado = QR_READER;
 }
 
 // Total sectors of the card (starting it if needed), 0 if it cannot be read
@@ -6751,7 +6994,13 @@ int SSS_N = 9;
                 break;
             case TOOLS_MENU:
                 switch (pulsed_bt) {
-                    case OK_BT:                     // Placeholders: nothing yet
+                    case OK_BT:
+                        if (tools_pointer == cTOOLS_READER) {
+                            reader_open();
+                        } else if (tools_pointer == cTOOLS_TEXTQR) {
+                            memzero(buffer, sizeof(buffer));
+                            text_qr_edit();
+                        }                           // DICE PASSWORD: placeholder, nothing yet
                         break;
                     case BACK_BT:
                         main_pointer = cMAIN_TOOLS;
@@ -9053,16 +9302,18 @@ int SSS_N = 9;
                     print_backup_menu();
                 }
                 break;
-            case VIEW_SEEDQR:                   // Full screen QR: OK zooms, arrows move between quadrants
+            case VIEW_QR:                       // Full screen QR: OK zooms, arrows move between tiles
                 switch (pulsed_bt) {
                     case OK_BT:
-                        qr_quad = (qr_quad < 0) ? 0 : -1;
-                        redraw_seed_qr();
+                        qr_tile = (qr_tile < 0) ? 0 : -1;
+                        redraw_qr();
                         break;
                     case BACK_BT:
-                        if (qr_quad >= 0) {
-                            qr_quad = -1;
-                            redraw_seed_qr();
+                        if (qr_tile >= 0) {
+                            qr_tile = -1;
+                            redraw_qr();
+                        } else if (qr_view_text) {
+                            text_qr_edit();         // Back to the text, to correct it
                         } else {
                             print_backup_menu();
                         }
@@ -9071,12 +9322,62 @@ int SSS_N = 9;
                     case RIGHT_BT:
                     case UP_BT:
                     case DOWN_BT:
-                        if (qr_quad >= 0) {
-                            if (pulsed_bt == LEFT_BT) qr_quad &= ~1;
-                            else if (pulsed_bt == RIGHT_BT) qr_quad |= 1;
-                            else if (pulsed_bt == UP_BT) qr_quad &= ~2;
-                            else qr_quad |= 2;
-                            redraw_seed_qr();
+                        if (qr_tile >= 0 && qr_tiles > 0) {
+                            int tx = qr_tile % qr_tiles, ty = qr_tile / qr_tiles;
+                            int moved = qr_tile;
+                            if (pulsed_bt == LEFT_BT && tx > 0) tx--;
+                            else if (pulsed_bt == RIGHT_BT && tx < qr_tiles - 1) tx++;
+                            else if (pulsed_bt == UP_BT && ty > 0) ty--;
+                            else if (pulsed_bt == DOWN_BT && ty < qr_tiles - 1) ty++;
+                            qr_tile = ty * qr_tiles + tx;
+                            if (qr_tile != moved) redraw_qr();
+                        }
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case WARNING_TEXTQR:
+                if (pulsed_bt == OK_BT) {
+                    redraw_qr();
+                    estado = VIEW_QR;
+                } else if (pulsed_bt == BACK_BT) {
+                    text_qr_edit();
+                }
+                break;
+            case QR_READER:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        black_screen();
+                        drawtext(1, 1, (char *)menu_tools[cTOOLS_READER], ST7735_WHITE, ST7735_BLACK, 1);
+                        drawtext(5, 20, "SCANNING...", ST7735_CYAN, ST7735_BLACK, 1);
+                        reader_wipe();
+                        reader_len = qr_read_raw(reader_data, reader_cap);
+                        reader_hex = false;
+                        for (int i = 0; i < reader_len; i++) {
+                            uint8_t c = reader_data[i];
+                            if ((c < 0x20 && c != '\n' && c != '\r' && c != '\t') || c >= 0x7F) reader_hex = true;
+                        }
+                        reader_page = 0;
+                        print_reader_screen();
+                        pulsed_bt = NONE;
+                        break;
+                    case BACK_BT:
+                        reader_wipe();
+                        black_screen();
+                        print_generic_menu(menu_tools, cTOOLS_n_opt, tools_pointer);
+                        estado = TOOLS_MENU;
+                        break;
+                    case UP_BT:
+                        if (reader_len > 0 && reader_page > 0) {
+                            reader_page--;
+                            print_reader_screen();
+                        }
+                        break;
+                    case DOWN_BT:
+                        if (reader_len > 0 && reader_page < reader_pages() - 1) {
+                            reader_page++;
+                            print_reader_screen();
                         }
                         break;
                     default:
