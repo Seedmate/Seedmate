@@ -14,10 +14,11 @@
 #define BOOT_TAG_ADDRESS 0x9D001FF0u    // Bootloader version tag ("BOOT 1.0"), see bootloader boot_ui.c
 #define cMAIN_n_opt 8               // Entries of the main menu (positions)
 #define cOPSEC_n_opt 4              // Entries of the OPSEC menu
-#define cTOOLS_n_opt 3              // Entries of the TOOLS menu
+#define cTOOLS_n_opt 4              // Entries of the TOOLS menu
 #define cTOOLS_READER 0
 #define cTOOLS_TEXTQR 1
 #define cTOOLS_EFF 2
+#define cTOOLS_PSBT 3               // REVIEW PSBT: the signing viewer, without signing
 #define cEFF_MAX_WORDS 12           // EFF PASSWORD: 1..12 words of 4 dice
 #define cTEXTQR_MAX 320             // QR FROM TEXT: fits a version 11 code (61 modules, 2 px each)
 #define cPASS_n_opt 3               // PASSPHRASE FROM menu: KEYBOARD, QR, VAULT

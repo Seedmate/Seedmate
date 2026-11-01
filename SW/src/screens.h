@@ -14,6 +14,7 @@
 #include <stdbool.h>
 
 #define QR_SCALE 4 // Size of each module in pixels
+#define ST7735_LIGHTGREY 0xC618     // Titles and fixed messages the user cannot interact with (rule 7)
 #define SCREEN_WIDTH 160
 #define SCREEN_HEIGHT 128
 #define GRID_X 63           // Left line of the button grid (x 63-153, y 105-125)
