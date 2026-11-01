@@ -25,6 +25,7 @@ extern const char* const menu_opsec[];
 extern const uint8_t opsec_menu_ids[];
 extern const char* const menu_tools[];
 extern const char* const menu_backup[];
+extern const char* const menu_passphrase[];
 extern const char* const menu_create[];
 extern const char* const menu_dice[];
 extern const char* const menu_hash[];

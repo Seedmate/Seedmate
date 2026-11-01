@@ -17,8 +17,13 @@
 #define cTOOLS_n_opt 3              // Entries of the TOOLS menu
 #define cTOOLS_READER 0
 #define cTOOLS_TEXTQR 1
-#define cTOOLS_DICEPW 2
+#define cTOOLS_EFF 2
+#define cEFF_MAX_WORDS 12           // EFF PASSWORD: 1..12 words of 4 dice
 #define cTEXTQR_MAX 320             // QR FROM TEXT: fits a version 11 code (61 modules, 2 px each)
+#define cPASS_n_opt 3               // PASSPHRASE FROM menu: KEYBOARD, QR, VAULT
+#define cPASS_KEYBOARD 0
+#define cPASS_QR 1
+#define cPASS_VAULT 2
 #define cSEED_n_opt 6
 #define cSIZE_n_opt 2
 #define cOBFUS_n_opt 6

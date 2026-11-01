@@ -43,8 +43,9 @@ const char* const menu_main[]     = {"CREATE NEW SEED WORDS", "LOAD SEED WORDS",
 const uint8_t main_menu_ids[cMAIN_n_opt] = {cMAIN_create, cMAIN_LOAD, cMAIN_BIP85, cMAIN_OPSEC, cMAIN_TOOLS, cMAIN_ERASESD, cMAIN_QR, cMAIN_SETTINGS};
 const char* const menu_opsec[]    = {"SHAMIR SECRET SHARE", "SEED WORD XOR", "OBFUSCATION", "MNEMONIC TO CARDS"};
 const uint8_t opsec_menu_ids[cOPSEC_n_opt] = {cMAIN_SSS, cMAIN_XOR, cMAIN_OBFUS, cMAIN_MNEM2CARD};
-const char* const menu_tools[]    = {"QR READER", "QR FROM TEXT", "DICE PASSWORD"};
+const char* const menu_tools[]    = {"QR READER", "QR FROM TEXT", "EFF PASSWORD"};
 const char* const menu_backup[]   = {"SD", "SEEDQR", "COMPACT SEEDQR"};
+const char* const menu_passphrase[] = {"FROM KEYBOARD", "FROM QR", "FROM VAULT"};
 const char* const menu_create[]   = {"THROW COINS", "ROLL DICE", "RANDOM WORD PICK", "DRAW CARDS", "STOPWATCH TEST ONLY", "TRIPLE MNEMONIC"};
 const char* const menu_dice[]     = {"RAW ENTROPY BITS", "STRING HASH"};
 const char* const menu_hash[]     = {"1-6 MODE", "0-5 MODE (KEYSTONE)"};
@@ -315,6 +316,7 @@ static const char *menu_title(const char* const *options) {
     if (options == menu_opsec)        return menu_main[cMAIN_OPSEC];
     if (options == menu_tools)        return menu_main[cMAIN_TOOLS];
     if (options == menu_backup)       return "SEED BACKUP (SD/QR)";
+    if (options == menu_passphrase)   return "PASSPHRASE FROM";
     if (options == menu_xor)          return menu_main[cMAIN_XOR];
     if (options == menu_sss)          return menu_main[cMAIN_SSS];
     if (options == menu_obfus)        return menu_main[cMAIN_OBFUS];

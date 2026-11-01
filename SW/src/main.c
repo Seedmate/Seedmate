@@ -88,6 +88,7 @@
 #include "descriptor.h"
 #include "snake.h"
 #include "settings.h"
+#include "EFF_short.h"
 
 
 
@@ -778,6 +779,10 @@ typedef enum
     CONFIRM_SD_OVERWRITE,
     VIEW_QR,
     QR_READER,
+    EFF_CONFIG,
+    EFF_ROLL,
+    EFF_RESULT,
+    PASSPHRASE_MENU,
     WARNING_TEXTQR,
     DERIVE_RESULT,
     DERIVE_WORDS,
@@ -6222,6 +6227,7 @@ static bool backup_compact;         // The QR to show is the compact one
 static int qr_tile = -1;            // QR viewer: -1 whole code, else the zoomed tile (row major)
 static int qr_tiles = 0;            // Tiles per side of the QR on screen
 static bool qr_view_text = false;   // The viewer shows QR FROM TEXT (text in buffer), not the seed
+static bool qr_from_eff = false;    // That text is an EFF PASSWORD: BACK returns to it, not to the editor
 
 static void print_backup_menu(void) {
     black_screen();
@@ -6242,6 +6248,7 @@ static void redraw_qr(void) {
 // Shows the QR of the seed (after its warning)
 static void show_seedqr(void) {
     qr_view_text = false;
+    qr_from_eff = false;
     qr_tile = -1;
     redraw_qr();
     estado = VIEW_QR;
@@ -6300,6 +6307,7 @@ static void text_qr_edit(void) {
     } while (buffer[0] == 0);
 
     qr_view_text = true;
+    qr_from_eff = false;
     qr_tile = -1;
     if (text_looks_like_seed((const char *)buffer, strlen((const char *)buffer))) {
         print_text_seed_warning();
@@ -6310,12 +6318,194 @@ static void text_qr_edit(void) {
     estado = VIEW_QR;
 }
 
+// ============================================================================
+// TOOLS: EFF PASSWORD (EFF Short Wordlist 1, 4 dice per word)
+// ============================================================================
+// The words come only from the dice (the index is the dice number, as in the
+// printed list, so it can be checked by hand); the optional digit after each
+// word comes from the timer at the key press that completes the word.
+
+static uint8_t eff_words = 6;               // Words of the password, 1..cEFF_MAX_WORDS
+static bool eff_numbers = false;            // A digit after each word
+static uint8_t eff_cursor = 0;              // Configuration field: 0 words, 1 numbers
+static uint16_t eff_index[cEFF_MAX_WORDS];
+static uint8_t eff_digit[cEFF_MAX_WORDS];
+static uint8_t eff_done;                    // Words completed
+static uint8_t eff_dice[4];                 // Dice of the current word
+static uint8_t eff_ndice;
+static uint8_t eff_key;                     // Selected die key, 0..5 = 1..6
+
+static void eff_wipe(void) {
+    memzero(eff_index, sizeof(eff_index));
+    memzero(eff_digit, sizeof(eff_digit));
+    memzero(eff_dice, sizeof(eff_dice));
+    eff_done = 0;
+    eff_ndice = 0;
+    memzero(buffer, sizeof(buffer));        // The result text
+}
+
+// Digit 0..9 from the timer: its first nibble below 10
+static uint8_t timer_digit(void) {
+    uint16_t t = TMR1;
+    for (int k = 0; k < 4; k++) {
+        uint8_t d = (uint8_t)((t >> (4 * k)) & 0x0F);
+        if (d < 10) return d;
+    }
+    return (uint8_t)(t % 10);
+}
+
+// Word i (and its digit), upper case for the screens or lower case as typed
+static void eff_word_text(int i, bool upper, char *out) {
+    const char *w = get_eff_short_word(eff_index[i]);
+    int n = 0;
+    while (w != NULL && w[n] != '\0') {
+        out[n] = (upper && w[n] >= 'a' && w[n] <= 'z') ? (char)(w[n] - 32) : w[n];
+        n++;
+    }
+    if (eff_numbers) out[n++] = (char)('0' + eff_digit[i]);
+    out[n] = '\0';
+}
+
+// The words completed, wrapped at word boundaries from y
+static void eff_draw_words(int y, bool upper) {
+    char w[8];
+    int x = 5;
+    for (int i = 0; i < eff_done; i++) {
+        eff_word_text(i, upper, w);
+        int width = 6 * (int)strlen(w);
+        if (x + width > 155) {
+            x = 5;
+            y += 10;
+        }
+        drawtext(x, y, w, ST7735_WHITE, ST7735_BLACK, 1);
+        x += width + 6;
+    }
+    memzero(w, sizeof(w));
+}
+
+// Configuration screen. full: the whole screen (on entry); otherwise only the
+// values and the timer note are drawn again, over the old ones (no flicker)
+static void print_eff_config(bool full) {
+    char num[12];
+    if (full) {
+        black_screen();
+        drawtext(1, 1, (char *)menu_tools[cTOOLS_EFF], ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(1, 13, "WORDS:", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(80, 13, "NUMBERS:", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(1, 50, "4 DICE PER WORD", ST7735_CYAN, ST7735_BLACK, 1);
+        grid_bip85();
+    }
+    fast_itoa(eff_words, num);
+    strcat(num, " ");                       // Covers the second digit of 10..12
+    drawtext(10, 30, num, (eff_cursor == 0) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(100, 30, eff_numbers ? "YES" : "NO ", (eff_cursor == 1) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 60, eff_numbers ? "NUMBERS FROM THE TIMER" : "                      ", ST7735_CYAN, ST7735_BLACK, 1);
+
+    // Entropy of the result, rounded down: log2(1296) = 10.34 bits per word,
+    // plus log2(10) = 3.32 per digit. Padded to cover the previous value.
+    char text[26];
+    strcpy(text, "ENTROPY: ");
+    fast_itoa((uint32_t)eff_words * (eff_numbers ? 1366u : 1034u) / 100u, num);
+    strcat(text, num);
+    strcat(text, " BITS ");
+    drawtext(1, 76, text, ST7735_CYAN, ST7735_BLACK, 1);
+}
+
+#define EFF_DRAW_FULL   0x01                // The whole screen
+#define EFF_DRAW_WORDS  0x02                // Word counter and the words completed
+
+// Dice screen. The dice line and the 1-6 keys are always drawn again over the
+// old ones; the rest only when 'parts' asks for it (no flicker on each key)
+static void print_eff_roll(uint8_t parts) {
+    char text[26];
+    char num[12];
+    if (parts & EFF_DRAW_FULL) {
+        black_screen();
+        drawtext(1, 1, (char *)menu_tools[cTOOLS_EFF], ST7735_WHITE, ST7735_BLACK, 1);
+        grid_keyboard_dice_hash();          // DEL, OK, LEFT / RIGHT
+    }
+    if (parts & (EFF_DRAW_FULL | EFF_DRAW_WORDS)) {
+        rectan(0, 12, 159, 72, ST7735_BLACK);
+        strcpy(text, "WORD ");
+        fast_itoa(eff_done + 1u, num);
+        strcat(text, num);
+        strcat(text, " OF ");
+        fast_itoa(eff_words, num);
+        strcat(text, num);
+        strcat(text, ", ROLL 4 DICE");
+        drawtext(1, 12, text, ST7735_CYAN, ST7735_BLACK, 1);
+        eff_draw_words(24, false);         // Lower case, exactly as in the result
+    }
+
+    strcpy(text, "DICE:");
+    for (int k = 0; k < 4; k++) {
+        char d[3] = {' ', (k < eff_ndice) ? (char)('0' + eff_dice[k]) : '_', '\0'};
+        strcat(text, d);
+    }
+    drawtext(5, 76, text, ST7735_WHITE, ST7735_BLACK, 1);
+    for (int i = 0; i < 6; i++) {
+        char k[2] = {(char)('1' + i), '\0'};
+        drawtext(10 + 20 * i, 90, k, (i == eff_key) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+    }
+}
+
+// The password exactly as it must be typed: lower case, one space between words
+static void print_eff_result(void) {
+    black_screen();
+    drawtext(1, 1, (char *)menu_tools[cTOOLS_EFF], ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 12, "LOWER CASE, SPACES BETWEEN", ST7735_CYAN, ST7735_BLACK, 1);
+    eff_draw_words(26, false);
+
+    grid_confirm("QR");
+    estado = EFF_RESULT;
+}
+
+// The text of the password in buffer (for its QR)
+static void eff_build_result(void) {
+    char w[8];
+    buffer[0] = '\0';
+    for (int i = 0; i < eff_done; i++) {
+        eff_word_text(i, false, w);
+        if (i > 0) strcat((char *)buffer, " ");
+        strcat((char *)buffer, w);
+    }
+    memzero(w, sizeof(w));
+}
+
+static void eff_open(void) {
+    eff_wipe();
+    eff_cursor = 0;
+    print_eff_config(true);
+    estado = EFF_CONFIG;
+}
+
 // QR READER: the last code read, kept in the fountain buffer while it is shown
 static uint8_t *reader_data;
 static uint32_t reader_cap;
 static int reader_len;              // Bytes read; 0 none, -1 too long or bytes lost
 static int reader_page;
 static bool reader_hex;             // Not printable: shown in hexadecimal
+static bool reader_passphrase;      // Opened from PASSPHRASE FROM QR: OK uses the text read
+static int passphrase_pointer = 0;  // Selected entry of the PASSPHRASE FROM menu
+
+static void print_passphrase_menu(void) {
+    black_screen();
+    print_generic_menu(menu_passphrase, cPASS_n_opt, passphrase_pointer);
+    estado = PASSPHRASE_MENU;
+}
+
+// The code read can be a passphrase: printable ASCII on one line, and it fits
+static bool reader_passphrase_ok(void) {
+    if (reader_len <= 0 || reader_len >= (int)sizeof(bip84_passphrase)) return false;
+    for (int i = 0; i < reader_len; i++) {
+        if (reader_data[i] < 0x20 || reader_data[i] > 0x7E) return false;
+    }
+    return true;
+}
+
+static const char *reader_title(void) {
+    return reader_passphrase ? "PASSPHRASE FROM QR" : menu_tools[cTOOLS_READER];
+}
 
 #define READER_COLS 25
 #define READER_ROWS 9
@@ -6351,6 +6541,27 @@ static int reader_lines(bool draw) {
     return line;
 }
 
+// Content of the code read in pages (UP/DOWN), the page number at the bottom
+// left, and the grid with OK doing ok_label
+static void reader_draw_pages(const char *ok_label) {
+    char text[24];
+    char num[12];
+    int pages = (reader_lines(true) + READER_ROWS - 1) / READER_ROWS;
+
+    if (pages > 1) {
+        strcpy(text, "PAGE ");
+        fast_itoa((uint32_t)(reader_page + 1), num);
+        strcat(text, num);
+        strcat(text, "/");
+        fast_itoa((uint32_t)pages, num);
+        strcat(text, num);
+        drawtext(1, 112, text, ST7735_CYAN, ST7735_BLACK, 1);
+        grid_pager(ok_label);
+    } else {
+        grid_confirm(ok_label);
+    }
+}
+
 static void print_reader_screen(void) {
     char text[24];
     char num[12];
@@ -6358,12 +6569,16 @@ static void print_reader_screen(void) {
     uint16_t color = ST7735_CYAN;
 
     black_screen();
-    drawtext(1, 1, (char *)menu_tools[cTOOLS_READER], ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 1, (char *)reader_title(), ST7735_WHITE, ST7735_BLACK, 1);
     if (reader_len <= 0) {
         if (reader_len < 0) {
             drawtext(5, 20, "QR TOO LONG OR", ST7735_RED, ST7735_BLACK, 1);
             drawtext(5, 30, "DATA LOST", ST7735_RED, ST7735_BLACK, 1);
-        } else if (reader_page < 0) {               // Nothing scanned yet
+        } else if (reader_page < 0 && reader_passphrase) {     // Nothing scanned yet
+            drawtext(5, 20, "SCAN THE PASSPHRASE QR", ST7735_WHITE, ST7735_BLACK, 1);
+            drawtext(5, 35, "IT IS SHOWN TO CONFIRM", ST7735_WHITE, ST7735_BLACK, 1);
+            drawtext(5, 45, "IT BEFORE IT IS USED", ST7735_WHITE, ST7735_BLACK, 1);
+        } else if (reader_page < 0) {
             drawtext(5, 20, "SCAN A QR CODE", ST7735_WHITE, ST7735_BLACK, 1);
             drawtext(5, 35, "ITS CONTENT IS ONLY SHOWN", ST7735_WHITE, ST7735_BLACK, 1);
             drawtext(5, 45, "NOTHING IS LOADED OR SAVED", ST7735_WHITE, ST7735_BLACK, 1);
@@ -6371,6 +6586,30 @@ static void print_reader_screen(void) {
             drawtext(5, 20, "NO QR DETECTED", ST7735_RED, ST7735_BLACK, 1);
         }
         grid_scan_back();
+        return;
+    }
+
+    if (reader_passphrase) {                    // Shown in full, OK uses it
+        bool ok = reader_passphrase_ok();
+        strcpy(text, ok ? "PASSPHRASE, " : "NOT USABLE, ");
+        fast_itoa((uint32_t)reader_len, num);
+        strcat(text, num);
+        strcat(text, reader_hex ? " BYTES" : " CHARS");
+        drawtext(1, 12, text, ok ? ST7735_CYAN : ST7735_RED, ST7735_BLACK, 1);
+        if (!ok) {
+            if (reader_len >= (int)sizeof(bip84_passphrase)) {
+                strcpy(text, "TOO LONG, MAX ");
+                fast_itoa((uint32_t)(sizeof(bip84_passphrase) - 1), num);
+                strcat(text, num);
+                drawtext(5, 30, text, ST7735_RED, ST7735_BLACK, 1);
+            } else {
+                drawtext(5, 30, "NOT PLAIN TEXT ON ONE", ST7735_RED, ST7735_BLACK, 1);
+                drawtext(5, 40, "LINE (A-Z, 0-9, SYMBOLS)", ST7735_RED, ST7735_BLACK, 1);
+            }
+            grid_scan_back();
+            return;
+        }
+        reader_draw_pages("USE");
         return;
     }
 
@@ -6405,20 +6644,7 @@ static void print_reader_screen(void) {
         strcat(text, reader_hex ? " BYTES" : " CHARS");
     }
     drawtext(1, 12, text, color, ST7735_BLACK, 1);
-
-    int pages = (reader_lines(true) + READER_ROWS - 1) / READER_ROWS;
-    if (pages > 1) {
-        strcpy(text, "PAGE ");
-        fast_itoa((uint32_t)(reader_page + 1), num);
-        strcat(text, num);
-        strcat(text, "/");
-        fast_itoa((uint32_t)pages, num);
-        strcat(text, num);
-        drawtext(1, 112, text, ST7735_CYAN, ST7735_BLACK, 1);
-        grid_pager("SCAN");
-    } else {
-        grid_scan_back();
-    }
+    reader_draw_pages("SCAN");
 }
 
 static int reader_pages(void) {
@@ -6430,8 +6656,9 @@ static void reader_wipe(void) {
     reader_len = 0;
 }
 
-// Opens QR READER with nothing scanned
-static void reader_open(void) {
+// Opens QR READER (or PASSPHRASE FROM QR) with nothing scanned
+static void reader_open(bool for_passphrase) {
+    reader_passphrase = for_passphrase;
     reader_data = fountain_scratch_buffer(&reader_cap);
     reader_wipe();
     reader_page = -1;
@@ -6996,11 +7223,13 @@ int SSS_N = 9;
                 switch (pulsed_bt) {
                     case OK_BT:
                         if (tools_pointer == cTOOLS_READER) {
-                            reader_open();
+                            reader_open(false);
                         } else if (tools_pointer == cTOOLS_TEXTQR) {
                             memzero(buffer, sizeof(buffer));
                             text_qr_edit();
-                        }                           // DICE PASSWORD: placeholder, nothing yet
+                        } else if (tools_pointer == cTOOLS_EFF) {
+                            eff_open();
+                        }
                         break;
                     case BACK_BT:
                         main_pointer = cMAIN_TOOLS;
@@ -8739,20 +8968,8 @@ int SSS_N = 9;
                 switch (pulsed_bt) {
                     case OK_BT:
                         if (bip84_option() == cBIP84_PASSPHRASE) {
-                            // Open text editor on a copy. Returns true if user selects SAVE
-                            if (edit_bip39_passphrase()) {
-                                // Invalidate cache to force a new derivation with the passphrase
-                                bip84_account_cached = false;
-                                ms_account_cached = false;
-                                black_screen();
-                                bip84_qr_return_to_menu = true;
-                                estado = PRECOMPUTE_BIP84; // Will recalculate and show progress bar
-                            } else {
-                                // User cancelled, return to menu cleanly
-                                black_screen();
-                                print_bip84_menu();
-                            }
-                        } else if (bip84_option() == cBIP84_SIGN) {
+                            print_passphrase_menu();
+                        } else if(bip84_option() == cBIP84_SIGN) {
                             sign_menu_descriptor = false;
                             black_screen();
                             print_sign_menu();
@@ -9312,6 +9529,8 @@ int SSS_N = 9;
                         if (qr_tile >= 0) {
                             qr_tile = -1;
                             redraw_qr();
+                        } else if (qr_from_eff) {
+                            print_eff_result();     // Back to the password
                         } else if (qr_view_text) {
                             text_qr_edit();         // Back to the text, to correct it
                         } else {
@@ -9345,11 +9564,162 @@ int SSS_N = 9;
                     text_qr_edit();
                 }
                 break;
+            case PASSPHRASE_MENU:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        if (passphrase_pointer == cPASS_KEYBOARD) {
+                            // Open text editor on a copy. Returns true if user selects SAVE
+                            if (edit_bip39_passphrase()) {
+                                // Invalidate cache to force a new derivation with the passphrase
+                                bip84_account_cached = false;
+                                ms_account_cached = false;
+                                black_screen();
+                                bip84_qr_return_to_menu = true;
+                                estado = PRECOMPUTE_BIP84; // Will recalculate and show progress bar
+                            } else {
+                                print_passphrase_menu();    // Cancelled: the passphrase is unchanged
+                            }
+                        } else if (passphrase_pointer == cPASS_QR) {
+                            reader_open(true);
+                        }                                   // FROM VAULT: placeholder, nothing yet
+                        break;
+                    case BACK_BT:
+                        black_screen();
+                        print_bip84_menu();
+                        break;
+                    case UP_BT:
+                        if (passphrase_pointer > 0) passphrase_pointer--;
+                        print_generic_menu(menu_passphrase, cPASS_n_opt, passphrase_pointer);
+                        break;
+                    case DOWN_BT:
+                        if (passphrase_pointer < (cPASS_n_opt - 1)) passphrase_pointer++;
+                        print_generic_menu(menu_passphrase, cPASS_n_opt, passphrase_pointer);
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case EFF_CONFIG:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        eff_wipe();
+                        eff_key = 0;
+                        print_eff_roll(EFF_DRAW_FULL);
+                        estado = EFF_ROLL;
+                        break;
+                    case BACK_BT:
+                        black_screen();
+                        print_generic_menu(menu_tools, cTOOLS_n_opt, tools_pointer);
+                        estado = TOOLS_MENU;
+                        break;
+                    case UP_BT:
+                    case DOWN_BT:
+                        if (eff_cursor == 1) {
+                            eff_numbers = !eff_numbers;
+                        } else if (pulsed_bt == UP_BT && eff_words < cEFF_MAX_WORDS) {
+                            eff_words++;
+                        } else if (pulsed_bt == DOWN_BT && eff_words > 1) {
+                            eff_words--;
+                        }
+                        print_eff_config(false);
+                        break;
+                    case LEFT_BT:
+                        eff_cursor = 0;
+                        print_eff_config(false);
+                        break;
+                    case RIGHT_BT:
+                        eff_cursor = 1;
+                        print_eff_config(false);
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case EFF_ROLL:
+                switch (pulsed_bt) {
+                    case OK_BT: {                   // One die
+                        uint8_t parts = 0;
+                        eff_dice[eff_ndice++] = (uint8_t)(eff_key + 1);
+                        if (eff_ndice == 4) {
+                            parts = EFF_DRAW_WORDS;
+                            eff_index[eff_done] = (uint16_t)((eff_dice[0] - 1) * 216 + (eff_dice[1] - 1) * 36 +
+                                                             (eff_dice[2] - 1) * 6 + (eff_dice[3] - 1));
+                            eff_digit[eff_done] = eff_numbers ? timer_digit() : 0;
+                            eff_done++;
+                            eff_ndice = 0;
+                            memzero(eff_dice, sizeof(eff_dice));
+                            if (eff_done == eff_words) {
+                                eff_build_result();
+                                print_eff_result();
+                                break;
+                            }
+                        }
+                        print_eff_roll(parts);
+                        break;
+                    }
+                    case BACK_BT: {                 // DEL: the last die, else the last word
+                        uint8_t parts = 0;
+                        if (eff_ndice > 0) {
+                            eff_ndice--;
+                            eff_dice[eff_ndice] = 0;
+                        } else if (eff_done > 0) {
+                            eff_done--;
+                            eff_index[eff_done] = 0;
+                            eff_digit[eff_done] = 0;
+                            parts = EFF_DRAW_WORDS;
+                        } else {
+                            print_eff_config(true); // Nothing entered: back to the settings
+                            estado = EFF_CONFIG;
+                            break;
+                        }
+                        print_eff_roll(parts);
+                        break;
+                    }
+                    case LEFT_BT:
+                        eff_key = (uint8_t)((eff_key + 5) % 6);
+                        print_eff_roll(0);
+                        break;
+                    case RIGHT_BT:
+                        eff_key = (uint8_t)((eff_key + 1) % 6);
+                        print_eff_roll(0);
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case EFF_RESULT:
+                if (pulsed_bt == OK_BT) {
+                    qr_view_text = true;            // The text is in buffer
+                    qr_from_eff = true;
+                    qr_tile = -1;
+                    redraw_qr();
+                    estado = VIEW_QR;
+                } else if (pulsed_bt == BACK_BT) {
+                    eff_wipe();
+                    qr_from_eff = false;
+                    black_screen();
+                    print_generic_menu(menu_tools, cTOOLS_n_opt, tools_pointer);
+                    estado = TOOLS_MENU;
+                }
+                break;
             case QR_READER:
                 switch (pulsed_bt) {
                     case OK_BT:
+                        if (reader_passphrase && reader_page >= 0 && reader_passphrase_ok()) {
+                            // USE: the text read becomes the passphrase, the keys are derived again
+                            memzero(bip84_passphrase, sizeof(bip84_passphrase));
+                            memcpy(bip84_passphrase, reader_data, (size_t)reader_len);
+                            reader_wipe();
+                            reader_passphrase = false;
+                            bip84_account_cached = false;
+                            ms_account_cached = false;
+                            black_screen();
+                            bip84_qr_return_to_menu = true;
+                            estado = PRECOMPUTE_BIP84;
+                            break;
+                        }
                         black_screen();
-                        drawtext(1, 1, (char *)menu_tools[cTOOLS_READER], ST7735_WHITE, ST7735_BLACK, 1);
+                        drawtext(1, 1, (char *)reader_title(), ST7735_WHITE, ST7735_BLACK, 1);
                         drawtext(5, 20, "SCANNING...", ST7735_CYAN, ST7735_BLACK, 1);
                         reader_wipe();
                         reader_len = qr_read_raw(reader_data, reader_cap);
@@ -9364,6 +9734,11 @@ int SSS_N = 9;
                         break;
                     case BACK_BT:
                         reader_wipe();
+                        if (reader_passphrase) {
+                            reader_passphrase = false;
+                            print_passphrase_menu();
+                            break;
+                        }
                         black_screen();
                         print_generic_menu(menu_tools, cTOOLS_n_opt, tools_pointer);
                         estado = TOOLS_MENU;
