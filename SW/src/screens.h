@@ -20,6 +20,11 @@
 
 // Menu text tables (stored in flash)
 extern const char* const menu_main[];
+extern const uint8_t main_menu_ids[];
+extern const char* const menu_opsec[];
+extern const uint8_t opsec_menu_ids[];
+extern const char* const menu_tools[];
+extern const char* const menu_backup[];
 extern const char* const menu_create[];
 extern const char* const menu_dice[];
 extern const char* const menu_hash[];
@@ -97,12 +102,17 @@ void print_seedqr_warning(const char *ok_label);
 void print_setting_confirm(int row, bool new_on);
 void print_mcu_serial_screen(void);
 void print_keyboard(int index, bool word_found, bool *valid_letters);
-void draw_seedqr(const char *text);
 void draw_url_qr(const char *text);
-void draw_compactqr_code(int size, unsigned char *data);
 void draw_xpub_qr(const char *text);
 bool draw_qr_frame(const char *text, uint8_t version, int scale);
-void draw_QRSEED(const unsigned char *data, size_t size);
+void draw_seed_qr_view(const unsigned char *data, size_t size, bool compact, int quad);
+void print_sd_warning(const char *ok_label);
+void print_blocked(const char *l1, const char *l2, const char *l3);
+void print_slot_in_use(int slot);
+void print_sd_init_warning(void);
+void print_sd_wipe_warning(uint32_t mb_total);
+void print_sd_initialized(void);
+void print_derive_info(uint32_t fingerprint);
 void draw_bip84_wrapped_text(const char *text, int x, int y, int line_length, int line_count);
 void main_screen(int sel);
 void draw_card_bit_counter(void);

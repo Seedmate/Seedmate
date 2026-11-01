@@ -3,7 +3,7 @@
  * File:        settings.h
  *
  * Summary:
- *   Permanent settings (decoy game, SeedQR) in a reserved flash page.
+ *   Permanent settings (decoy game, SeedQR, SD write) in a reserved flash page.
  *
  * Description:
  *   The last 2 KB page of the program flash (0x1D03F800) is reserved: the
@@ -38,6 +38,7 @@
 // Flags, 1 = factory default
 #define SETTING_DECOY_ON    0x01u               // Snake game at power-on (default on)
 #define SETTING_SEEDQR_OFF  0x02u               // SeedQR disabled (default off: disabled)
+#define SETTING_SDWRITE_OFF 0x04u               // Writing seeds to the SD disabled (default: disabled)
 #define SETTINGS_DEFAULT    0xFFu
 
 // Flags of the newest valid record, or SETTINGS_DEFAULT if there is none

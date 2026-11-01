@@ -38,7 +38,13 @@ const uint16_t bmp_add_symbol[7]   = { 0x1000, 0x1000, 0x1000, 0xFE00, 0x1000, 0
 // ============================================================================
 // Global Menus (Forces the compiler to store pointers strictly in ROM)
 // ============================================================================
-const char* const menu_main[]     = {"CREATE NEW SEED WORDS", "LOAD SEED WORDS", "BIP85 CHILD SEED", "SHAMIR SECRET SHARE", "SEED WORD XOR", "OBFUSCATION", "MNEMONIC TO CARDS", "ERASE SD", "RESOURCES", "SETTINGS"};
+// Names by function id (cMAIN_*), not by position in the menus
+const char* const menu_main[]     = {"CREATE NEW SEED WORDS", "LOAD SEED WORDS", "BIP85 CHILD SEED", "SHAMIR SECRET SHARE", "SEED WORD XOR", "OBFUSCATION", "MNEMONIC TO CARDS", "SD CARD", "RESOURCES", "SETTINGS", "OPSEC", "TOOLS"};
+const uint8_t main_menu_ids[cMAIN_n_opt] = {cMAIN_create, cMAIN_LOAD, cMAIN_BIP85, cMAIN_OPSEC, cMAIN_TOOLS, cMAIN_ERASESD, cMAIN_QR, cMAIN_SETTINGS};
+const char* const menu_opsec[]    = {"SHAMIR SECRET SHARE", "SEED WORD XOR", "OBFUSCATION", "MNEMONIC TO CARDS"};
+const uint8_t opsec_menu_ids[cOPSEC_n_opt] = {cMAIN_SSS, cMAIN_XOR, cMAIN_OBFUS, cMAIN_MNEM2CARD};
+const char* const menu_tools[]    = {"QR READER", "QR FROM TEXT", "DICE PASSWORD"};
+const char* const menu_backup[]   = {"SD", "SEEDQR", "COMPACT SEEDQR"};
 const char* const menu_create[]   = {"THROW COINS", "ROLL DICE", "RANDOM WORD PICK", "DRAW CARDS", "STOPWATCH TEST ONLY", "TRIPLE MNEMONIC"};
 const char* const menu_dice[]     = {"RAW ENTROPY BITS", "STRING HASH"};
 const char* const menu_hash[]     = {"1-6 MODE", "0-5 MODE (KEYSTONE)"};
@@ -46,12 +52,12 @@ const char* const menu_size[]     = {"12 WORDS", "24 WORDS"};
 const char* const menu_qr[]       = {"STANDARD", "COMPACT"};
 const char* const menu_xor[]      = {"A XOR B = C", "A XOR B XOR C = D", "A XOR B XOR C XOR D = E"};
 const char* const menu_sss[]      = {"SPLIT", "MERGE"};
-const char* const menu_resource[] = {"TUTORIAL", "BACKUP TOOL", "DICE TESTER", "PRINT WORDLIST", "BINARY WORDLIST"};
+const char* const menu_resource[] = {"TUTORIAL", "BACKUP TOOL", "DICE TESTER", "PRINT WORDLIST", "BINARY WORDLIST", "SECURITY"};
 const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB","1 WORD XOR","BYTE SWAP","HOW TO"};
-const char* const menu_erase[]    = {"ERASE SECTOR", "WIPE ALL CARD"};
-const char* const menu_bip84[] = {"ADDRESSES", "SEEDQR", "FINGERPRINT", "XPUB", "PASSPHRASE", "SIGN", "ACCOUNT", "MODE: SINGLE SIG"};
+const char* const menu_erase[]    = {"ERASE SECTOR", "INITIALIZE CARD", "WIPE ALL CARD"};
+const char* const menu_bip84[] = {"SIGN", "DERIVE", "VAULT", "XPUB", "ADDRESSES", "PASSPHRASE", "ACCOUNT", "MODE: SINGLE SIG"};
 const char* const menu_addresses[] = {"RECEIVE ADDRESS", "CHANGE ADDRESS", "SCAN ADDRESS"};
-const char* const menu_bip84_multi[] = {"SEEDQR", "FINGERPRINT", "XPUB", "PASSPHRASE", "SIGN", "IMPORT DESCRIPTOR", "ACCOUNT", "MODE: MULTI SIG"};
+const char* const menu_bip84_multi[] = {"SIGN", "DERIVE", "VAULT", "XPUB", "IMPORT DESCRIPTOR", "PASSPHRASE", "ACCOUNT", "MODE: MULTI SIG"};
 const char* const menu_sign[]     = {"FROM QR", "FROM SD"};
 const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD", "QR SCAN"};
 
@@ -306,12 +312,15 @@ void version_display(){
 // NULL for a menu without one
 static const char *menu_title(const char* const *options) {
     if (options == menu_create)       return menu_main[cMAIN_create];
+    if (options == menu_opsec)        return menu_main[cMAIN_OPSEC];
+    if (options == menu_tools)        return menu_main[cMAIN_TOOLS];
+    if (options == menu_backup)       return "SEED BACKUP (SD/QR)";
     if (options == menu_xor)          return menu_main[cMAIN_XOR];
     if (options == menu_sss)          return menu_main[cMAIN_SSS];
     if (options == menu_obfus)        return menu_main[cMAIN_OBFUS];
     if (options == menu_erase)        return menu_main[cMAIN_ERASESD];
     if (options == menu_resource)     return menu_main[cMAIN_QR];
-    if (options == menu_addresses)    return menu_bip84[0];
+    if (options == menu_addresses)    return menu_bip84[4];
     if (options == menu_bip84)        return "SINGLE SIG WALLET";
     if (options == menu_bip84_multi)  return "MULTISIG WALLET";
     if (options == menu_input)        return "LOAD SEED FROM";
@@ -343,7 +352,7 @@ void print_titled_menu(const char *title, const char* const *options, int n_opt,
 void main_screen(int sel) {
     for (int i = 0; i < cMAIN_n_opt; i++) {
         uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, 5 + i * 10, (char*)menu_main[i], color, ST7735_BLACK, 1);
+        drawtext(1, 5 + i * 10, (char*)menu_main[main_menu_ids[i]], color, ST7735_BLACK, 1);
     }
     if(SD_ready)drawtext(10, 118, "SD OK", ST7735_GREEN, ST7735_BLACK, 1);
     grid_menu1();
@@ -820,67 +829,6 @@ void white_screen(){
     rectan(0,0,159,127,WHITE);
 }
 
-void draw_seedqr(const char *text) {
-    size_t length = strlen(text);
-    int version;
-    int ecc_level;
-    
-    // 12-word SeedQR = 48 numeric characters.
-    // Version 2 at Q quality (25% recovery) supports EXACTLY up to 48 numbers.
-    if (length <= 48) {
-        version = 2;
-        ecc_level = ECC_QUARTILE; 
-    } 
-    // 24-word SeedQR = 96 numeric characters.
-    // We keep it at Version 3 at M quality (supports up to 101 numbers).
-    else if (length <= 101) {
-        version = 3;
-        ecc_level = ECC_MEDIUM;   
-    } else {
-        // Safety check: abort if the text is longer than supported.
-        return; 
-    }
-
-    // Dynamically allocate buffer based on the chosen version
-    uint8_t qrcodeData[qrcode_getBufferSize(version)];
-    QRCode qrcode;
-
-    // Initialize the QR code with the dynamically chosen version and ECC level
-    qrcode_initText(&qrcode, qrcodeData, version, ecc_level, text);
-
-    int qr_size = qrcode.size;
-    int img_size = qr_size * QR_SCALE;
-    
-    // Center the QR code on the screen
-    int x_offset = (SCREEN_WIDTH - img_size) / 2;
-    int y_offset = (SCREEN_HEIGHT - img_size) / 2;
-
-    // 1. Draw the white background and the required 4-module "Quiet Zone"
-    int margin = 4 * QR_SCALE; 
-    fillRect(
-        x_offset - margin, 
-        y_offset - margin, 
-        img_size + (2 * margin), 
-        img_size + (2 * margin), 
-        ST7735_WHITE
-    );
-
-    // 2. Iterate and draw ONLY the black modules for maximum SPI performance
-    for (int y = 0; y < qr_size; y++) {
-        for (int x = 0; x < qr_size; x++) {
-            if (qrcode_getModule(&qrcode, x, y)) {
-                fillRect(
-                    x_offset + (x * QR_SCALE), 
-                    y_offset + (y * QR_SCALE), 
-                    QR_SCALE, 
-                    QR_SCALE, 
-                    ST7735_BLACK
-                );
-            }
-        }
-    }
-}
-
 void draw_url_qr(const char *text) {
     size_t length = strlen(text);
     int version;
@@ -946,35 +894,6 @@ void draw_url_qr(const char *text) {
             }
         }
     }
-}
-
-void draw_compactqr_code(int size, unsigned char *data){
-
-    uint8_t qrcodeData[qrcode_getBufferSize(3)];
-    QRCode qrcode;
-
-    // Initialize the QR code with ECC_LOW correction.
-    if (size==16){
-       qrcode_initBytes(&qrcode, qrcodeData, 1, ECC_LOW, data, size);
-    }else{
-       qrcode_initBytes(&qrcode, qrcodeData, 2, ECC_LOW, data, size);
-    }
-
-
-
-    int qr_size = qrcode.size;
-    int img_size = qr_size * QR_SCALE;
-    // Center on screen
-    int x_offset = (SCREEN_WIDTH - img_size) / 2;
-    int y_offset = (SCREEN_HEIGHT - img_size) / 2;
-
-    for (int y = 0; y < qr_size; y++) {
-        for (int x = 0; x < qr_size; x++) {
-            int pixel = qrcode_getModule(&qrcode, x, y) ? 1 : 0;
-            fillRect(x_offset + x * QR_SCALE, y_offset + y * QR_SCALE, QR_SCALE, QR_SCALE, pixel ? ST7735_BLACK : ST7735_WHITE);
-        }
-    }
-
 }
 
 // Draws text as a QR code of a fixed version, centered, painting every
@@ -1114,69 +1033,102 @@ void update_dice_bit_count_display(int bit_count_dice_local){
     drawtext(10,10, "SEEDMATE", ST7735_WHITE, ST7735_BLACK, 3);
  }
 
-void draw_QRSEED(const unsigned char *data, size_t size) {
-    int bit_index = 0;              // Bits accumulated in 'group'
-    int word_index = 0;             // Rendered word counter
-    unsigned int group = 0;         // Accumulated 11-bit value (0..2047)
-    const int bits_total = (int)(size * 8);
+// Text of a SeedQR: the 4 digit index of every word. data is the entropy plus
+// the checksum byte, as append_checksum() returns it.
+static void seedqr_text(const unsigned char *data, size_t size, char *text, size_t cap) {
+    unsigned int group = 0;
+    int bits = 0;
+    size_t len = 0;
 
-    // Output buffer: 4 digits per word plus the NUL terminator.
-    char text_buf[98];
-    size_t text_len = 0;
+    for (size_t i = 0; i < size * 8; i++) {
+        group = (group << 1) | (((unsigned int)data[i / 8] >> (7 - (i % 8))) & 1u);
+        if (++bits == 11) {
+            if (len + 5 > cap) break;
+            len += u16_to_str_pad(group & 0x7FFu, &text[len], 4);
+            group = 0;
+            bits = 0;
+        }
+    }
+    text[len] = '\0';
+}
 
-    text_buf[0] = '\0';
+// Builds the QR of the seed: SeedQR (4 digits per word, version 2 for 12
+// words and 3 for 24) or CompactSeedQR (the entropy bytes, binary mode)
+static bool seed_qr_make(QRCode *qr, uint8_t *modules, const unsigned char *data, size_t size, bool compact) {
+    char text[98];
+    size_t len;
 
-    for (int i = 0; i < bits_total; i++) {
-        // Read the current bit (MSB first within each byte).
-        int byte_index = i / 8;
-        int bit_position = 7 - (i % 8);
-        int bit = (data[byte_index] >> bit_position) & 1;
+    if (compact) {
+        return qrcode_initBytes(qr, modules, (size == 17) ? 1 : 2, ECC_LOW,
+                                (uint8_t *)data, (uint16_t)(size - 1)) >= 0;
+    }
+    seedqr_text(data, size, text, sizeof(text));
+    len = strlen(text);
+    if (len <= 48) return qrcode_initText(qr, modules, 2, ECC_QUARTILE, text) >= 0;
+    return len <= 101 && qrcode_initText(qr, modules, 3, ECC_MEDIUM, text) >= 0;
+}
 
-        // Add the current bit to the 11-bit group.
-        group = (group << 1) | (unsigned int)bit;
-        bit_index++;
+// Seed QR on the screen (data and size as in seedqr_text()). quad < 0: the
+// whole code. quad 0..3 (top left, top right, bottom left, bottom right): one
+// quadrant zoomed, with one module of overlap and the row / column numbers, to
+// copy it by hand.
+void draw_seed_qr_view(const unsigned char *data, size_t size, bool compact, int quad) {
+    uint8_t modules[qrcode_getBufferSize(3)];
+    QRCode qr;
 
-        // Convert every 11-bit group into a decimal chunk.
-        if (bit_index == 11) {
+    white_screen();
+    if (!seed_qr_make(&qr, modules, data, size, compact)) {
+        drawtext(1, 50, "QR ERROR", ST7735_RED, ST7735_WHITE, 1);
+        return;
+    }
+    int n = qr.size;
 
-            char num_str[6]; // "dddd" + '\0' (+1 extra for safety)
-
-            unsigned int idx = (group & 0x7FFu);
-
-            int written = (int)u16_to_str_pad(idx, num_str, 4);
-
-            // Append the decimal chunk when there is enough room.
-            if (written > 0) {
-
-                const int add_space = 0;
-                size_t need = (size_t)written + add_space;
-                if (text_len + need + 1 /*NUL*/ < sizeof(text_buf)) {
-                    memcpy(&text_buf[text_len], num_str, (size_t)written);
-                    text_len += (size_t)written;
-                    if (add_space) {
-                        text_buf[text_len++] = ' ';
-                    }
-                    text_buf[text_len] = '\0';
-                } else {
-                    text_buf[text_len] = '\0';
-                    break;
+    if (quad < 0) {
+        int x0 = (SCREEN_WIDTH - n * QR_SCALE) / 2;
+        int y0 = (SCREEN_HEIGHT - n * QR_SCALE) / 2;
+        for (int y = 0; y < n; y++) {
+            for (int x = 0; x < n; x++) {
+                if (qrcode_getModule(&qr, x, y)) {
+                    fillRect(x0 + x * QR_SCALE, y0 + y * QR_SCALE, QR_SCALE, QR_SCALE, ST7735_BLACK);
                 }
             }
-
-            // Reset accumulators for the next group.
-            group = 0;
-            bit_index = 0;
-            word_index++;
         }
-
+        print_camera(2, 50, cNOTSAFE);
+        print_camera(2, 80, cNOTSAFE);
+        print_camera(145, 50, cNOTSAFE);
+        print_camera(145, 80, cNOTSAFE);
+        return;
     }
 
-    draw_seedqr(text_buf);
-    print_camera(2,50,cNOTSAFE);
-    print_camera(2,80,cNOTSAFE);
-    print_camera(145,50,cNOTSAFE);
-    print_camera(145,80,cNOTSAFE);
-    print_left_arrow_black(5,123);
+    int half = (n + 1) / 2;                     // The two halves share the middle module
+    int gx = (quad & 1) ? n - half : 0;
+    int gy = (quad & 2) ? n - half : 0;
+    int scale = 118 / half;
+    int x0 = 14;                                // Room for the row numbers
+    int y0 = 10;                                // Room for the column numbers
+    char num[6];
+
+    for (int j = 0; j < half; j++) {
+        for (int i = 0; i < half; i++) {
+            if (qrcode_getModule(&qr, gx + i, gy + j)) {
+                fillRect(x0 + i * scale, y0 + j * scale, scale, scale, ST7735_BLACK);
+            }
+        }
+    }
+    for (int k = 0; k <= half; k++) {           // Grid lines to count modules
+        drawFastVLine(x0 + k * scale, y0, half * scale + 1, ST7735_GREY);
+        drawFastHLine(x0, y0 + k * scale, half * scale + 1, ST7735_GREY);
+    }
+    for (int k = 0; k < half; k++) {            // Numbers every 5 modules
+        if ((gx + k) % 5 == 0) {
+            u16_to_str((unsigned int)(gx + k), num);
+            drawtext(x0 + k * scale + (scale - 6 * (int)strlen(num)) / 2, 1, num, ST7735_BLACK, ST7735_WHITE, 1);
+        }
+        if ((gy + k) % 5 == 0) {
+            u16_to_str((unsigned int)(gy + k), num);
+            drawtext(1, y0 + k * scale + (scale - 7) / 2, num, ST7735_BLACK, ST7735_WHITE, 1);
+        }
+    }
 }
 
 void print_word_number_top(int word_number, char *word_number_text) {
@@ -1319,6 +1271,7 @@ void sel_sd_block_screen_wr(int sel) {
     drawtext(1, 10 , "SELECT SLOT TO WRITE", ST7735_WHITE, ST7735_BLACK, 1);
     // Paint 8 lines "SLOT <num>"
     print_slots(sel);
+    if (SD_page == 0) drawtext(70, 20, "READ ONLY", ST7735_GREY, ST7735_BLACK, 1);     // Legacy slot
     print_SD_preview();
     grid_menuwr();
 }
@@ -1336,17 +1289,20 @@ void sel_sd_block_screen_merge(int sel,int id) {
 
 void print_settings_screen(int sel) {
     char* text_seedqr = seedqr_enabled ? "SEEDQR ON " : "SEEDQR OFF";
+    char* text_sdwrite = sdwrite_enabled ? "SD WRITE ON " : "SD WRITE OFF";
     char* text_decoy = decoy_enabled ? "DECOY GAME ON " : "DECOY GAME OFF";
     uint16_t color_seedqr = (sel == cSETTINGS_SEEDQR) ? ST7735_ORANGE : ST7735_WHITE;
+    uint16_t color_sdwrite = (sel == cSETTINGS_SDWRITE) ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t color_decoy = (sel == cSETTINGS_DECOY) ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t color_serial = (sel == cSETTINGS_MCU_SERIAL) ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t color_fw = (sel == cSETTINGS_UPDATE_FW) ? ST7735_ORANGE : ST7735_WHITE;
 
     drawtext(1, 1, (char*)menu_main[cMAIN_SETTINGS], ST7735_WHITE, ST7735_BLACK, 1);
     drawtext(1, 13, text_seedqr, color_seedqr, ST7735_BLACK, 1);
-    drawtext(1, 23, text_decoy, color_decoy, ST7735_BLACK, 1);
-    drawtext(1, 33, "MCU SERIAL NUMBER", color_serial, ST7735_BLACK, 1);
-    drawtext(1, 43, "UPDATE FIRMWARE", color_fw, ST7735_BLACK, 1);
+    drawtext(1, 23, text_sdwrite, color_sdwrite, ST7735_BLACK, 1);
+    drawtext(1, 33, text_decoy, color_decoy, ST7735_BLACK, 1);
+    drawtext(1, 43, "MCU SERIAL NUMBER", color_serial, ST7735_BLACK, 1);
+    drawtext(1, 53, "UPDATE FIRMWARE", color_fw, ST7735_BLACK, 1);
 
     // Versions at the bottom left, next to the button grid: this firmware and
     // the bootloader, whose tag it keeps at a fixed boot flash address
@@ -1374,26 +1330,123 @@ void print_seedqr_warning(const char *ok_label) {
     grid_confirm(ok_label);
 }
 
+// Yellow warning before a seed is written to the SD card (or the setting that
+// allows it is enabled); BACK cancels, OK does ok_label
+void print_sd_warning(const char *ok_label) {
+    black_screen();
+    drawtext(1, 10, "SEED ON SD: NOT ENCRYPTED", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(1, 25, "ERASE IT AFTER USE, OR", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(1, 40, "KEEP IT APART FROM THIS", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(1, 55, "DEVICE, NEVER IN A PC", ST7735_YELLOW, ST7735_BLACK, 1);
+    grid_confirm(ok_label);
+}
+
+// A function that is not available, and why (red title, the reason below)
+void print_blocked(const char *l1, const char *l2, const char *l3) {
+    black_screen();
+    drawtext(1, 20, (char*)l1, ST7735_RED, ST7735_BLACK, 1);
+    drawtext(1, 40, (char*)l2, ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 50, (char*)l3, ST7735_WHITE, ST7735_BLACK, 1);
+    grid_OK_back();
+}
+
+// The slot chosen for writing already holds a seed
+void print_slot_in_use(int slot) {
+    char text[20];
+    black_screen();
+    strcpy(text, "SLOT ");
+    u16_to_str((unsigned int)slot, &text[5]);
+    strcat(text, " IS IN USE");
+    drawtext(1, 10, text, ST7735_RED, ST7735_BLACK, 1);
+    drawtext(1, 30, "THE CURRENT SEED WILL BE", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 40, "LOST IF YOU OVERWRITE IT", ST7735_WHITE, ST7735_BLACK, 1);
+    grid_confirm("OVER");
+}
+
+// Red warning before the first 1 MB of the card is erased and it is marked as
+// ready for seeds (INITIALIZE CARD); BACK cancels
+void print_sd_init_warning(void) {
+    black_screen();
+    drawtext(1, 1, (char*)menu_erase[cERASE_INIT], ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 14, "ERASES THE FIRST 1 MB OF", ST7735_RED, ST7735_BLACK, 1);
+    drawtext(1, 24, "THE CARD: ALL SEEDS, THE", ST7735_RED, ST7735_BLACK, 1);
+    drawtext(1, 34, "VAULT AND THE FILE SYSTEM", ST7735_RED, ST7735_BLACK, 1);
+    drawtext(1, 44, "(FORMAT). CANNOT BE UNDONE", ST7735_RED, ST7735_BLACK, 1);
+    drawtext(1, 62, "THEN THE CARD ACCEPTS", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 72, "SEEDS FROM THIS DEVICE", ST7735_WHITE, ST7735_BLACK, 1);
+    grid_confirm("INIT");
+}
+
+// Red warning before the whole card is overwritten (WIPE ALL CARD); BACK cancels
+void print_sd_wipe_warning(uint32_t mb_total) {
+    char text[24];
+    black_screen();
+    drawtext(1, 1, (char*)menu_erase[cERASE_WIPE], ST7735_WHITE, ST7735_BLACK, 1);
+    strcpy(text, "CARD SIZE: ");
+    u16_to_str((unsigned int)mb_total, &text[11]);
+    strcat(text, " MB");
+    drawtext(1, 14, text, ST7735_CYAN, ST7735_BLACK, 1);
+    drawtext(1, 30, "ERASES THE WHOLE SD CARD:", ST7735_RED, ST7735_BLACK, 1);
+    drawtext(1, 40, "ALL SEEDS, THE VAULT AND", ST7735_RED, ST7735_BLACK, 1);
+    drawtext(1, 50, "THE FILE SYSTEM (FORMAT)", ST7735_RED, ST7735_BLACK, 1);
+    drawtext(1, 60, "THIS CANNOT BE UNDONE", ST7735_RED, ST7735_BLACK, 1);
+    grid_confirm("WIPE");
+}
+
+// The card was initialized: seeds can be written to it
+void print_sd_initialized(void) {
+    black_screen();
+    drawtext(1, 20, "CARD INITIALIZED", ST7735_GREEN, ST7735_BLACK, 1);
+    drawtext(1, 40, "SEEDS CAN BE WRITTEN TO", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 50, "SLOTS 2 TO 200", ST7735_WHITE, ST7735_BLACK, 1);
+    grid_OK_back();
+}
+
+// Result of DERIVE: which key the child seed comes from (the master
+// fingerprint of the seed on screen, with its passphrase if it has one)
+void print_derive_info(uint32_t fingerprint) {
+    char fgp[9];
+    char text[24];
+
+    black_screen();
+    drawtext(1, 1, (char*)menu_main[cMAIN_BIP85], ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 22, "DERIVED FROM", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 32, "FINGERPRINT", ST7735_WHITE, ST7735_BLACK, 1);
+    u16_to_hex4((uint16_t)(fingerprint >> 16), fgp);
+    u16_to_hex4((uint16_t)(fingerprint & 0xFFFF), fgp + 4);
+    fgp[8] = '\0';
+    drawtext(1, 46, fgp, ST7735_GREEN, ST7735_BLACK, 2);
+    strcpy(text, (bip85_size == cSIZE_12) ? "12 WORDS, INDEX " : "24 WORDS, INDEX ");
+    u16_to_str((unsigned int)bip85_index, &text[16]);
+    drawtext(1, 72, text, ST7735_CYAN, ST7735_BLACK, 1);
+    grid_confirm("SHOW");
+}
+
 // Confirmation of a setting change, which is permanent (row = cSETTINGS_*)
 void print_setting_confirm(int row, bool new_on) {
-    const char *l1, *l2 = "", *l3 = "";
+    const char *name, *l1, *l2 = "", *l3 = "";
     rectan(0, 0, 159, 127, ST7735_BLACK);
     drawtext(1, 1, "SAVE SETTING?", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(5, 14, (row == cSETTINGS_SEEDQR) ? (new_on ? "SEEDQR: ON" : "SEEDQR: OFF")
-                                              : (new_on ? "DECOY GAME: ON" : "DECOY GAME: OFF"),
-             ST7735_CYAN, ST7735_BLACK, 1);
-    drawtext(1, 30, "PERMANENT SETTING:", ST7735_YELLOW, ST7735_BLACK, 1);
-    drawtext(1, 40, "KEPT AFTER POWER OFF AND", ST7735_YELLOW, ST7735_BLACK, 1);
-    drawtext(1, 50, "AFTER FIRMWARE UPDATES", ST7735_YELLOW, ST7735_BLACK, 1);
     if (row == cSETTINGS_SEEDQR) {
+        name = new_on ? "SEEDQR: ON" : "SEEDQR: OFF";
         l1 = new_on ? "SEEDQR WILL SHOW YOUR" : "SEEDQR WILL BE";
         l2 = new_on ? "SEED AS A QR CODE" : "DISABLED";
-        l3 = new_on ? "IN THE WALLET MENU" : "";
+        l3 = new_on ? "IN THE SEED BACKUP MENU" : "";
+    } else if (row == cSETTINGS_SDWRITE) {
+        name = new_on ? "SD WRITE: ON" : "SD WRITE: OFF";
+        l1 = new_on ? "SEEDS CAN BE WRITTEN TO" : "SEEDS CANNOT BE";
+        l2 = new_on ? "THE SD CARD (NOT" : "WRITTEN TO THE SD CARD";
+        l3 = new_on ? "ENCRYPTED)" : "";
     } else {
+        name = new_on ? "DECOY GAME: ON" : "DECOY GAME: OFF";
         l1 = new_on ? "IT STARTS AS A SNAKE GAME" : "IT STARTS DIRECTLY AS";
         l2 = new_on ? "OK + RIGHT AT POWER-ON" : "SEEDMATE";
         l3 = new_on ? "OPENS SEEDMATE" : "";
     }
+    drawtext(5, 14, (char*)name, ST7735_CYAN, ST7735_BLACK, 1);
+    drawtext(1, 30, "PERMANENT SETTING:", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(1, 40, "KEPT AFTER POWER OFF AND", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(1, 50, "AFTER FIRMWARE UPDATES", ST7735_YELLOW, ST7735_BLACK, 1);
     drawtext(1, 68, (char*)l1, ST7735_WHITE, ST7735_BLACK, 1);
     drawtext(1, 78, (char*)l2, ST7735_WHITE, ST7735_BLACK, 1);
     drawtext(1, 88, (char*)l3, ST7735_WHITE, ST7735_BLACK, 1);

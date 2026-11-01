@@ -12,7 +12,9 @@
 
 #define cVersion "v2.0b1"
 #define BOOT_TAG_ADDRESS 0x9D001FF0u    // Bootloader version tag ("BOOT 1.0"), see bootloader boot_ui.c
-#define cMAIN_n_opt 10
+#define cMAIN_n_opt 8               // Entries of the main menu (positions)
+#define cOPSEC_n_opt 4              // Entries of the OPSEC menu
+#define cTOOLS_n_opt 3              // Entries of the TOOLS menu
 #define cSEED_n_opt 6
 #define cSIZE_n_opt 2
 #define cOBFUS_n_opt 6
@@ -20,16 +22,31 @@
 #define cSSS_n_opt 2
 #define cQR_n_opt 2
 #define cSDBLOCK_n_opt 8
-#define cERASE_n_opt 2
+#define cSD_WRITE_LAST_SLOT 200     // Seeds are written to slots 2..200 (sectors 1..199); slot 1 (sector 0) is legacy, read only
+#define cSD_WRITE_LAST_PAGE ((cSD_WRITE_LAST_SLOT - 1) / cSDBLOCK_n_opt)
+#define cBACKUP_n_opt 3             // SEED BACKUP menu: SD, SEEDQR, COMPACT SEEDQR
+#define cBACKUP_SD 0
+#define cBACKUP_SEEDQR 1
+#define cBACKUP_COMPACT 2
+// SD card layout: sector 0 legacy seed slot (read only), 1..199 seed slots 2..200,
+// the vault will start at 501, and the last sector of the first 1 MB holds the
+// marker written by INITIALIZE CARD. Seeds are written only if the marker is valid.
+#define cSD_MARKER_SECTOR 2047
+#define cSD_FORMAT_VERSION 1
+#define cERASE_n_opt 3              // SD CARD menu: ERASE SECTOR, INITIALIZE CARD, WIPE ALL CARD
+#define cERASE_SECTOR 0
+#define cERASE_INIT 1
+#define cERASE_WIPE 2
 #define cSELINPUT_n_opt 3
 #define cDICE_MODE_n_opt 2
 #define cHASH_MODE_n_opt 2
-#define cRESOURCE_n_opt 5
-#define cSETTINGS_n_opt 4
+#define cRESOURCE_n_opt 6
+#define cSETTINGS_n_opt 5
 #define cSETTINGS_SEEDQR 0
-#define cSETTINGS_DECOY 1
-#define cSETTINGS_MCU_SERIAL 2
-#define cSETTINGS_UPDATE_FW 3
+#define cSETTINGS_SDWRITE 1
+#define cSETTINGS_DECOY 2
+#define cSETTINGS_MCU_SERIAL 3
+#define cSETTINGS_UPDATE_FW 4
 #define cEND_OF_LINE 150
 #define cENTROPY_BITS12W 127
 #define cENTROPY_BITS24W 255
@@ -44,20 +61,25 @@
 #define cMAIN_ERASESD 7
 #define cMAIN_QR 8 // Resources menu
 #define cMAIN_SETTINGS 9
+#define cMAIN_OPSEC 10              // Group: Shamir, XOR, obfuscation, cards
+#define cMAIN_TOOLS 11              // Group: QR reader, QR from text, dice password
+// cMAIN_* are function ids, used by the flows (main_pointer); the menus map
+// their positions to them (main_menu_ids[], opsec_menu_ids[] in main.c)
 #define cRESOURCE_tutorial 0
 #define cRESOURCE_backup 1
 #define cRESOURCE_dice_test 2
 #define cRESOURCE_wordlist 3
 #define cRESOURCE_BINlist 4
+#define cRESOURCE_security 5
 #define cBIP84_ADDRESSES 1        // Opens the RECEIVE / CHANGE address menu (single sig only)
-#define cBIP84_SEEDQR 2
-#define cBIP84_FINGERPRINT 3
 #define cBIP84_XPUB 4
 #define cBIP84_PASSPHRASE 5
 #define cBIP84_SIGN 6
 #define cBIP84_MODE 7           // Toggles single sig / multisig
 #define cBIP84_DESCRIPTOR 8     // Multisig menu only
 #define cBIP84_ACCOUNT 9        // Account index of m/84'/0'/n' and m/48'/0'/n'/2'
+#define cBIP84_DERIVE 10        // BIP85 child seed from the key on screen
+#define cBIP84_VAULT 11         // Placeholder, does nothing yet
 #define cBIP84_n_opt 8          // Single sig menu entries
 #define cBIP84_MULTI_n_opt 8    // Multisig menu entries (no addresses)
 #define cADDRESS_RECEIVE 0      // ADDRESSES menu entries = address chain

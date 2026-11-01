@@ -44,6 +44,7 @@ int main(void) {
     fresh_page();
     CHECK(settings_load() == SETTINGS_DEFAULT);
     CHECK((settings_load() & SETTING_DECOY_ON) && (settings_load() & SETTING_SEEDQR_OFF));
+    CHECK(settings_load() & SETTING_SDWRITE_OFF);
 
     // Saving the current value writes nothing
     CHECK(settings_save(SETTINGS_DEFAULT) && writes == 0);

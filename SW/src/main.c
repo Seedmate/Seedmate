@@ -134,6 +134,7 @@
 
 
 bool seedqr_enabled = false;        // Permanent settings (settings.c), loaded at power-on
+bool sdwrite_enabled = false;       // Writing seeds to the SD card
 bool decoy_enabled = true;
 int settings_pointer = 0;
 
@@ -211,7 +212,10 @@ const char kbd_sym[27] = "()[]{}<>;'\"`~^|\\";
 
 
 int erase_pointer = 0;
-int main_pointer = 0;
+int main_pointer = 0;               // Function id (cMAIN_*) of the flow in progress
+int main_sel = 0;                   // Selected position of the main menu
+int opsec_pointer = 0;              // Selected position of the OPSEC menu
+int tools_pointer = 0;              // Selected position of the TOOLS menu
 int obfuscation_pointer =0;
 int sss_pointer = 0;
 int resource_pointer = 0;
@@ -269,12 +273,12 @@ static uint32_t ms_wallet_account;
 
 // Menu position -> cBIP84_* option for each mode
 static const uint8_t bip84_single_options[cBIP84_n_opt] = {
-    cBIP84_ADDRESSES, cBIP84_SEEDQR, cBIP84_FINGERPRINT, cBIP84_XPUB, cBIP84_PASSPHRASE,
-    cBIP84_SIGN, cBIP84_ACCOUNT, cBIP84_MODE
+    cBIP84_SIGN, cBIP84_DERIVE, cBIP84_VAULT, cBIP84_XPUB, cBIP84_ADDRESSES,
+    cBIP84_PASSPHRASE, cBIP84_ACCOUNT, cBIP84_MODE
 };
 static const uint8_t bip84_multi_options[cBIP84_MULTI_n_opt] = {
-    cBIP84_SEEDQR, cBIP84_FINGERPRINT, cBIP84_XPUB, cBIP84_PASSPHRASE, cBIP84_SIGN, cBIP84_DESCRIPTOR,
-    cBIP84_ACCOUNT, cBIP84_MODE
+    cBIP84_SIGN, cBIP84_DERIVE, cBIP84_VAULT, cBIP84_XPUB, cBIP84_DESCRIPTOR,
+    cBIP84_PASSPHRASE, cBIP84_ACCOUNT, cBIP84_MODE
 };
 
 static int bip84_option(void) {
@@ -521,26 +525,18 @@ static void add_256_mod_n(uint8_t *out, const uint8_t *a, const uint8_t *b) {
 static void key_progress_phase(const char *label, uint8_t total_steps);
 static void key_progress_step(void);
 
-static void process_bip85_derivation(void) {
-    char mnemonic_str[250]; 
-    get_mnemonic_string(mnemonic_str);
-   
-    uint8_t seed[64];
-    key_progress_phase("1/2 SEED (PBKDF2)", 0);
-    PBKDF2_HMAC_SHA512(mnemonic_str, "mnemonic", 2048, seed, 64, pbkdf2_progress_bar);
-    memzero(mnemonic_str, sizeof(mnemonic_str));
-    key_progress_phase("2/2 BIP85 CHILD KEY", 5);
-    
+// BIP85 application 39 (BIP39 mnemonic), m/83696968'/39'/0'/words'/index',
+// from a BIP32 master key and chain code (bip85_size, bip85_index). The
+// entropy (16 or 32 bytes) goes to out. Five hardened steps, each advancing
+// the bar that key_progress_phase() started.
+static void bip85_derive_entropy(const uint8_t *master_k, const uint8_t *master_c, uint8_t *out) {
     uint8_t I[64];
-    HmacSha512((uint8_t *)"Bitcoin seed", 12, seed, 64, I);
-    
     uint8_t k[32];
     uint8_t c[32];
-    
-    // Initialize k and c from master seed
-    memcpy(k, I, 32);
-    memcpy(c, I + 32, 32);
-    
+
+    memcpy(k, master_k, 32);
+    memcpy(c, master_c, 32);
+
     uint32_t path[5] = {
         0x80000000 | 83696968,
         0x80000000 | 39,
@@ -548,7 +544,7 @@ static void process_bip85_derivation(void) {
         0x80000000 | ((bip85_size == cSIZE_12) ? 12 : 24),
         0x80000000 | bip85_index
     };
-    
+
     for (int i = 0; i < 5; i++) {
         uint8_t data[37];
         data[0] = 0x00;
@@ -557,33 +553,48 @@ static void process_bip85_derivation(void) {
         data[34] = (path[i] >> 16) & 0xFF;
         data[35] = (path[i] >> 8) & 0xFF;
         data[36] = path[i] & 0xFF;
-        
+
         HmacSha512(c, 32, data, 37, I);
-        
+
         // Proper BIP32 child key addition mod n
         add_256_mod_n(k, I, k); // k_i = (I_L + k_par) % n
         memcpy(c, I + 32, 32);  // c_i = I_R
         memzero(data, sizeof(data));
         key_progress_step();
     }
-    
+
     // BIP85 explicitly requires HMAC-SHA512 step here using "bip-entropy-from-k"
     uint8_t bip85_hmac_out[64];
     HmacSha512((uint8_t *)"bip-entropy-from-k", 18, k, 32, bip85_hmac_out);
-    
-    memset(data_array_256b, 0, 36);
-    int target_bytes = (bip85_size == cSIZE_12) ? 16 : 32;
-    for (int i = 0; i < target_bytes; i++) {
-        data_array_256b[i] = bip85_hmac_out[i];
-    }
-    
-    size_pointer = bip85_size;
+    memcpy(out, bip85_hmac_out, (bip85_size == cSIZE_12) ? 16 : 32);
 
-    memzero(seed, sizeof(seed));
     memzero(I, sizeof(I));
     memzero(k, sizeof(k));
     memzero(c, sizeof(c));
     memzero(bip85_hmac_out, sizeof(bip85_hmac_out));
+}
+
+// BIP85 child seed of the mnemonic on screen, without passphrase (BIP85 CHILD
+// SEED in the main menu). The child replaces the entropy on screen.
+static void process_bip85_derivation(void) {
+    char mnemonic_str[250];
+    get_mnemonic_string(mnemonic_str);
+
+    uint8_t seed[64];
+    key_progress_phase("1/2 SEED (PBKDF2)", 0);
+    PBKDF2_HMAC_SHA512(mnemonic_str, "mnemonic", 2048, seed, 64, pbkdf2_progress_bar);
+    memzero(mnemonic_str, sizeof(mnemonic_str));
+    key_progress_phase("2/2 BIP85 CHILD KEY", 5);
+
+    uint8_t I[64];
+    HmacSha512((uint8_t *)"Bitcoin seed", 12, seed, 64, I);
+
+    memset(data_array_256b, 0, 36);
+    bip85_derive_entropy(I, I + 32, data_array_256b);
+    size_pointer = bip85_size;
+
+    memzero(seed, sizeof(seed));
+    memzero(I, sizeof(I));
 }
 // ============================================================================
 
@@ -753,10 +764,21 @@ typedef enum
     DICE_STRING_INPUT,
     OBFUS_QR_VIEW,
     SEL_SETTINGS,
+    MAIN_RUN,
+    OPSEC_MENU,
+    TOOLS_MENU,
     WARNING_SEEDQR,
     WARNING_SEEDQR_VIEW,
     CONFIRM_SETTING,
     SETTING_FAILED,
+    BACKUP_MENU,
+    BACKUP_BLOCKED,
+    WARNING_SD,
+    WARNING_SD_SETTING,
+    CONFIRM_SD_OVERWRITE,
+    VIEW_SEEDQR,
+    DERIVE_RESULT,
+    DERIVE_WORDS,
     SHOW_CARD_ENCODING,
         QR_SCANNING,
         SHOW_MCU_SERIAL,
@@ -769,6 +791,8 @@ typedef enum
     SEL_ERASE_MODE,
     CONFIRM_WIPE_SD,
     PROCESS_WIPE_SD,
+    CONFIRM_INIT_SD,
+    PROCESS_INIT_SD,
     END_MODE // Final
 } state_t;
 
@@ -2061,6 +2085,72 @@ static bool get_current_bip84_result(uint32_t chain, uint32_t address_index, Bit
 }
 
 
+// DERIVE (wallet menu): BIP85 child seed of the key on screen, passphrase
+// included (the child changes with it, as in Krux). The parent stays loaded
+// until the user chooses LOAD on the child's words.
+static bool derive_from_wallet = false;     // CHILD_CONFIG belongs to DERIVE, not to the main menu
+static uint8_t derive_child[36];            // Entropy of the child seed
+static uint32_t derive_child_fp;            // Master fingerprint of the key it comes from
+
+// Derives the child (BACK cancels the PBKDF2) and shows where it comes from
+static void derive_child_seed(void) {
+    HDNode root;
+
+    black_screen();
+    drawtext(5, 5, (char*)menu_main[cMAIN_BIP85], ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 25, "DERIVING FROM THE KEY", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 35, "ON SCREEN", ST7735_WHITE, ST7735_BLACK, 1);
+    grid_back_only();
+
+    bool ok = derive_root_with_progress(&root, true);
+    if (ok) {
+        key_progress_phase("2/2 BIP85 CHILD KEY", 5);
+        memzero(derive_child, sizeof(derive_child));
+        bip85_derive_entropy(root.private_key, root.chain_code, derive_child);
+        derive_child_fp = hdnode_fingerprint(&root);
+    }
+    memzero(&root, sizeof(root));
+    while (BT1 == 0) SYS_Tasks();           // Do not let BACK reach the state machine
+    if (ok) {
+        print_derive_info(derive_child_fp);
+        estado = DERIVE_RESULT;
+    } else {
+        black_screen();
+        print_child_config_screen();        // Cancelled: back to size and index
+        estado = CHILD_CONFIG;
+    }
+}
+
+// Words of the derived child, 12 per column 8 px apart so the button grid stays free
+static void draw_child_words(void) {
+    int target = (bip85_size == cSIZE_12) ? 12 : 24;
+    BYTE *c_buf = append_checksum(derive_child, target * 4 / 3);
+    unsigned int group = 0;
+    int bits = 0;
+    int word = 0;
+
+    black_screen();
+    for (size_t i = 0; word < target; i++) {
+        group = (group << 1) | (((unsigned int)c_buf[i / 8] >> (7 - (i % 8))) & 1u);
+        if (++bits == 11) {
+            char num[12];
+            int x = (word / 12) * 70;
+            int y = 1 + (word % 12) * 8;
+            u16_to_str((unsigned int)(word + 1), num);
+            drawtext(x, y, num, ST7735_WHITE, ST7735_BLACK, 1);
+            drawtext(x + 15, y, (char *)get_word((int)group),
+                     (word == target - 1) ? ST7735_GREEN : ST7735_WHITE, ST7735_BLACK, 1);
+            word++;
+            group = 0;
+            bits = 0;
+        }
+    }
+    print_camera(145, 20, cNOTSAFE);
+    drawtext(3, 107, "REPLACES", ST7735_YELLOW, ST7735_BLACK, 1);     // What LOAD does
+    drawtext(3, 117, "THE SEED", ST7735_YELLOW, ST7735_BLACK, 1);
+    grid_confirm("LOAD");
+}
+
 static void print_bip84_menu(void)
 {
     print_generic_menu(bip84_multisig_mode ? menu_bip84_multi : menu_bip84, bip84_option_count(), bip84_menu_pointer);
@@ -2126,16 +2216,6 @@ static void print_bip84_info_screen(void)
         } else {
             drawtext(1, 30, "DERIVATION ERROR", ST7735_RED, ST7735_BLACK, 1);
         }
-        
-    } else if (bip84_option() == cBIP84_FINGERPRINT) {
-        // FAST PATH: Read directly from the cached global variable
-        char fgp_str[9];
-        u16_to_hex4((bip84_master_fingerprint >> 16) & 0xFFFF, fgp_str);
-        u16_to_hex4(bip84_master_fingerprint & 0xFFFF, fgp_str + 4);
-        fgp_str[8] = '\0';
-        
-        drawtext(1, 5, "MASTER FINGERPRINT", ST7735_WHITE, ST7735_BLACK, 1);
-        drawtext(1, 30, fgp_str, ST7735_CYAN, ST7735_BLACK, 2);
         
     } else {
         // Origin + key from the cached account (no derivation here)
@@ -2941,19 +3021,19 @@ void extract_11bit_groups(BYTE *data, size_t size) {
     drawtext(120, 117, "LOAD", ST7735_WHITE, ST7735_BLACK, 1);
     print_rigth_arrow(150, 123, ST7735_WHITE);
     
-    drawtext(7,117, "SAVE TO SD", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(7,117, "SEED BACKUP", ST7735_WHITE, ST7735_BLACK, 1);
     print_left_arrow(0,123, ST7735_WHITE);
     if ((main_pointer==cMAIN_SSS) & (sss_pointer==cSPLIT)){
         char shareid_text[4];
         u16_to_str((unsigned int)selected_share_id, shareid_text);
         drawtext(145,30, "ID", ST7735_CYAN, ST7735_BLACK, 1);
         drawtext(146,40, shareid_text, ST7735_CYAN, ST7735_BLACK, 2);
-        if (selected_share_id>1)print_up_arrow(72,123, ST7735_WHITE);
-        if (selected_share_id<cN_MAX)print_down_arrow(80,123,ST7735_WHITE);
+        if (selected_share_id>1)print_up_arrow(76,123, ST7735_WHITE);
+        if (selected_share_id<cN_MAX)print_down_arrow(84,123,ST7735_WHITE);
     }
     if (main_pointer == cMAIN_create && seed_pointer == cSEED_triple) {
-         if (triple_view_state > 0) print_up_arrow(72,123, ST7735_WHITE);
-         if (triple_view_state < 2) print_down_arrow(80,123, ST7735_WHITE);
+         if (triple_view_state > 0) print_up_arrow(76,123, ST7735_WHITE);
+         if (triple_view_state < 2) print_down_arrow(84,123, ST7735_WHITE);
     }
 }
 
@@ -3569,7 +3649,13 @@ void transition_to_main(void) {
     memzero(&ms_account_node, sizeof(ms_account_node));
     memzero(&ms_receive_node_cache, sizeof(ms_receive_node_cache));
     memzero(&ms_change_node_cache, sizeof(ms_change_node_cache));
-    main_screen(main_pointer);
+    if (main_pointer == cMAIN_SSS || main_pointer == cMAIN_XOR ||
+        main_pointer == cMAIN_OBFUS || main_pointer == cMAIN_MNEM2CARD) {
+        print_generic_menu(menu_opsec, cOPSEC_n_opt, opsec_pointer);    // Back to OPSEC
+        estado = OPSEC_MENU;
+        return;
+    }
+    main_screen(main_sel);
     estado = MAIN;
 }
 
@@ -6059,10 +6145,11 @@ static void check_scanned_address(void) {
 static uint8_t setting_pending;     // Flags to save when the user confirms
 
 static uint8_t settings_flags_now(void) {
-    return (uint8_t)(0xFCu | (decoy_enabled ? SETTING_DECOY_ON : 0u) | (seedqr_enabled ? 0u : SETTING_SEEDQR_OFF));
+    return (uint8_t)(0xF8u | (decoy_enabled ? SETTING_DECOY_ON : 0u) | (seedqr_enabled ? 0u : SETTING_SEEDQR_OFF) |
+                     (sdwrite_enabled ? 0u : SETTING_SDWRITE_OFF));
 }
 
-// Asks to confirm the change of the selected setting (SeedQR or decoy game)
+// Asks to confirm the change of the selected setting (SeedQR, SD write or decoy game)
 static void ask_setting_change(void) {
     uint8_t flags = settings_flags_now();
     bool new_on;
@@ -6070,6 +6157,9 @@ static void ask_setting_change(void) {
     if (settings_pointer == cSETTINGS_SEEDQR) {
         flags ^= SETTING_SEEDQR_OFF;
         new_on = (flags & SETTING_SEEDQR_OFF) == 0;
+    } else if (settings_pointer == cSETTINGS_SDWRITE) {
+        flags ^= SETTING_SDWRITE_OFF;
+        new_on = (flags & SETTING_SDWRITE_OFF) == 0;
     } else {
         flags ^= SETTING_DECOY_ON;
         new_on = (flags & SETTING_DECOY_ON) != 0;
@@ -6079,13 +6169,141 @@ static void ask_setting_change(void) {
     estado = CONFIRM_SETTING;
 }
 
-// Draws the SeedQR of the seed on screen (after its warning)
-static void show_seedqr(void) {
-    white_screen();
+// ============================================================================
+// SEED BACKUP: SD, SEEDQR and COMPACT SEEDQR of the seed on the words screen
+// ============================================================================
+
+static int backup_pointer = 0;      // Selected entry of the SEED BACKUP menu
+static bool backup_compact;         // The QR to show is the compact one
+static int qr_quad = -1;            // QR viewer: -1 whole code, 0..3 zoomed quadrant
+
+static void print_backup_menu(void) {
+    black_screen();
+    print_generic_menu(menu_backup, cBACKUP_n_opt, backup_pointer);
+    estado = BACKUP_MENU;
+}
+
+// Draws the QR of the seed (whole or zoomed quadrant, see qr_quad)
+static void redraw_seed_qr(void) {
     BYTE *qr_buf = append_checksum(data_array_256b, 16 + size_pointer * 16);
-    draw_QRSEED(qr_buf, 16 + size_pointer * 16 + 1);
-    bip84_qr_return_to_menu = true;
-    estado = SHOW_QRSEED;
+    draw_seed_qr_view(qr_buf, 16 + size_pointer * 16 + 1, backup_compact, qr_quad);
+}
+
+// Shows the QR of the seed (after its warning)
+static void show_seedqr(void) {
+    qr_quad = -1;
+    redraw_seed_qr();
+    estado = VIEW_SEEDQR;
+}
+
+// Total sectors of the card (starting it if needed), 0 if it cannot be read
+static uint32_t sd_card_sectors(void) {
+    uint32_t sectors = 0;
+    for (int retries = 0; retries < 3; retries++) {
+        if (!SD_ready) SD_ready = sd_init();
+        if (SD_ready) sectors = sd_get_sector_count();
+        if (sectors > 0) break;
+        SD_ready = false;
+        delay_ms(100);
+    }
+    return sectors;
+}
+
+// Marker of an initialized card, in the last sector of the first 1 MB:
+// "SEEDMATE", format version, and the complement of the sum of those 9 bytes.
+// Older firmware never writes there; seeds are written only if it is valid.
+static void sd_marker_build(uint8_t *b) {
+    uint8_t sum = 0;
+    memzero(b, 512);
+    memcpy(b, "SEEDMATE", 8);
+    b[8] = cSD_FORMAT_VERSION;
+    for (int i = 0; i < 9; i++) sum += b[i];
+    b[9] = (uint8_t)~sum;
+}
+
+static bool sd_marker_valid(const uint8_t *b) {
+    uint8_t sum = 0;
+    for (int i = 0; i < 9; i++) sum += b[i];
+    return memcmp(b, "SEEDMATE", 8) == 0 && b[8] == cSD_FORMAT_VERSION && b[9] == (uint8_t)~sum;
+}
+
+// 0: the card is initialized, 1: no valid marker, 2: the card cannot be read
+static int sd_marker_state(void) {
+    bool ok;
+    if (!sd_read_block(cSD_MARKER_SECTOR, buffer)) {
+        sd_init();
+        if (!sd_read_block(cSD_MARKER_SECTOR, buffer)) return 2;
+    }
+    ok = sd_marker_valid(buffer);
+    memzero(buffer, sizeof(buffer));
+    return ok ? 0 : 1;
+}
+
+// INITIALIZE CARD: zeroes the first 1 MB (sectors 0..2046: seed slots, vault and
+// any file system), then writes and checks the marker, showing each step.
+// Returns false and the sector that failed if the card refuses a write.
+static bool sd_initialize_card(uint32_t *bad_sector) {
+    char label[24];
+    const uint32_t total = cSD_MARKER_SECTOR + 1;
+
+    memzero(buffer, sizeof(buffer));
+    for (uint32_t sector = 0; sector < cSD_MARKER_SECTOR; sector++) {
+        SYS_Tasks();                                    // Keep the MCU tasks running
+        if ((sector % 64) == 0) {
+            psbt_count_label("SECTOR ", sector, total, label);
+            psbt_progress_step(label, NULL, "ERASING THE FIRST 1 MB", sector, total);
+        }
+        if (!sd_write_block(sector, buffer)) {
+            *bad_sector = sector;
+            return false;
+        }
+    }
+    psbt_count_label("SECTOR ", cSD_MARKER_SECTOR, total, label);
+    psbt_progress_step(label, NULL, "WRITING THE MARKER", cSD_MARKER_SECTOR, total);
+    sd_marker_build(buffer);
+    if (!sd_write_block(cSD_MARKER_SECTOR, buffer)) {
+        *bad_sector = cSD_MARKER_SECTOR;
+        return false;
+    }
+    psbt_progress_step(label, NULL, "VERIFYING THE MARKER", cSD_MARKER_SECTOR, total);
+    memzero(buffer, sizeof(buffer));
+    if (!sd_read_block(cSD_MARKER_SECTOR, buffer) || !sd_marker_valid(buffer)) {
+        *bad_sector = cSD_MARKER_SECTOR;
+        memzero(buffer, sizeof(buffer));
+        return false;
+    }
+    memzero(buffer, sizeof(buffer));
+    return true;
+}
+
+// True if the sector in buffer holds a valid seed slot (checksum as written
+// by sd_write_seed())
+static bool sd_slot_in_use(void) {
+    uint8_t sum = 1;
+    for (int i = 0; i < 32; i++) sum += buffer[i];
+    return sum == buffer[cSD_CHECKSUM_ADDR];
+}
+
+// Writes the seed on screen to a sector and shows the result beside its slot (list row).
+// The entropy is XORed with a timer byte: obfuscation, not encryption.
+static void sd_write_seed(uint32_t sector, int row) {
+    uint8_t xor_key = (uint8_t)TMR1;
+    int n = 16 + 16 * size_pointer;
+
+    memzero(buffer, sizeof(buffer));
+    buffer[cSD_XOR_ADDR] = xor_key;
+    for (int i = 0; i < n; i++) {
+        buffer[i] = data_array_256b[i] ^ xor_key;       // Raw entropy without the seed-word checksum
+        buffer[cSD_CHECKSUM_ADDR] += buffer[i];
+    }
+    buffer[cSD_CHECKSUM_ADDR] += 1;                     // Avoid checksum 0 on a clean SD card
+    buffer[cSD_SIZE_ADDR] = (uint8_t)size_pointer;
+    if (sd_write_block(sector, buffer)) {
+        drawtext(70, 20 + 10*row, "WRITE SUCCESS", ST7735_GREEN, ST7735_BLACK, 1);
+    } else {
+        drawtext(70, 20 + 10*row, "WRITE ERROR  ", ST7735_RED, ST7735_BLACK, 1);
+    }
+    memzero(buffer, sizeof(buffer));
 }
 
 // Applies the selected obfuscation to the loaded entropy (same for every input)
@@ -6145,6 +6363,7 @@ int main ( void ){
         uint8_t saved = settings_load();    // Permanent settings; no record = factory defaults
         decoy_enabled = (saved & SETTING_DECOY_ON) != 0;
         seedqr_enabled = (saved & SETTING_SEEDQR_OFF) == 0;
+        sdwrite_enabled = (saved & SETTING_SDWRITE_OFF) == 0;
     }
     R_LCD=1;
     LED_LCD =1;
@@ -6271,7 +6490,6 @@ int SSS_N = 9;
     uint16_t time_now ;
 
     //BYTE checksum_SD =0;
-    BYTE XOR_SD =0;
 
     int lt_idx = 0; // Letter index
 
@@ -6433,57 +6651,36 @@ int SSS_N = 9;
             case MAIN:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        black_screen();
-                        if (main_pointer==cMAIN_create){// Create new seed
-                            transition_to_create_seed();
-                        } else if (main_pointer==cMAIN_LOAD ){// Load seed words
-                            transition_to_input(selinput_pointer);
-                        } else if (main_pointer == cMAIN_BIP85) { // BIP85 child seed
-                            
-                            print_child_config_screen();
-                            estado = CHILD_CONFIG;
-                        } else if (main_pointer==cMAIN_XOR){// XOR
-                            
-                            print_generic_menu(menu_xor, cXOR_n_opt, xor_pointer);
-                            estado = SEL_XOR;
-                        } else if (main_pointer==cMAIN_OBFUS){// Obfuscation
-                            transition_to_obfus();
-                        } else if (main_pointer==cMAIN_MNEM2CARD){// Convert to Cards
-                            transition_to_input(selinput_pointer);
-                        } else if (main_pointer==cMAIN_SSS){// Shamir
-                           
-                            print_generic_menu(menu_sss, cSSS_n_opt, sss_pointer);
-                            estado = SEL_SSS;
-                        } else if (main_pointer==cMAIN_ERASESD){// Erase SD
-                            print_generic_menu(menu_erase, cERASE_n_opt, erase_pointer);
-                            estado = SEL_ERASE_MODE;
-                        } else if (main_pointer==cMAIN_QR){// Resources menu
-                           
-                            print_generic_menu(menu_resource, cRESOURCE_n_opt, resource_pointer);
-                            estado = RESOURCE_MENU;
-                        } else if (main_pointer == cMAIN_SETTINGS) {
-                           
-                            print_settings_screen(settings_pointer);
-                            estado = SEL_SETTINGS;                        
+                        main_pointer = main_menu_ids[main_sel];
+                        if (main_pointer == cMAIN_OPSEC) {
+                            black_screen();
+                            print_generic_menu(menu_opsec, cOPSEC_n_opt, opsec_pointer);
+                            estado = OPSEC_MENU;
+                        } else if (main_pointer == cMAIN_TOOLS) {
+                            black_screen();
+                            print_generic_menu(menu_tools, cTOOLS_n_opt, tools_pointer);
+                            estado = TOOLS_MENU;
+                        } else {
+                            estado = MAIN_RUN;
                         }
                         break;
                     case BACK_BT:
                         break;
                     case UP_BT:                        
-                        if (main_pointer > 0) {
-                            main_pointer--;
+                        if (main_sel > 0) {
+                            main_sel--;
                         } else {
-                            main_pointer = cMAIN_n_opt - 1;     // From the top, wrap to the last entry (SETTINGS)
+                            main_sel = cMAIN_n_opt - 1;     // From the top, wrap to the last entry (SETTINGS)
                         }
-                        main_screen(main_pointer); // <--- Updated
+                        main_screen(main_sel); // <--- Updated
                         break;
                     case DOWN_BT:                        
-                        if (main_pointer < (cMAIN_n_opt-1)) {
-                            main_pointer++;
+                        if (main_sel < (cMAIN_n_opt-1)) {
+                            main_sel++;
                         } else {
-                            main_pointer = 0;                   // From the bottom, wrap to the first entry
+                            main_sel = 0;                   // From the bottom, wrap to the first entry
                         }
-                        main_screen(main_pointer); // <--- Updated
+                        main_screen(main_sel); // <--- Updated
                         break;
 
                     case LEFT_BT:
@@ -6494,13 +6691,101 @@ int SSS_N = 9;
                         break;
                 }
                 break;
+            case MAIN_RUN:                  // The function chosen in the main menu or in OPSEC
+                black_screen();
+                if (main_pointer==cMAIN_create){// Create new seed
+                    transition_to_create_seed();
+                } else if (main_pointer==cMAIN_LOAD ){// Load seed words
+                    transition_to_input(selinput_pointer);
+                } else if (main_pointer == cMAIN_BIP85) { // BIP85 child seed
+                    derive_from_wallet = false;
+                    
+                    print_child_config_screen();
+                    estado = CHILD_CONFIG;
+                } else if (main_pointer==cMAIN_XOR){// XOR
+                    
+                    print_generic_menu(menu_xor, cXOR_n_opt, xor_pointer);
+                    estado = SEL_XOR;
+                } else if (main_pointer==cMAIN_OBFUS){// Obfuscation
+                    transition_to_obfus();
+                } else if (main_pointer==cMAIN_MNEM2CARD){// Convert to Cards
+                    transition_to_input(selinput_pointer);
+                } else if (main_pointer==cMAIN_SSS){// Shamir
+                   
+                    print_generic_menu(menu_sss, cSSS_n_opt, sss_pointer);
+                    estado = SEL_SSS;
+                } else if (main_pointer==cMAIN_ERASESD){// Erase SD
+                    print_generic_menu(menu_erase, cERASE_n_opt, erase_pointer);
+                    estado = SEL_ERASE_MODE;
+                } else if (main_pointer==cMAIN_QR){// Resources menu
+                   
+                    print_generic_menu(menu_resource, cRESOURCE_n_opt, resource_pointer);
+                    estado = RESOURCE_MENU;
+                } else if (main_pointer == cMAIN_SETTINGS) {
+                   
+                    print_settings_screen(settings_pointer);
+                    estado = SEL_SETTINGS;                        
+                }
+                break;
+            case OPSEC_MENU:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        main_pointer = opsec_menu_ids[opsec_pointer];
+                        estado = MAIN_RUN;
+                        break;
+                    case BACK_BT:
+                        main_pointer = cMAIN_OPSEC;
+                        transition_to_main();
+                        break;
+                    case UP_BT:
+                        if (opsec_pointer > 0) opsec_pointer--;
+                        print_generic_menu(menu_opsec, cOPSEC_n_opt, opsec_pointer);
+                        break;
+                    case DOWN_BT:
+                        if (opsec_pointer < (cOPSEC_n_opt - 1)) opsec_pointer++;
+                        print_generic_menu(menu_opsec, cOPSEC_n_opt, opsec_pointer);
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case TOOLS_MENU:
+                switch (pulsed_bt) {
+                    case OK_BT:                     // Placeholders: nothing yet
+                        break;
+                    case BACK_BT:
+                        main_pointer = cMAIN_TOOLS;
+                        transition_to_main();
+                        break;
+                    case UP_BT:
+                        if (tools_pointer > 0) tools_pointer--;
+                        print_generic_menu(menu_tools, cTOOLS_n_opt, tools_pointer);
+                        break;
+                    case DOWN_BT:
+                        if (tools_pointer < (cTOOLS_n_opt - 1)) tools_pointer++;
+                        print_generic_menu(menu_tools, cTOOLS_n_opt, tools_pointer);
+                        break;
+                    default:
+                        break;
+                }
+                break;
             case CHILD_CONFIG:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        transition_to_input(selinput_pointer);
+                        if (derive_from_wallet) {
+                            derive_child_seed();
+                        } else {
+                            transition_to_input(selinput_pointer);
+                        }
                         break;
                     case BACK_BT:
-                        transition_to_main();
+                        if (derive_from_wallet) {
+                            derive_from_wallet = false;
+                            black_screen();
+                            print_bip84_menu();
+                        } else {
+                            transition_to_main();
+                        }
                         break;
                     case UP_BT:
                         if (bip85_cursor == 0) {
@@ -6546,7 +6831,9 @@ int SSS_N = 9;
                         } else if (resource_pointer == cRESOURCE_wordlist) {
                             draw_url_qr("seedmate.net/Printable%20BIP39%20wordlist.pdf");   
                         } else if (resource_pointer == cRESOURCE_BINlist) {
-                            draw_url_qr("https://www.seedmate.net/Binary_BIP39_wordlist.pdf"); 
+                            draw_url_qr("https://www.seedmate.net/Binary_BIP39_wordlist.pdf");
+                        } else if (resource_pointer == cRESOURCE_security) {
+                            draw_url_qr("https://www.seedmate.net/security.html");
                         }
                         print_camera(2, 65, cSAFE);
                         estado = RESOURCE_QR_VIEW;
@@ -6764,51 +7051,25 @@ int SSS_N = 9;
             case SEL_ERASE_MODE:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        if (erase_pointer == 0) { // ERASE SECTOR
+                        if (erase_pointer == cERASE_SECTOR) {
                             transition_to_sd_block(SDblock_pointer);
-                        } else { // WIPE ALL CARD
+                        } else {                            // INITIALIZE CARD or WIPE ALL CARD
                             black_screen();
-                            
-                            // Initialize SD and get capacity before confirming
-                            wipe_total_sectors = 0;
-                            for (int retries = 0; retries < 3; retries++) {
-                                if (!SD_ready) SD_ready = sd_init();
-                                if (SD_ready) wipe_total_sectors = sd_get_sector_count();
-                                if (wipe_total_sectors > 0) break;
-                                SD_ready = false; 
-                                delay_ms(100);    
-                            }
-                            
+                            wipe_total_sectors = sd_card_sectors();
                             if (wipe_total_sectors == 0) {
-                                drawtext(10, 90, "SD CAPACITY ERROR", ST7735_RED, ST7735_BLACK, 1);
-                                print_cursor_grid();
-                                print_ok();
+                                print_blocked("SD CAPACITY ERROR", "CHECK THE SD CARD", "AND TRY AGAIN");
                                 estado = END_MODE;
+                            } else if (erase_pointer == cERASE_INIT) {
+                                if (wipe_total_sectors <= cSD_MARKER_SECTOR) {
+                                    print_blocked("CARD TOO SMALL", "IT NEEDS AT LEAST 1 MB", "");
+                                    estado = END_MODE;
+                                } else {
+                                    print_sd_init_warning();
+                                    estado = CONFIRM_INIT_SD;
+                                }
                             } else {
                                 wipe_mb_total = wipe_total_sectors / 2048;
-                                
-                                char msg_buf[32] = "Card size: ";
-                                char mb_str[10];
-                                size_t len = u16_to_str((unsigned int)wipe_mb_total, mb_str);
-                                int pos = 11; // "Card size: " length
-                                
-                                for(size_t i = 0; i < len; i++) {
-                                    msg_buf[pos++] = mb_str[i];
-                                }
-                                msg_buf[pos++] = ' ';
-                                msg_buf[pos++] = 'M';
-                                msg_buf[pos++] = 'B';
-                                msg_buf[pos++] = 's';
-                                msg_buf[pos] = '\0';
-                                
-                                drawtext(10, 30, msg_buf, ST7735_WHITE, ST7735_BLACK, 1);
-                                drawtext(10, 50, "CONFIRM WIPE?", ST7735_RED, ST7735_BLACK, 1);
-                                
-                                // Render OK and BACK grid manually for universal support
-                                print_cursor_grid();
-                                print_ok();
-                                print_back();
-                                
+                                print_sd_wipe_warning(wipe_mb_total);
                                 estado = CONFIRM_WIPE_SD;
                             }
                         }
@@ -6847,6 +7108,38 @@ int SSS_N = 9;
                         break;
                 }
                 break;
+
+            case CONFIRM_INIT_SD:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        psbt_progress_begin("INITIALIZING CARD");
+                        psbt_progress_step(NULL, NULL, "STARTING", 0, 1);
+                        estado = PROCESS_INIT_SD;
+                        break;
+                    case BACK_BT:
+                        black_screen();
+                        print_generic_menu(menu_erase, cERASE_n_opt, erase_pointer);
+                        estado = SEL_ERASE_MODE;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+
+            case PROCESS_INIT_SD: {
+                uint32_t bad_sector = 0;
+                if (sd_initialize_card(&bad_sector)) {
+                    print_sd_initialized();
+                } else {
+                    char where[20];
+                    strcpy(where, "SECTOR ");
+                    fast_itoa(bad_sector, &where[7]);
+                    print_blocked("INITIALIZE FAILED", "WRITE ERROR AT", where);
+                }
+                pulsed_bt = NONE;                       // Do not skip the result screen
+                estado = END_MODE;
+                break;
+            }
 
             case PROCESS_WIPE_SD: {
                 uint8_t secure_wipe_buf[512]; 
@@ -7168,32 +7461,35 @@ int SSS_N = 9;
             case SEL_SD_BLOCK_WR:
                 switch (pulsed_bt) {
                     case OK_BT: // Write
-                        // Reinitialize the SD card if the first read fails.
-                        if (!sd_read_block(SDblock_pointer +SD_page*cSDBLOCK_n_opt, buffer)) {
-                            sd_init();
+                        {
+                            uint32_t sector = (uint32_t)(SDblock_pointer + SD_page * cSDBLOCK_n_opt);
+                            if (sector == 0 || sector >= cSD_WRITE_LAST_SLOT) {
+                                drawtext(70, 20 + 10*SDblock_pointer, "READ ONLY    ", ST7735_RED, ST7735_BLACK, 1);
+                                break;
+                            }
+                            if (sd_marker_state() != 0) {       // Card swapped or not initialized
+                                drawtext(70, 20 + 10*SDblock_pointer, "CARD NOT INIT", ST7735_RED, ST7735_BLACK, 1);
+                                break;
+                            }
+                            // Reinitialize the SD card if the first read fails
+                            if (!sd_read_block(sector, buffer)) {
+                                sd_init();
+                                if (!sd_read_block(sector, buffer)) {
+                                    drawtext(70, 20 + 10*SDblock_pointer, "READ ERROR   ", ST7735_RED, ST7735_BLACK, 1);
+                                    break;
+                                }
+                            }
+                            if (sd_slot_in_use()) {
+                                memzero(buffer, sizeof(buffer));
+                                print_slot_in_use((int)sector + 1);
+                                estado = CONFIRM_SD_OVERWRITE;
+                                break;
+                            }
+                            sd_write_seed(sector, SDblock_pointer);
                         }
-                        time_now = TMR1;              // Read the 16-bit timer
-                        XOR_SD = (uint8_t)time_now;   // Low byte
-                        for (int i = 0; i < 512; i++) buffer[i] = 0; // Clear the sector buffer
-                        buffer[cSD_XOR_ADDR] = XOR_SD;
-                        for (int i = 0; i < 16 +16*size_pointer; i++) {
-                            buffer[i]= data_array_256b[i] ^ XOR_SD; // Store raw entropy without seed-word checksum
-                            buffer[cSD_CHECKSUM_ADDR]+=buffer[i];   // Accumulate checksum
-                        }
-                        buffer[cSD_CHECKSUM_ADDR]+=1; // Avoid checksum 0 on a clean SD card
-
-                        buffer[cSD_SIZE_ADDR]=size_pointer; // Store size metadata next
-                        if (sd_write_block(SDblock_pointer+SD_page*cSDBLOCK_n_opt, buffer)) { // Write the block
-                            drawtext(70, 20 + 10*SDblock_pointer, "WRITE SUCCESS", ST7735_GREEN, ST7735_BLACK, 1);
-                        } else {
-                            drawtext(70, 20 + 10*SDblock_pointer, "WRITE ERROR ", ST7735_RED, ST7735_BLACK, 1);
-                        }
-
-                        estado = SEL_SD_BLOCK_WR;
                         break;
-
-                     case BACK_BT:
-                        redraw_show_seed_with_offset();
+                    case BACK_BT:
+                        print_backup_menu();
                         break;
                     case UP_BT:
                         if ((SDblock_pointer == 0) & (SD_page >0)){// Page down and point to slot 8
@@ -7207,14 +7503,15 @@ int SSS_N = 9;
                         }
                         break;
                     case DOWN_BT:
-                        if (SDblock_pointer == (cSDBLOCK_n_opt-1)) {
+                        if (SDblock_pointer < (cSDBLOCK_n_opt-1)) {
+                            SDblock_pointer++;
+                            sel_sd_block_screen_wr(SDblock_pointer);
+                        } else if (SD_page < cSD_WRITE_LAST_PAGE) {
                             black_screen();
                             SDblock_pointer=0;
                             SD_page++;
-                        }else if(SDblock_pointer < (cSDBLOCK_n_opt-1)){
-                            SDblock_pointer++;
+                            sel_sd_block_screen_wr(SDblock_pointer);
                         }
-                        sel_sd_block_screen_wr(SDblock_pointer);
                         break;
                     case LEFT_BT:
                         if (SD_page > 0) {
@@ -7224,13 +7521,25 @@ int SSS_N = 9;
                         }
                         break;
                     case RIGHT_BT:
-                        black_screen();
-                        SD_page++;
-                        sel_sd_block_screen_wr(SDblock_pointer);
+                        if (SD_page < cSD_WRITE_LAST_PAGE) {
+                            black_screen();
+                            SD_page++;
+                            sel_sd_block_screen_wr(SDblock_pointer);
+                        }
                         break;
 
                     default:
                         break;
+                }
+                break;
+            case CONFIRM_SD_OVERWRITE:
+                if (pulsed_bt == OK_BT || pulsed_bt == BACK_BT) {
+                    black_screen();
+                    sel_sd_block_screen_wr(SDblock_pointer);
+                    estado = SEL_SD_BLOCK_WR;
+                    if (pulsed_bt == OK_BT) {
+                        sd_write_seed((uint32_t)(SDblock_pointer + SD_page * cSDBLOCK_n_opt), SDblock_pointer);
+                    }
                 }
                 break;
             case SEL_SD_BLOCK_XOR:
@@ -8160,9 +8469,7 @@ int SSS_N = 9;
                         }
                         break;
                     case LEFT_BT:
-                        black_screen();
-                        sel_sd_block_screen_wr(SDblock_pointer);
-                        estado=SEL_SD_BLOCK_WR;
+                        print_backup_menu();
                         break;
                     case RIGHT_BT: // Compact QR
                         if (!load_wallet_keys()) {          // Cancelled: back to the words
@@ -8196,16 +8503,6 @@ int SSS_N = 9;
                                 black_screen();
                                 print_bip84_menu();
                             }
-                        } else if (bip84_option() == cBIP84_SEEDQR) {
-                            if (!seedqr_enabled) {
-                                black_screen();
-                                drawtext(1, 20, "SEEDQR DISABLED", ST7735_RED, ST7735_BLACK, 1);
-                                grid_OK_only();
-                                break;
-                            }
-
-                            print_seedqr_warning("SHOW");     // Every time, before the QR
-                            estado = WARNING_SEEDQR_VIEW;
                         } else if (bip84_option() == cBIP84_SIGN) {
                             sign_menu_descriptor = false;
                             black_screen();
@@ -8241,6 +8538,13 @@ int SSS_N = 9;
                         } else if (bip84_option() == cBIP84_ADDRESSES) {
                             black_screen();
                             print_address_menu();
+                        } else if (bip84_option() == cBIP84_DERIVE) {
+                            derive_from_wallet = true;
+                            black_screen();
+                            print_child_config_screen();
+                            estado = CHILD_CONFIG;
+                        } else if (bip84_option() == cBIP84_VAULT) {
+                            // Placeholder: nothing yet
                         } else {
                             print_bip84_info_screen();
                         }
@@ -8591,8 +8895,16 @@ int SSS_N = 9;
                     case OK_BT:
                         if (settings_pointer == cSETTINGS_SEEDQR) {
                             if (!seedqr_enabled) {
-                                print_seedqr_warning("ENABLE");     // OFF -> ON: warning first
+                                print_seedqr_warning("ON");         // OFF -> ON: warning first
                                 estado = WARNING_SEEDQR;
+                            } else {
+                                ask_setting_change();               // ON -> OFF
+                            }
+                        }
+                        else if (settings_pointer == cSETTINGS_SDWRITE) {
+                            if (!sdwrite_enabled) {
+                                print_sd_warning("ON");             // OFF -> ON: warning first
+                                estado = WARNING_SD_SETTING;
                             } else {
                                 ask_setting_change();               // ON -> OFF
                             }
@@ -8639,16 +8951,145 @@ int SSS_N = 9;
             if (pulsed_bt == OK_BT) {
                 show_seedqr();
             } else if (pulsed_bt == BACK_BT) {
-                black_screen();
-                print_bip84_menu();
+                print_backup_menu();
             }
             break;
+            case WARNING_SD_SETTING:
+            if (pulsed_bt == OK_BT) {
+                ask_setting_change();
+            } else if (pulsed_bt == BACK_BT) {
+                black_screen();
+                print_settings_screen(settings_pointer);
+                estado = SEL_SETTINGS;
+            }
+            break;
+            case DERIVE_RESULT:
+                if (pulsed_bt == OK_BT) {
+                    draw_child_words();
+                    estado = DERIVE_WORDS;
+                } else if (pulsed_bt == BACK_BT) {
+                    memzero(derive_child, sizeof(derive_child));
+                    derive_from_wallet = false;
+                    black_screen();
+                    print_bip84_menu();
+                }
+                break;
+            case DERIVE_WORDS:
+                if (pulsed_bt == OK_BT) {           // LOAD: the child becomes the seed on screen
+                    memset(data_array_256b, 0, 36);
+                    memcpy(data_array_256b, derive_child, 16 + bip85_size * 16);
+                    memzero(derive_child, sizeof(derive_child));
+                    size_pointer = bip85_size;
+                    memzero(bip84_passphrase, sizeof(bip84_passphrase));    // The child has none
+                    bip84_account_cached = false;
+                    ms_account_cached = false;
+                    derive_from_wallet = false;
+                    main_pointer = cMAIN_BIP85;
+                    redraw_show_seed_with_offset();
+                } else if (pulsed_bt == BACK_BT) {
+                    memzero(derive_child, sizeof(derive_child));
+                    derive_from_wallet = false;
+                    black_screen();
+                    print_bip84_menu();
+                }
+                break;
+            case BACKUP_MENU:
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        if (backup_pointer == cBACKUP_SD) {
+                            if (!sdwrite_enabled) {
+                                print_blocked("SD WRITE IS OFF", "TURN IT ON IN", "SETTINGS > SD WRITE");
+                                estado = BACKUP_BLOCKED;
+                            } else {
+                                print_sd_warning("NEXT");
+                                estado = WARNING_SD;
+                            }
+                        } else {
+                            backup_compact = (backup_pointer == cBACKUP_COMPACT);
+                            if (!seedqr_enabled) {
+                                print_blocked("SEEDQR IS OFF", "TURN IT ON IN", "SETTINGS > SEEDQR");
+                                estado = BACKUP_BLOCKED;
+                            } else {
+                                print_seedqr_warning("SHOW");       // Every time, before the QR
+                                estado = WARNING_SEEDQR_VIEW;
+                            }
+                        }
+                        break;
+                    case BACK_BT:
+                        redraw_show_seed_with_offset();
+                        break;
+                    case UP_BT:
+                        if (backup_pointer > 0) backup_pointer--;
+                        print_generic_menu(menu_backup, cBACKUP_n_opt, backup_pointer);
+                        break;
+                    case DOWN_BT:
+                        if (backup_pointer < (cBACKUP_n_opt - 1)) backup_pointer++;
+                        print_generic_menu(menu_backup, cBACKUP_n_opt, backup_pointer);
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case BACKUP_BLOCKED:
+                if (pulsed_bt == OK_BT || pulsed_bt == BACK_BT) {
+                    print_backup_menu();
+                }
+                break;
+            case WARNING_SD:
+                if (pulsed_bt == OK_BT) {
+                    int marker = sd_marker_state();
+                    if (marker != 0) {
+                        print_blocked(marker == 1 ? "CARD NOT INITIALIZED" : "SD READ ERROR",
+                                      marker == 1 ? "USE SD CARD >" : "CHECK THE SD CARD",
+                                      marker == 1 ? "INITIALIZE CARD" : "AND TRY AGAIN");
+                        estado = BACKUP_BLOCKED;
+                        break;
+                    }
+                    if (SD_page > cSD_WRITE_LAST_PAGE) SD_page = 0;
+                    black_screen();
+                    sel_sd_block_screen_wr(SDblock_pointer);
+                    estado = SEL_SD_BLOCK_WR;
+                } else if (pulsed_bt == BACK_BT) {
+                    print_backup_menu();
+                }
+                break;
+            case VIEW_SEEDQR:                   // Full screen QR: OK zooms, arrows move between quadrants
+                switch (pulsed_bt) {
+                    case OK_BT:
+                        qr_quad = (qr_quad < 0) ? 0 : -1;
+                        redraw_seed_qr();
+                        break;
+                    case BACK_BT:
+                        if (qr_quad >= 0) {
+                            qr_quad = -1;
+                            redraw_seed_qr();
+                        } else {
+                            print_backup_menu();
+                        }
+                        break;
+                    case LEFT_BT:
+                    case RIGHT_BT:
+                    case UP_BT:
+                    case DOWN_BT:
+                        if (qr_quad >= 0) {
+                            if (pulsed_bt == LEFT_BT) qr_quad &= ~1;
+                            else if (pulsed_bt == RIGHT_BT) qr_quad |= 1;
+                            else if (pulsed_bt == UP_BT) qr_quad &= ~2;
+                            else qr_quad |= 2;
+                            redraw_seed_qr();
+                        }
+                        break;
+                    default:
+                        break;
+                }
+                break;
             case CONFIRM_SETTING:
             if (pulsed_bt == OK_BT) {
                 black_screen();
                 if (settings_save(setting_pending)) {
                     decoy_enabled = (setting_pending & SETTING_DECOY_ON) != 0;
                     seedqr_enabled = (setting_pending & SETTING_SEEDQR_OFF) == 0;
+                    sdwrite_enabled = (setting_pending & SETTING_SDWRITE_OFF) == 0;
                     drawtext(5, 50, "SETTING SAVED", ST7735_GREEN, ST7735_BLACK, 1);
                     delay_ms(800);
                     black_screen();
