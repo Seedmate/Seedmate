@@ -89,6 +89,9 @@
 #include "snake.h"
 #include "settings.h"
 #include "EFF_short.h"
+#include "bip85.h"
+#include "vault.h"
+#include "crypto/fault_handler.h"
 
 
 
@@ -473,56 +476,6 @@ static void get_mnemonic_string(char *out_str) {
     }
 }
 
-static void add_256_mod_n(uint8_t *out, const uint8_t *a, const uint8_t *b) {
-    // SECP256K1 curve order (n)
-    const uint8_t n[32] = {
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
-        0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B,
-        0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x41
-    };
-    uint16_t carry = 0;
-    uint8_t res[32];
-    
-    // 256-bit addition
-    for (int i = 31; i >= 0; i--) {
-        carry += a[i] + b[i];
-        res[i] = carry & 0xFF;
-        carry >>= 8;
-    }
-    
-    // Check if result >= n
-    bool over = false;
-    if (carry > 0) {
-        over = true;
-    } else {
-        for (int i = 0; i < 32; i++) {
-            if (res[i] > n[i]) { over = true; break; }
-            if (res[i] < n[i]) { break; }
-        }
-    }
-    
-    // Subtract n if overflowed (Strict portable wrapping)
-    if (over) {
-        int borrow = 0;
-        for (int i = 31; i >= 0; i--) {
-            int diff = (int)res[i] - (int)n[i] - borrow;
-            if (diff < 0) {
-                diff += 256;
-                borrow = 1;
-            } else {
-                borrow = 0;
-            }
-            out[i] = (uint8_t)diff;
-        }
-    } else {
-        for (int i = 0; i < 32; i++) {
-            out[i] = res[i];
-        }
-    }
-}
-
-
 // Footer progress for key computations, defined with the BIP84 code below
 static void key_progress_phase(const char *label, uint8_t total_steps);
 static void key_progress_step(void);
@@ -532,48 +485,18 @@ static void key_progress_step(void);
 // entropy (16 or 32 bytes) goes to out. Five hardened steps, each advancing
 // the bar that key_progress_phase() started.
 static void bip85_derive_entropy(const uint8_t *master_k, const uint8_t *master_c, uint8_t *out) {
-    uint8_t I[64];
-    uint8_t k[32];
-    uint8_t c[32];
-
-    memcpy(k, master_k, 32);
-    memcpy(c, master_c, 32);
-
-    uint32_t path[5] = {
-        0x80000000 | 83696968,
-        0x80000000 | 39,
-        0x80000000 | 0,
-        0x80000000 | ((bip85_size == cSIZE_12) ? 12 : 24),
-        0x80000000 | bip85_index
+    const uint32_t path[5] = {
+        BIP85_HARDENED | 83696968u,
+        BIP85_HARDENED | 39u,
+        BIP85_HARDENED | 0u,
+        BIP85_HARDENED | ((bip85_size == cSIZE_12) ? 12u : 24u),
+        BIP85_HARDENED | bip85_index
     };
+    uint8_t entropy[64];
 
-    for (int i = 0; i < 5; i++) {
-        uint8_t data[37];
-        data[0] = 0x00;
-        memcpy(data + 1, k, 32);
-        data[33] = (path[i] >> 24) & 0xFF;
-        data[34] = (path[i] >> 16) & 0xFF;
-        data[35] = (path[i] >> 8) & 0xFF;
-        data[36] = path[i] & 0xFF;
-
-        HmacSha512(c, 32, data, 37, I);
-
-        // Proper BIP32 child key addition mod n
-        add_256_mod_n(k, I, k); // k_i = (I_L + k_par) % n
-        memcpy(c, I + 32, 32);  // c_i = I_R
-        memzero(data, sizeof(data));
-        key_progress_step();
-    }
-
-    // BIP85 explicitly requires HMAC-SHA512 step here using "bip-entropy-from-k"
-    uint8_t bip85_hmac_out[64];
-    HmacSha512((uint8_t *)"bip-entropy-from-k", 18, k, 32, bip85_hmac_out);
-    memcpy(out, bip85_hmac_out, (bip85_size == cSIZE_12) ? 16 : 32);
-
-    memzero(I, sizeof(I));
-    memzero(k, sizeof(k));
-    memzero(c, sizeof(c));
-    memzero(bip85_hmac_out, sizeof(bip85_hmac_out));
+    bip85_entropy(master_k, master_c, path, 5, entropy, key_progress_step);
+    memcpy(out, entropy, (bip85_size == cSIZE_12) ? 16 : 32);
+    memzero(entropy, sizeof(entropy));
 }
 
 // BIP85 child seed of the mnemonic on screen, without passphrase (BIP85 CHILD
@@ -1819,6 +1742,10 @@ static void derive_bip84_account(void) {
 // Identifies the seed the cached keys belong to (see bip84_seed_tag_now)
 static uint8_t bip84_seed_tag[8];
 
+// Vault key (BIP85 HEX, see vault.h) of the seed and passphrase on screen,
+// derived with the wallet keys and valid while bip84_account_cached is set
+static uint8_t vault_key[32];
+
 // Short SHA256 tag of what the keys derive from: the entropy, its size and the
 // passphrase. Lets the cache notice that the seed on screen changed (another
 // Shamir share, a BIP85 child...) without keeping a copy of the secret.
@@ -1848,8 +1775,8 @@ static bool bip84_derive_keys(bool cancellable) {
         return false;
     }
 
-    // Three public keys here, two more for the multisig account
-    key_progress_phase("2/2 PUBLIC KEYS", bip84_multisig_mode ? 5 : 3);
+    // Three public keys and the vault key here, two more for the multisig account
+    key_progress_phase("2/2 PUBLIC KEYS", bip84_multisig_mode ? 6 : 4);
 
     // Store Master Fingerprint
     bip84_master_fingerprint = hdnode_fingerprint(&root);
@@ -1867,6 +1794,10 @@ static bool bip84_derive_keys(bool cancellable) {
 
     // A new passphrase while in multisig mode: refresh that account too
     if (bip84_multisig_mode) derive_multisig_account(&root);
+
+    // The vault key comes from the same root (four HMAC steps, no curve math)
+    vault_derive_key(root.private_key, root.chain_code, vault_key);
+    key_progress_step();
     memzero(&root, sizeof(root));
 
     // Mark as successfully cached, for this seed and passphrase
@@ -3657,6 +3588,18 @@ static __attribute__((noinline)) bool edit_bip39_passphrase(void) {
     return saved;
 }
 
+// trezor-crypto calls this when a check that cannot fail does (consteq loop
+// completion in the AES-GCM tag check): a fault injection or broken hardware.
+// Nothing is trusted any more, so the device stops here and says so.
+void tc_fault_handler(const char *msg) {
+    (void)msg;
+    black_screen();
+    draw_title("FAULT DETECTED", ST7735_RED);
+    drawtext(5, 30, "A CRYPTO CHECK FAILED", ST7735_RED, ST7735_BLACK, 1);
+    drawtext(5, 45, "TURN THE DEVICE OFF", ST7735_WHITE, ST7735_BLACK, 1);
+    while (1) { SYS_Tasks(); }
+}
+
 void transition_to_main(void) {
     black_screen();
     memzero(bip84_passphrase, sizeof(bip84_passphrase)); // The seed is unloaded
@@ -3675,6 +3618,7 @@ void transition_to_main(void) {
     memzero(&ms_account_node, sizeof(ms_account_node));
     memzero(&ms_receive_node_cache, sizeof(ms_receive_node_cache));
     memzero(&ms_change_node_cache, sizeof(ms_change_node_cache));
+    memzero(vault_key, sizeof(vault_key));
     if (main_pointer == cMAIN_SSS || main_pointer == cMAIN_XOR ||
         main_pointer == cMAIN_OBFUS || main_pointer == cMAIN_MNEM2CARD) {
         print_generic_menu(menu_opsec, cOPSEC_n_opt, opsec_pointer);    // Back to OPSEC
@@ -6766,8 +6710,29 @@ static int sd_marker_state(void) {
     return ok ? 0 : 1;
 }
 
+// New vault_id for INITIALIZE CARD: SHA256 of the key press jitter pool (the
+// same one the Shamir coefficients use), both timers and the text "VAULT".
+// It is written in clear on the card, so the pool is cleared afterwards, as
+// expand_sss_coefficients() does: no later Shamir split reuses what it hashed.
+static void vault_new_id(uint8_t id[VAULT_ID_LEN]) {
+    SHA256_CTX ctx;
+    uint8_t hash[32];
+    uint32_t t[2] = {TMR1, _CP0_GET_COUNT()};
+
+    sha256_init(&ctx);
+    sha256_update(&ctx, sss_entropy_pool, 32);
+    sha256_update(&ctx, (const BYTE *)t, sizeof(t));
+    sha256_update(&ctx, (const BYTE *)"VAULT", 5);
+    sha256_final(&ctx, hash);
+    memcpy(id, hash, VAULT_ID_LEN);
+    memzero(hash, sizeof(hash));
+    memzero(&ctx, sizeof(ctx));
+    memzero(sss_entropy_pool, sizeof(sss_entropy_pool));
+}
+
 // INITIALIZE CARD: zeroes the first 1 MB (sectors 0..2046: seed slots, vault and
-// any file system), then writes and checks the marker, showing each step.
+// any file system), writes and checks the empty vault header (new vault_id)
+// and then the marker, showing each step.
 // Returns false and the sector that failed if the card refuses a write.
 static bool sd_initialize_card(uint32_t *bad_sector) {
     char label[24];
@@ -6784,6 +6749,19 @@ static bool sd_initialize_card(uint32_t *bad_sector) {
             *bad_sector = sector;
             return false;
         }
+    }
+    psbt_count_label("SECTOR ", VAULT_HEADER_SECTOR, total, label);
+    psbt_progress_step(label, NULL, "WRITING THE VAULT HEADER", cSD_MARKER_SECTOR, total);
+    uint8_t vault_id[VAULT_ID_LEN];
+    vault_new_id(vault_id);
+    vault_header_init(buffer, vault_id);
+    bool ok = sd_write_block(VAULT_HEADER_SECTOR, buffer);
+    memzero(buffer, sizeof(buffer));
+    if (!ok || !sd_read_block(VAULT_HEADER_SECTOR, buffer) || !vault_header_valid(buffer) ||
+        memcmp(&buffer[VAULT_HDR_ID], vault_id, VAULT_ID_LEN) != 0) {
+        *bad_sector = VAULT_HEADER_SECTOR;
+        memzero(buffer, sizeof(buffer));
+        return false;
     }
     psbt_count_label("SECTOR ", cSD_MARKER_SECTOR, total, label);
     psbt_progress_step(label, NULL, "WRITING THE MARKER", cSD_MARKER_SECTOR, total);
@@ -7921,6 +7899,12 @@ int SSS_N = 9;
                 switch (pulsed_bt) {
                     case OK_BT:
                         if (main_pointer==cMAIN_ERASESD) { // Erase
+                            // Only seed slots (sectors 0..199): the vault and the card
+                            // marker beyond them are never touched from here
+                            if (SDblock_pointer + SD_page * cSDBLOCK_n_opt >= cSD_WRITE_LAST_SLOT) {
+                                drawtext(70, 20 + 10*SDblock_pointer, "NOT A SEED   ", ST7735_RED, ST7735_BLACK, 1);
+                                break;
+                            }
                             for (int i = 0; i < 512; i++) buffer[i] = 0; // Clear the sector buffer
                             if (sd_write_block(SDblock_pointer+SD_page*cSDBLOCK_n_opt, buffer)) { // Write the block
                                 drawtext(70, 20 + 10*SDblock_pointer, "ERASE SUCCESS", ST7735_GREEN, ST7735_BLACK, 1);

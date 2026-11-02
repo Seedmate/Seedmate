@@ -8,6 +8,7 @@
 # 3. Archivos esenciales de la raíz
 !.gitignore
 !README.md
+!*.md
 !LICENSE
 !ThirdPartyNotices.txt
 

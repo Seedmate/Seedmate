@@ -10,9 +10,9 @@ Only the files named below are compiled. `SW/src/crypto/` may contain more files
 
 - **Directory:** `SW/src/crypto/`
 - **Upstream:** https://github.com/trezor/trezor-firmware/tree/main/crypto
-- **Files built:** `bignum.c/.h`, `bip32.c/.h`, `ecdsa.c/.h`, `secp256k1.c/.h`, `options.h`, `memzero.h`, `script.h`, `ripemd160.c/.h`, `segwit_addr.c/.h`
-- **Used for:** 256-bit big number arithmetic, secp256k1 curve operations, BIP32 key derivation, RIPEMD-160 (key fingerprints, addresses), bech32/bech32m addresses
-- **Local changes:** `ecdsa.c` is trimmed to the public-key operations; `bip32.c` is trimmed and uses the project's HMAC-SHA512 (`SW/src/kdf.c`). The ECDSA signing in `SW/src/psbt_sign.c` follows the steps of trezor-crypto's `ecdsa_sign_digest()` on top of these files.
+- **Files built:** `bignum.c/.h`, `bip32.c/.h`, `ecdsa.c/.h`, `secp256k1.c/.h`, `options.h`, `memzero.h`, `script.h`, `ripemd160.c/.h`, `segwit_addr.c/.h`, `consteq.c/.h`, `fault_handler.h`, and the AES files in `aes/` (section 1a)
+- **Used for:** 256-bit big number arithmetic, secp256k1 curve operations, BIP32 key derivation, RIPEMD-160 (key fingerprints, addresses), bech32/bech32m addresses, constant-time comparison of the AES-GCM tag (`consteq`)
+- **Local changes:** `ecdsa.c` is trimmed to the public-key operations; `bip32.c` is trimmed and uses the project's HMAC-SHA512 (`SW/src/kdf.c`). The ECDSA signing in `SW/src/psbt_sign.c` follows the steps of trezor-crypto's `ecdsa_sign_digest()` on top of these files. `tc_fault_handler()` (declared in `fault_handler.h`) is provided by `SW/src/main.c`, which stops the device; the upstream no-op `fault_handler_noop.c` is not built.
 - **License:** MIT (`SW/src/crypto/LICENSE`)
 - **Copyright:** (c) 2013-2016 Tomas Dzetkulic, (c) 2013-2016 Pavol Rusnak, (c) 2015-2016 Jochen Hoenicke, (c) 2016 Alex Beregszaszi, and the trezor-crypto contributors
 
@@ -20,6 +20,8 @@ Exceptions inside this directory:
 
 - `ripemd160.c` - adapted by Pieter Wuille (2012); **public domain** (CC0-style dedication in the file header).
 - `segwit_addr.c` - Copyright (c) 2017, 2021 Pieter Wuille; **MIT**.
+- `consteq.c/.h`, `fault_handler.h` - Copyright (c) Trezor Company s.r.o.; **MIT** (same terms as below).
+- `aes/` - Brian Gladman's AES and GCM code; its own license, see section 1a.
 
 ```
 The MIT License (MIT)
@@ -44,6 +46,33 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+---
+
+## 1a. AES and GCM (Brian Gladman, as distributed in trezor-crypto)
+
+- **Directory:** `SW/src/crypto/aes/`
+- **Upstream:** https://github.com/BrianGladman/AES (copied from trezor-crypto's `crypto/aes/`)
+- **Files built:** `aescrypt.c`, `aeskey.c`, `aestab.c`, `aesgcm.c`, `gf128mul.c`, `aes.h`, `aesopt.h`, `aestab.h`, `aesgcm.h`, `gf128mul.h`, `gf_mul_lo.h`, `mode_hdr.h`, `brg_endian.h`
+- **Used for:** AES-256-GCM encryption of the vault records on the SD card (`SW/src/vault.c`)
+- **Local changes:** `aes.h` enables only the 256-bit key schedule (no tables in any option); `gcm_init_and_key()` in `aesgcm.c` calls `aes_encrypt_key256()` when variable key sizes are disabled; `aestab.c` undefines the project's `v2` macro before its own `v2()`. Each change is marked "Seedmate" in the source.
+- **License:** Brian Gladman's BSD-style license (in each file header)
+- **Copyright:** (c) 1998-2014, Brian Gladman, Worcester, UK. All rights reserved.
+
+```
+The redistribution and use of this software (with or without changes)
+is allowed without the payment of fees or royalties provided that:
+
+  source code distributions include the above copyright notice, this
+  list of conditions and the following disclaimer;
+
+  binary distributions include the above copyright notice, this list
+  of conditions and the following disclaimer in their documentation.
+
+This software is provided 'as is' with no explicit or implied warranties
+in respect of its operation, including, but not limited to, correctness
+and fitness for purpose.
 ```
 
 ---
@@ -180,7 +209,8 @@ These parts were written for this project from public specifications; they are l
 - Uniform Resources and fountain codes (Blockchain Commons BCR-2020-005), including the Xoshiro256** PRNG (D. Blackman, S. Vigna, public domain algorithm) and the alias-method sampler: `fountain.c`, `prng.c`, `sampler.c`, `bytewords.c`, `ur_encode.c`
 - UR types `crypto-psbt` (BCR-2020-006), `crypto-hdkey` (BCR-2020-007), `crypto-output` (BCR-2020-010) and `crypto-account` (BCR-2020-015): `ur_encode.c`
 - PSBT (BIP174), SegWit v0 signature hash (BIP143), low-S signatures (BIP146), RFC6979 deterministic nonces with low-R grinding as in Bitcoin Core / libsecp256k1: `psbt.c`, `psbt_sign.c`
-- BIP32, BIP39, BIP44, BIP48, BIP84, BIP85; HMAC (RFC 2104) and PBKDF2 (RFC 8018): `main.c`, `kdf.c`
+- BIP32, BIP39, BIP44, BIP48, BIP84, BIP85; HMAC (RFC 2104) and PBKDF2 (RFC 8018): `main.c`, `kdf.c`, `bip85.c`
+- Vault record format (`SW/docs/vault.md`): AES-256-GCM (NIST SP 800-38D, code from section 1a) with a BIP85 HEX key, CRC32: `vault.c`
 - GM861S barcode reader serial protocol (GM861S User Manual V1.2.4): `main.c`
 
 ---
@@ -188,4 +218,5 @@ These parts were written for this project from public specifications; they are l
 ## 10. Test data (not part of the firmware)
 
 - `SW/test/animated_QR_scan/captures_pure.txt` - animated QR frames captured from Sparrow Wallet (https://sparrowwallet.com), used to check that the UR encoder reproduces them byte for byte.
-- The host tests use published test vectors: BIP84 ("abandon ... about"), BIP143, BIP39 (Trezor vectors), RFC 4231.
+- The host tests use published test vectors: BIP84 ("abandon ... about"), BIP143, BIP39 (Trezor vectors), RFC 4231, BIP85 (master key of the BIP85 specification).
+- `SW/test/vault/gen_vault.py` uses the Python `cryptography` package (Apache 2.0 / BSD) as an independent AES-GCM reference to generate `vault_vectors.h`; it is a test tool only and is not distributed with the firmware. `SW/test/vault/test_vault.c` links the upstream `fault_handler_noop.c` (trezor-crypto, MIT) for the host build only.

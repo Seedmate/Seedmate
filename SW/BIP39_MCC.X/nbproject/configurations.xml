@@ -137,6 +137,12 @@
         <itemPath>../src/crypto/secp256k1.c</itemPath>
         <itemPath>../src/crypto/segwit_addr.c</itemPath>
         <itemPath>../src/crypto/ecdsa.c</itemPath>
+        <itemPath>../src/crypto/consteq.c</itemPath>
+        <itemPath>../src/crypto/aes/aescrypt.c</itemPath>
+        <itemPath>../src/crypto/aes/aeskey.c</itemPath>
+        <itemPath>../src/crypto/aes/aestab.c</itemPath>
+        <itemPath>../src/crypto/aes/aesgcm.c</itemPath>
+        <itemPath>../src/crypto/aes/gf128mul.c</itemPath>
       </logicalFolder>
       <itemPath>../src/TFT.c</itemPath>
       <itemPath>../src/SPI.c</itemPath>
@@ -161,6 +167,8 @@
       <itemPath>../src/prng.c</itemPath>
       <itemPath>../src/sampler.c</itemPath>
       <itemPath>../src/fountain.c</itemPath>
+      <itemPath>../src/bip85.c</itemPath>
+      <itemPath>../src/vault.c</itemPath>
     </logicalFolder>
   </logicalFolder>
   <sourceRootList>
@@ -226,7 +234,7 @@
         <property key="exclude-floating-point" value="false"/>
         <property key="expand-pragma-config" value="false"/>
         <property key="extra-include-directories"
-                  value="../src;../src/config/v2;..\src\SSS"/>
+                  value="../src;../src/config/v2;..\src\SSS;../src/crypto"/>
         <property key="generate-16-bit-code" value="false"/>
         <property key="generate-micro-compressed-code" value="false"/>
         <property key="isolate-each-function" value="true"/>
