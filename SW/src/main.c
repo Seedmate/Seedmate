@@ -282,6 +282,7 @@ static desc_wallet_t ms_wallet;
 static bool ms_wallet_loaded = false;
 static uint8_t ms_wallet_seed_tag[8];
 static uint32_t ms_wallet_account;
+static uint8_t ms_wallet_loads;         // Goes up with every wallet loaded (FROM VAULT leaves its list)
 
 // Menu position -> cBIP84_* option for each mode
 static const uint8_t bip84_single_options[cBIP84_n_opt] = {
@@ -2223,11 +2224,17 @@ static void print_bip84_menu(void)
     estado = SHOW_SEED_MENU;
 }
 
+// IMPORT DESCRIPTOR has a third source, FROM VAULT
+static int sign_menu_count(void) {
+    return sign_menu_descriptor ? cIMPORT_n_opt : cSIGN_n_opt;
+}
+
 static void print_sign_menu(void)
 {
+    if (sign_menu_pointer >= sign_menu_count()) sign_menu_pointer = 0;
     print_titled_menu(sign_menu_descriptor ? "IMPORT DESCRIPTOR FROM" :
                       psbt_inspect_only ? "REVIEW PSBT FROM" : "SIGN PSBT FROM",
-                      menu_sign, cSIGN_n_opt, sign_menu_pointer);
+                      sign_menu_descriptor ? menu_import : menu_sign, sign_menu_count(), sign_menu_pointer);
     estado = SIGN_MENU;
 }
 
@@ -4871,7 +4878,7 @@ static const char *const desc_sd_exts[] = {"TXT"};
 // Shows a parsed wallet before loading it: policy, checksum, cosigner
 // fingerprints (ours in green) and its first receive address, to compare
 // with the wallet software. Returns true on OK, false on BACK.
-static bool desc_review(const desc_wallet_t *w, int mine) {
+static bool desc_review(const desc_wallet_t *w, int mine, const char *ok_label) {
     char line[32];
     char num[12];
     char addr[76];
@@ -4912,7 +4919,7 @@ static bool desc_review(const desc_wallet_t *w, int mine) {
     }
     drawtext(5, 69, "RECEIVE 0, COMPARE:", ST7735_CYAN, ST7735_BLACK, 1);
     draw_bip84_wrapped_text(addr, 5, 79, PSBT_VIEW_LINE_CHARS, 3);   // Ends at y 104
-    grid_confirm("LOAD");
+    grid_confirm(ok_label);
 
     int key;
     do {
@@ -4968,9 +4975,9 @@ static __attribute__((noinline)) void import_descriptor_from_sd(void) {
 }
 
 // Checks that this seed's multisig key at the current account is one of the
-// cosigners of a parsed wallet, shows it and loads it on OK. Any refusal is
-// explained on screen.
-static void descriptor_check_and_load(const desc_wallet_t *w) {
+// cosigners of a parsed wallet and shows it for review: true if OK (labelled
+// 'ok_label') was pressed. Any refusal is explained on screen.
+static bool descriptor_check(const desc_wallet_t *w, const char *ok_label) {
     char text[24];
     char num[12];
 
@@ -4997,12 +5004,17 @@ static void descriptor_check_and_load(const desc_wallet_t *w) {
             strcpy(text, (k != NULL) ? "MY KEY DOES NOT MATCH" : "MY KEY IS NOT IN IT");
         }
         psbt_sd_message("DESCRIPTOR REFUSED", text);
-        return;
+        return false;
     }
+    return desc_review(w, mine, ok_label);
+}
 
-    if (desc_review(w, mine)) {
+// The same check and review, then OK makes it the active multisig wallet
+static void descriptor_check_and_load(const desc_wallet_t *w) {
+    if (descriptor_check(w, "LOAD")) {
         ms_wallet = *w;
         ms_wallet_loaded = true;
+        ms_wallet_loads++;
         memcpy(ms_wallet_seed_tag, bip84_seed_tag, sizeof(ms_wallet_seed_tag));
         ms_wallet_account = bip84_account_index;
         black_screen();
@@ -5662,12 +5674,48 @@ static bool scan_rx_get(uint8_t *b) {
 // Scans an animated UR of type 'target' (uppercase, e.g. "UR:CRYPTO-PSBT/")
 // and rebuilds its CBOR message in the fountain part buffer. Returns true if
 // a complete message was received; *msg is NULL if it could not be joined.
+// Where the code holds 'target' (upper case), in any case; -1 if it does not
+static int scan_find_target(const char *code, int len, const char *target) {
+    int tl = (int)strlen(target);
+    for (int i = 0; i + tl <= len; i++) {
+        int j = 0;
+        while (j < tl) {
+            char c = code[i + j];
+            if (c >= 'a' && c <= 'z') c -= ('a' - 'A');
+            if (c != target[j]) break;
+            j++;
+        }
+        if (j == tl) return i;
+    }
+    return -1;
+}
+
+static bool scan_has_target(const char *code, int len, const char *target) {
+    return scan_find_target(code, len, target) >= 0;
+}
+
+// One line about a code that was read but not taken, over the previous one
+static void scan_notice(const char *text) {
+    char line[PSBT_VIEW_LINE_CHARS];
+    size_t n = strlen(text);
+    if (n > sizeof(line) - 1) n = sizeof(line) - 1;
+    memset(line, ' ', sizeof(line) - 1);
+    memcpy(line, text, n);
+    line[sizeof(line) - 1] = '\0';
+    drawtext(5, 30, line, ST7735_YELLOW, ST7735_BLACK, 1);
+}
+
 static bool scan_ur_message(const char *target, const char *title, uint8_t **msg, uint32_t *msg_len) {
     char title_text[24];
+    char not_this[26];
     const int target_len = (int)strlen(target);
+    static const uint8_t scan_ack[7] = {0x02, 0x00, 0x00, 0x01, 0x00, 0x33, 0x31};
 
     *msg = NULL;
     *msg_len = 0;
+    strcpy(not_this, "NOT A ");                 // "NOT A UR:CRYPTO-PSBT QR"
+    strncat(not_this, target, (size_t)target_len - 1);
+    strcat(not_this, " QR");
     strcpy(title_text, title);
     black_screen();
     draw_title(title_text, ST7735_LIGHTGREY);
@@ -5717,6 +5765,7 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
 
     bool psbt_recovered = false;
     uint32_t expected_msg_len = 0;
+    uint32_t single_len = 0;                    // A single part UR: the whole message in one code
 
     while (BT1 == 1) { 
         SYS_Tasks(); // Keep MCU watchdog alive in the main loop
@@ -5752,6 +5801,20 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
             }
             burst_buffer[burst_idx] = '\0';
 
+            // Trigger mode: the ACK may come right before the code
+            if (burst_idx >= 7 && memcmp(burst_buffer, scan_ack, sizeof(scan_ack)) == 0) {
+                burst_idx -= 7;
+                memmove(burst_buffer, &burst_buffer[7], (size_t)burst_idx + 1);
+            }
+
+            // A code that is not a frame of this UR type is said on screen
+            // instead of being ignored
+            if (burst_idx > 15 && !scan_has_target(burst_buffer, burst_idx, target)) {
+                bool full = burst_idx >= (int)sizeof(burst_buffer) - 1;
+                scan_notice(full ? "QR TEXT TOO LONG" :
+                            (burst_buffer[0] == 'B' && burst_buffer[1] == '$') ? "BBQR NOT SUPPORTED YET" : not_this);
+            }
+
             if (burst_idx > target_len) {
                 char *header_start = NULL;
 
@@ -5774,6 +5837,12 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
                             payload_clean = &payload_start[i + 1];
                             break;
                         }
+                    }
+
+                    if (payload_clean == NULL) {
+                        uint32_t cap;
+                        single_len = ur_decode_single(payload_start, fountain_scratch_buffer(&cap), cap);
+                        if (single_len == 0) scan_notice("UR CODE NOT READABLE");
                     }
 
                     if (payload_clean != NULL) {
@@ -5957,7 +6026,7 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
             }
         }
         
-        if (psbt_recovered) break;
+        if (psbt_recovered || single_len > 0) break;
     }
 
     // Back to polled reception, then give the GM861 its original settings
@@ -5982,10 +6051,15 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
         // The part buffer becomes one contiguous message (no extra RAM)
         *msg = fountain_assemble_message(expected_msg_len);
         *msg_len = expected_msg_len;
+    } else if (single_len > 0) {
+        uint32_t cap;
+        *msg = fountain_scratch_buffer(&cap);   // Decoded there already
+        *msg_len = single_len;
     }
-    
+    memzero(burst_buffer, sizeof(burst_buffer));
+
     while (BT1 == 0) SYS_Tasks(); // Wait for button release
-    return psbt_recovered;
+    return psbt_recovered || single_len > 0;
 }
 
 // SIGN > FROM QR: animated "ur:crypto-psbt", then review and signing
@@ -6003,21 +6077,87 @@ void scan_ur_animated_qr(void) {
     }
 }
 
+static int qr_read_raw(uint8_t *out, uint32_t cap);    // With QR READER
+
+// A descriptor QR: the first code is read like QR READER does (stored
+// scanner setup, the end of a code is 50 ms of silence, into the fountain
+// buffer), so a long static text QR such as the one in Sparrow's PDF arrives
+// whole: the descriptor text, or a single part "ur:crypto-output" (the QR
+// of Sparrow's PDF, about 1,300 characters); a frame of the animated one
+// hands over to the UR scan. *is_text: the descriptor text is in *msg (NUL
+// terminated), else *msg is the CBOR. False if BACK was pressed. Then
+// "CHECKING THE DESCRIPTOR" stays on screen while it is parsed and checked.
+static bool scan_descriptor_qr(uint8_t **msg, uint32_t *len, bool *is_text) {
+    uint32_t cap;
+    uint8_t *buf = fountain_scratch_buffer(&cap);
+
+    *msg = NULL;
+    *len = 0;
+    *is_text = false;
+    black_screen();
+    draw_title("SCANNING DESCRIPTOR", ST7735_LIGHTGREY);
+    drawtext(5, 45, "ANIMATED UR OR TEXT QR", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 70, "SCANNING...", ST7735_CYAN, ST7735_BLACK, 1);
+    grid_back_only();
+    while (1) {
+        int n = qr_read_raw(buf, cap);
+        if (BT1 == 0) {
+            memzero(buf, cap);
+            while (BT1 == 0) SYS_Tasks();
+            return false;
+        }
+        int at = (n > 0) ? scan_find_target((const char *)buf, n, "UR:CRYPTO-OUTPUT/") : -1;
+        if (n < 0) {
+            scan_notice("QR TOO LONG OR DATA LOST");
+        } else if (at >= 0 && strchr((const char *)&buf[at + 17], '/') == NULL) {
+            // Single part (Sparrow's PDF): the whole CBOR in this code
+            uint32_t got = ur_decode_single((const char *)&buf[at + 17], buf, cap);
+            if (got > 0) {
+                *msg = buf;
+                *len = got;
+                return true;
+            }
+            scan_notice("UR CODE NOT READABLE");
+        } else if (at >= 0) {
+            memzero(buf, (size_t)n);
+            return scan_ur_message("UR:CRYPTO-OUTPUT/", "SCANNING DESCRIPTOR", msg, len);
+        } else if (n > 1 && buf[0] == 'B' && buf[1] == '$') {
+            scan_notice("BBQR NOT SUPPORTED YET");
+        } else if (n > 0) {
+            *msg = buf;
+            *len = (uint32_t)n;
+            *is_text = true;
+            return true;
+        }
+    }
+}
+
+// What the device does between the scan and the review (the review derives
+// receive address 0 from every cosigner key)
+static void descriptor_checking_screen(void) {
+    black_screen();
+    draw_title("SCANNING DESCRIPTOR", ST7735_LIGHTGREY);
+    drawtext(5, 45, "CHECKING THE DESCRIPTOR", ST7735_CYAN, ST7735_BLACK, 1);
+}
+
 // IMPORT DESCRIPTOR > FROM QR: the animated "Output Descriptor" QR of
-// Sparrow (ur:crypto-output), then the same checks and review as from SD.
+// Sparrow (ur:crypto-output), or a static QR with the descriptor text (the
+// PDF that Sparrow prints), then the same checks and review as from SD.
 // Not inlined: the parsed copy lives on the stack only during the call.
 static __attribute__((noinline)) void import_descriptor_from_qr(void) {
     uint8_t *msg;
     uint32_t len;
     char text[24];
     desc_wallet_t w;
+    bool is_text;
 
-    if (!scan_ur_message("UR:CRYPTO-OUTPUT/", "SCANNING DESCRIPTOR", &msg, &len)) return;
+    if (!scan_descriptor_qr(&msg, &len, &is_text)) return;
     if (msg == NULL) {
         psbt_sd_message("QR ERROR", "PARTS DO NOT JOIN");
         return;
     }
-    desc_result_t r = desc_parse_cbor(msg, len, &w);
+    descriptor_checking_screen();
+    desc_result_t r = is_text ? desc_parse((const char *)msg, len, &w) : desc_parse_cbor(msg, len, &w);
     if (r != DESC_OK) {
         strcpy(text, desc_error_text(r));
         psbt_sd_message("DESCRIPTOR REFUSED", text);
@@ -6118,8 +6258,8 @@ static bool bip84_address_hash(uint32_t chain, uint32_t index, uint8_t hash160[2
 // One code from the GM861 with its stored setup (command triggered), as raw
 // bytes: spaces and binary data kept, the trigger ACK removed. Received
 // through the UART2 interrupt ring, so long codes are not lost. Returns its
-// length (out is NUL terminated), 0 if nothing was read, -1 if it did not
-// fit in cap - 1 bytes or bytes were dropped.
+// length (out is NUL terminated), 0 if nothing was read (or BACK was pressed
+// while waiting), -1 if it did not fit in cap - 1 bytes or bytes were dropped.
 static int qr_read_raw(uint8_t *out, uint32_t cap) {
     static const uint8_t scan_ack[7] = {0x02, 0x00, 0x00, 0x01, 0x00, 0x33, 0x31};
     uint32_t n = 0;
@@ -6146,6 +6286,7 @@ static int qr_read_raw(uint8_t *out, uint32_t cap) {
         }
         if (n == 0 && !too_long) {
             if ((uint32_t)(now - start) > 5000u * CORE_TICKS_PER_MS) break;     // No code
+            if (BT1 == 0) break;                                            // BACK while waiting
         } else if ((uint32_t)(now - last) > 50u * CORE_TICKS_PER_MS) {
             break;                                                          // End of the code
         }
@@ -7019,10 +7160,15 @@ static void reader_open(bool for_passphrase) {
 // ============================================================================
 
 // Fountain buffer while the vault is open, word aligned (vault_entry_t holds
-// a uint16_t): the list, a copy of the bitmap, and the title and text of an
-// entry while it is written (buffer is needed for the SD I/O then). The last
-// 512 B belong to the QR key of the editor (editor_qr_read()).
-#define VAULT_PARK_LEN  (VAULT_TITLE_MAX + 1 + VAULT_TEXT_MAX + 1)
+// a uint16_t): the list, a copy of the bitmap, and the title and text (or
+// packed multisig wallet) of an entry while it is written or read (buffer is
+// needed for the SD I/O then). The last 512 B belong to the QR key of the
+// editor (editor_qr_read()).
+#define VAULT_PARK_BODY ((VAULT_TEXT_MAX + 1 > DESC_PACK_MAX) ? VAULT_TEXT_MAX + 1 : DESC_PACK_MAX)
+#define VAULT_PARK_LEN  (VAULT_TITLE_MAX + 1 + VAULT_PARK_BODY)
+// A DESCRIPTOR record body: next sector (2, 0 in a single record) and the
+// packed wallet; a second record holds the rest of it
+#define VAULT_DESC_FIRST (VAULT_BODY_MAX - 2)
 #define VAULT_RAM_LEN   (VAULT_MAX_ENTRIES * sizeof(vault_entry_t) + VAULT_BITMAP_LEN + VAULT_PARK_LEN)
 #define VAULT_ROWS      9           // List rows, y 13..93
 #define VAULT_CANCELLED VAULT_ERR_CLOSED    // The user left with BACK: no message
@@ -7032,16 +7178,19 @@ static uint8_t *vault_bitmap;
 static char *vault_park;
 static uint16_t vault_count;        // Our entries
 static uint16_t vault_others;       // Marked sectors of other keys (or damaged)
+static bool vault_pick;             // PASSPHRASE > FROM VAULT: list of one type, no NEW ENTRY
 
 static void vault_new_id(uint8_t id[VAULT_ID_LEN], uint64_t *counter);     // With INITIALIZE CARD
 
-static const char *const vault_new_options[] = {"NOTE", "LOGIN", "PASSPHRASE", "CREDIT CARD", "EFF PASSWORD"};
+static const char *const vault_new_options[] = {"NOTE", "LOGIN", "PASSPHRASE", "CREDIT CARD", "EFF PASSWORD",
+                                                "MULTISIG DESCRIPTOR"};
 #define VAULT_NEW_NOTE      0
 #define VAULT_NEW_LOGIN     1
 #define VAULT_NEW_PASS      2
 #define VAULT_NEW_CARD      3
 #define VAULT_NEW_EFF       4
-#define VAULT_NEW_N         5
+#define VAULT_NEW_MULTISIG  5
+#define VAULT_NEW_N         6
 
 static void wait_keys_released(void) {
     while (BT_OK == 0 || BT1 == 0 || BT2 == 0 || BT4 == 0 || BT5 == 0 || BT6 == 0) SYS_Tasks();
@@ -7168,7 +7317,7 @@ static void vault_draw_list(int sel, bool full) {
     char text[16];
     char num[12];
     int top = (sel >= VAULT_ROWS) ? sel - VAULT_ROWS + 1 : 0;
-    bool on_new = (sel == vault_count);
+    bool on_new = !vault_pick && sel == vault_count;
 
     if (full) {
         black_screen();
@@ -7196,15 +7345,16 @@ static void vault_draw_list(int sel, bool full) {
         if (k < vault_count) {
             const char *t = vault_list[k].title[0] ? vault_list[k].title : "(NO TITLE)";
             memcpy(row, t, strlen(t));
-        } else if (k == vault_count) {
+        } else if (k == vault_count && !vault_pick) {
             memcpy(row, "NEW ENTRY", 9);
         }
         drawtext(1, 13 + 10 * i, row, (k == sel) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
     }
     if (full || on_new != grid_on_new) {
-        if (on_new) grid_labels("BACK", NULL, "NEW", NULL, NULL, NULL);
+        if (vault_pick) grid_labels("BACK", NULL, "VIEW", NULL, NULL, NULL);
+        else if (on_new) grid_labels("BACK", NULL, "NEW", NULL, NULL, NULL);
         else grid_labels("BACK", NULL, "LOAD", "DEL", NULL, "EDIT");
-        if (vault_count > 0) {              // UP / DOWN only when there is somewhere to go
+        if (vault_count > (vault_pick ? 1 : 0)) {   // UP / DOWN only when there is somewhere to go
             print_up_arrow(106, 114, ST7735_WHITE);
             print_down_arrow(106, 123, ST7735_WHITE);
         }
@@ -7267,9 +7417,229 @@ static const char *vault_type_name(uint8_t type) {
         case VAULT_TYPE_LOGIN:      return "LOGIN";
         case VAULT_TYPE_PASSPHRASE: return "PASSPHRASE";
         case VAULT_TYPE_CARD:       return "CREDIT CARD";
-        case VAULT_TYPE_DESCRIPTOR: return "DESCRIPTOR";
+        case VAULT_TYPE_DESCRIPTOR: return "MULTISIG DESCRIPTOR";
         default:                    return "NOTE";
     }
+}
+
+// Starts the plaintext of a record in buffer with the parked title; the
+// caller writes body_len bytes of body at the pointer returned
+static uint8_t *vault_plain_begin(uint8_t type, uint16_t body_len) {
+    size_t tl = strlen(vault_park);
+    uint8_t *pt = &buffer[VAULT_REC_DATA];
+
+    memzero(buffer, sizeof(buffer));
+    pt[VAULT_PT_TYPE] = type;
+    pt[VAULT_PT_TITLE_LEN] = (uint8_t)tl;
+    memcpy(&pt[VAULT_PT_TITLE], vault_park, tl);
+    pt[VAULT_PT_BODY_LEN] = (uint8_t)(body_len >> 8);
+    pt[VAULT_PT_BODY_LEN + 1] = (uint8_t)body_len;
+    return &pt[VAULT_PT_BODY];
+}
+
+// Body of the record in buffer and its length
+static uint8_t *vault_plain_body(uint16_t *len) {
+    const uint8_t *pt = &buffer[VAULT_REC_DATA];
+    *len = (uint16_t)((pt[VAULT_PT_BODY_LEN] << 8) | pt[VAULT_PT_BODY_LEN + 1]);
+    return &buffer[VAULT_REC_DATA + VAULT_PT_BODY];
+}
+
+// LOAD of a DESCRIPTOR entry: both records into the park area, unpacked,
+// then the same checks and review as IMPORT DESCRIPTOR (our key must be a
+// cosigner at this account) before it becomes the active wallet. Not
+// inlined: the unpacked wallet lives on the stack only during the call.
+static __attribute__((noinline)) vault_status_t vault_load_descriptor(int k) {
+    uint8_t *blob = (uint8_t *)vault_park + VAULT_TITLE_MAX + 1;
+    uint16_t len, total;
+    desc_wallet_t w;
+
+    vault_status_t r = vault_read_record(buffer, vault_key, vault_list[k].sector);
+    if (r != VAULT_OK) goto out;
+    uint8_t parts = buffer[3] & 0x0F;
+    const uint8_t *body = vault_plain_body(&len);
+    uint16_t next = (uint16_t)((body[0] << 8) | body[1]);
+    if (len < 2 || parts == 0 || parts > VAULT_MAX_PARTS || (parts == 2) != (next != 0)) {
+        r = VAULT_ERR_ENTRY;
+        goto out;
+    }
+    total = len - 2;
+    memcpy(blob, body + 2, total);
+    if (parts == 2) {
+        r = vault_read_record(buffer, vault_key, next);
+        body = vault_plain_body(&len);
+        if (r == VAULT_OK && (buffer[3] != VAULT_PART(2, 2) ||
+                              buffer[VAULT_REC_DATA + VAULT_PT_TYPE] != VAULT_TYPE_DESCRIPTOR ||
+                              total + len > DESC_PACK_MAX)) {
+            r = VAULT_ERR_ENTRY;
+        }
+        if (r != VAULT_OK) goto out;
+        memcpy(blob + total, body, len);
+        total += len;
+    }
+    memzero(buffer, sizeof(buffer));
+    if (!desc_unpack(blob, total, &w)) {
+        r = VAULT_ERR_ENTRY;
+        goto out;
+    }
+    if (!bip84_multisig_mode) {
+        vault_message("SWITCH TO MULTI SIG", ST7735_RED, "SET MODE TO MULTISIG", "IN THE WALLET MENU");
+    } else if (precompute_multisig_account()) {
+        descriptor_check_and_load(&w);      // Review, refusal or loaded, all on screen
+    }
+    r = VAULT_CANCELLED;                    // Nothing to read again
+out:
+    memzero(&w, sizeof(w));
+    memzero(blob, DESC_PACK_MAX);
+    memzero(buffer, sizeof(buffer));
+    return r;
+}
+
+// Saves a checked multisig wallet as a DESCRIPTOR entry: one record, or two
+// for 6-7 cosigners. No editor: the title is "MULTISIG m OF n" and 4 hex
+// digits of a hash of the packed wallet, so two wallets of the same policy
+// differ in the list. One confirmation with the cosigner fingerprints (ours
+// in green).
+static vault_status_t vault_save_descriptor(const desc_wallet_t *w, uint16_t *keep) {
+    char title[VAULT_TITLE_MAX + 1];
+    char text[26];
+    char num[12];
+    uint8_t *blob = (uint8_t *)vault_park + VAULT_TITLE_MAX + 1;
+    uint32_t total = desc_pack(w, blob);
+    uint8_t parts = (total <= VAULT_DESC_FIRST) ? 1 : 2;
+    uint8_t hash[32];
+    SHA256_CTX ctx;
+    vault_status_t r;
+
+    sha256_init(&ctx);
+    sha256_update(&ctx, blob, total);
+    sha256_final(&ctx, hash);
+    strcpy(title, "MULTISIG ");
+    fast_itoa(w->threshold, num);
+    strcat(title, num);
+    strcat(title, " OF ");
+    fast_itoa(w->key_count, num);
+    strcat(title, num);
+    strcat(title, " ");
+    u16_to_hex4((uint16_t)((hash[0] << 8) | hash[1]), &title[strlen(title)]);
+    title[VAULT_TITLE_MAX] = '\0';
+
+    black_screen();
+    draw_title("SAVE TO VAULT", ST7735_LIGHTGREY);
+    drawtext(5, 25, title, ST7735_WHITE, ST7735_BLACK, 1);
+    strcpy(text, w->sorted ? "SORTEDMULTI, " : "MULTI, ");
+    strcat(text, (parts == 1) ? "1 SECTOR" : "2 SECTORS");
+    drawtext(5, 37, text, ST7735_CYAN, ST7735_BLACK, 1);
+    for (int i = 0; i < w->key_count; i++) {
+        uint32_t fp = desc_key_fingerprint(&w->keys[i]);
+        u16_to_hex4((uint16_t)(fp >> 16), num);
+        u16_to_hex4((uint16_t)fp, num + 4);
+        num[8] = '\0';
+        drawtext(5 + (i % 2) * 54, 52 + (i / 2) * 10, num,
+                 (fp == bip84_master_fingerprint) ? ST7735_GREEN : ST7735_WHITE, ST7735_BLACK, 1);
+    }
+    grid_labels("BACK", NULL, "SAVE", NULL, NULL, NULL);
+    int bt;
+    do { bt = wait_any_key(); } while (bt != OK_BT && bt != BACK_BT);
+    if (bt == BACK_BT) {
+        r = VAULT_CANCELLED;
+        goto wipe;
+    }
+
+    strcpy(vault_park, title);
+    black_screen();
+    draw_title("SAVE TO VAULT", ST7735_LIGHTGREY);
+    drawtext(5, 25, "WRITING TO THE SD CARD", ST7735_CYAN, ST7735_BLACK, 1);
+
+    uint16_t sectors[VAULT_MAX_PARTS];
+    uint64_t counter;
+    r = vault_reserve(buffer, parts, sectors, &counter);
+    if (r == VAULT_OK) {
+        uint16_t first = (uint16_t)((total < VAULT_DESC_FIRST) ? total : VAULT_DESC_FIRST);
+        uint8_t *body = vault_plain_begin(VAULT_TYPE_DESCRIPTOR, (uint16_t)(first + 2));
+        body[0] = (parts == 2) ? (uint8_t)(sectors[1] >> 8) : 0;
+        body[1] = (parts == 2) ? (uint8_t)sectors[1] : 0;
+        memcpy(body + 2, blob, first);
+        r = vault_write_record(buffer, vault_key, sectors[0], counter, VAULT_PART(1, parts));
+        if (r == VAULT_OK && parts == 2) {
+            uint16_t rest = (uint16_t)(total - first);
+            memcpy(vault_plain_begin(VAULT_TYPE_DESCRIPTOR, rest), blob + first, rest);
+            r = vault_write_record(buffer, vault_key, sectors[1], counter + 1, VAULT_PART(2, 2));
+        }
+    }
+    if (r == VAULT_OK) r = vault_commit(buffer, sectors, parts, NULL, 0);
+    if (r == VAULT_OK) {
+        *keep = sectors[0];
+        drawtext(5, 40, "SAVED", ST7735_GREEN, ST7735_BLACK, 1);
+        delay_ms(700);
+    }
+wipe:
+    memzero(vault_park, VAULT_PARK_LEN);
+    memzero(buffer, sizeof(buffer));
+    memzero(hash, sizeof(hash));
+    memzero(&ctx, sizeof(ctx));
+    return r;
+}
+
+// MULTISIG DESCRIPTOR > FROM QR: the same scan as IMPORT DESCRIPTOR (UR or a
+// static text QR), our key checked at this account, the review with OK =
+// SAVE. The active wallet is not changed. The scan uses the fountain buffer,
+// so *keep asks for the list to be read again whatever happens.
+static __attribute__((noinline)) vault_status_t vault_descriptor_from_qr(uint16_t *keep) {
+    uint8_t *msg;
+    uint32_t len;
+    char text[24];
+    bool is_text;
+    desc_wallet_t w;
+    vault_status_t r = VAULT_CANCELLED;
+
+    *keep = 1;                              // Not a record sector: the cursor stays
+    if (!precompute_multisig_account()) return r;  // Our m/48'/0'/n'/2' key, for the check
+    if (!scan_descriptor_qr(&msg, &len, &is_text)) return r;
+    if (msg == NULL) {
+        psbt_sd_message("QR ERROR", "PARTS DO NOT JOIN");
+        return r;
+    }
+    descriptor_checking_screen();
+    desc_result_t d = is_text ? desc_parse((const char *)msg, len, &w) : desc_parse_cbor(msg, len, &w);
+    memzero(msg, len);
+    if (d != DESC_OK) {
+        strcpy(text, desc_error_text(d));
+        psbt_sd_message("DESCRIPTOR REFUSED", text);
+    } else if (descriptor_check(&w, "SAVE")) {
+        r = vault_save_descriptor(&w, keep);
+        if (*keep == 0) *keep = 1;
+    }
+    while (BT1 == 0 || BT_OK == 0) SYS_Tasks();
+    memzero(&w, sizeof(w));
+    return r;
+}
+
+// NEW ENTRY > MULTISIG DESCRIPTOR: FROM QR, or CURRENT MS DESCRIPTOR (the
+// wallet loaded by IMPORT DESCRIPTOR for this seed and account; dark gray
+// and skipped when there is none)
+static vault_status_t vault_new_descriptor(uint16_t *keep) {
+    bool have = ms_wallet_active();
+    int sel = 0;
+
+    *keep = 0;
+    black_screen();
+    draw_title("MULTISIG DESCRIPTOR", ST7735_LIGHTGREY);
+    while (1) {
+        drawtext(1, 13, "FROM QR", (sel == 0) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(1, 23, "CURRENT MS DESCRIPTOR", !have ? 0x8410 : (sel == 1) ? ST7735_ORANGE : ST7735_WHITE,
+                 ST7735_BLACK, 1);
+        grid_labels("BACK", NULL, (sel == 0) ? "SCAN" : "SAVE", NULL, NULL, NULL);
+        if (have) {
+            print_up_arrow(106, 114, ST7735_WHITE);
+            print_down_arrow(106, 123, ST7735_WHITE);
+        }
+        int bt = wait_any_key();
+        if (bt == BACK_BT) return VAULT_CANCELLED;
+        if ((bt == UP_BT || bt == DOWN_BT) && have) sel ^= 1;
+        if (bt == OK_BT) break;
+    }
+    if (sel == 0) return vault_descriptor_from_qr(keep);
+    return vault_save_descriptor(&ms_wallet, keep);
 }
 
 // LOAD: title and text (UP / DOWN pages), OK shows the QR of title and text,
@@ -7281,13 +7651,9 @@ static vault_status_t vault_view(int k) {
     uint8_t type;
     uint16_t len;
 
+    if (vault_list[k].type == VAULT_TYPE_DESCRIPTOR) return vault_load_descriptor(k);
     vault_status_t r = vault_read_entry(k, title, &type, &len);
     if (r != VAULT_OK) return r;
-    if (type == VAULT_TYPE_DESCRIPTOR) {
-        memzero(buffer, sizeof(buffer));
-        vault_message("DESCRIPTOR ENTRY", ST7735_YELLOW, "NOT SUPPORTED BY THIS", "VERSION YET");
-        return VAULT_OK;
-    }
     reader_insert = false;
     reader_passphrase = false;
     reader_data = buffer;
@@ -7344,22 +7710,6 @@ static vault_status_t vault_view(int k) {
     return VAULT_OK;
 }
 
-// Builds the plaintext of a record in buffer from the parked title and text
-static void vault_build_plain(uint8_t type) {
-    const char *title = vault_park;
-    const char *body = vault_park + VAULT_TITLE_MAX + 1;
-    size_t tl = strlen(title), bl = strlen(body);
-    uint8_t *pt = &buffer[VAULT_REC_DATA];
-
-    memzero(buffer, sizeof(buffer));
-    pt[VAULT_PT_TYPE] = type;
-    pt[VAULT_PT_TITLE_LEN] = (uint8_t)tl;
-    memcpy(&pt[VAULT_PT_TITLE], title, tl);
-    pt[VAULT_PT_BODY_LEN] = (uint8_t)(bl >> 8);
-    pt[VAULT_PT_BODY_LEN + 1] = (uint8_t)bl;
-    memcpy(&pt[VAULT_PT_BODY], body, bl);
-}
-
 // Editor on title and buffer, confirmation, then the write: a new record in
 // a free sector, and the old one ('old', 0 for a new entry) freed only after
 // it. The sector written goes to *keep (0 if nothing was written).
@@ -7408,7 +7758,9 @@ static vault_status_t vault_edit_and_save(uint8_t type, char *title, uint16_t ol
     uint64_t counter;
     r = vault_reserve(buffer, 1, &sector, &counter);
     if (r == VAULT_OK) {
-        vault_build_plain(type);
+        const char *body = vault_park + VAULT_TITLE_MAX + 1;
+        uint16_t bl = (uint16_t)strlen(body);
+        memcpy(vault_plain_begin(type, bl), body, bl);
         r = vault_write_record(buffer, vault_key, sector, counter, VAULT_PART_SINGLE);
     }
     if (r == VAULT_OK) r = vault_commit(buffer, &sector, 1, (old != 0) ? &old : NULL, (old != 0) ? 1 : 0);
@@ -7475,6 +7827,9 @@ static vault_status_t vault_new_entry(uint16_t *keep) {
             }
             break;
         }
+        case VAULT_NEW_MULTISIG:
+            editor_title_first = false;
+            return vault_new_descriptor(keep);
         default:
             break;
     }
@@ -7515,33 +7870,187 @@ static vault_status_t vault_delete_entry(int k, uint16_t *keep) {
     *keep = 0;
     if (bt == BACK_BT) return VAULT_CANCELLED;
 
-    uint16_t sector = vault_list[k].sector;
+    uint16_t sectors[VAULT_MAX_PARTS] = {vault_list[k].sector, 0};
+    uint8_t n = 1;
     drawtext(5, 80, "ERASING...", ST7735_CYAN, ST7735_BLACK, 1);
-    vault_status_t r = vault_delete(buffer, &sector, 1);
+    if (vault_list[k].type == VAULT_TYPE_DESCRIPTOR &&
+        vault_read_record(buffer, vault_key, sectors[0]) == VAULT_OK && (buffer[3] & 0x0F) == 2) {
+        uint16_t len;
+        const uint8_t *body = vault_plain_body(&len);
+        sectors[1] = (uint16_t)((body[0] << 8) | body[1]);
+        n = 2;                              // The second record goes too
+    }
+    memzero(buffer, sizeof(buffer));
+    vault_status_t r = vault_delete(buffer, sectors, n);
     *keep = 1;                              // Not a record sector: the cursor stays
     return r;
 }
 
-// VAULT in the wallet menu. The keys are already derived (vault_key, with
-// the wallet keys); everything the vault showed is wiped on the way out.
-static void vault_run(void) {
+// Places the vault data in the fountain buffer; false (said on screen) if
+// the wallet keys, and so vault_key, are not derived
+static bool vault_setup(void) {
     uint32_t size;
     uint8_t *base = fountain_scratch_buffer(&size);
     uint32_t pad = (4u - ((uintptr_t)base & 3u)) & 3u;
-    vault_status_t r;
-    int sel = 0;
 
     if (!bip84_account_cached || size < pad + VAULT_RAM_LEN + 512u) {
         vault_message("VAULT ERROR", ST7735_RED, "THE WALLET KEYS ARE", "NOT LOADED");
         wait_keys_released();
-        return;
+        return false;
     }
     base += pad;
     vault_list = (vault_entry_t *)base;
     vault_bitmap = base + VAULT_MAX_ENTRIES * sizeof(vault_entry_t);
     vault_park = (char *)vault_bitmap + VAULT_BITMAP_LEN;
     memzero(base, VAULT_RAM_LEN);
+    return true;
+}
 
+// Wipes everything the vault showed or read
+static void vault_teardown(void) {
+    memzero(vault_list, VAULT_RAM_LEN);
+    memzero(buffer, sizeof(buffer));
+    vault_close();
+    vault_pick = false;
+    wait_keys_released();
+}
+
+// One PASSPHRASE entry shown in full; OK ("USE") makes it the passphrase if
+// it is printable ASCII on one line and fits. True if it was used.
+static bool vault_use_passphrase(int k) {
+    char title[VAULT_TITLE_MAX + 1];
+    char text[26];
+    char num[12];
+    uint8_t type;
+    uint16_t len;
+    bool used = false;
+
+    vault_status_t r = vault_read_entry(k, title, &type, &len);
+    if (r != VAULT_OK) {
+        vault_error(r);
+        return false;
+    }
+    reader_insert = false;
+    reader_passphrase = false;
+    reader_data = buffer;
+    reader_cap = sizeof(buffer);
+    reader_len = len;
+    reader_hex = false;
+    reader_page = 0;
+    bool ok = reader_passphrase_ok();
+    bool redraw = true;
+    while (1) {
+        if (redraw) {
+            black_screen();
+            draw_title(title, ST7735_LIGHTGREY);
+            strcpy(text, ok ? "PASSPHRASE, " : "NOT USABLE, ");
+            fast_itoa(len, num);
+            strcat(text, num);
+            strcat(text, " CHARS");
+            drawtext(1, 12, text, ok ? ST7735_CYAN : ST7735_RED, ST7735_BLACK, 1);
+            if (ok) {
+                reader_draw_pages("USE");
+            } else {
+                drawtext(5, 30, (len == 0) ? "THE ENTRY IS EMPTY" :
+                         (len >= (int)sizeof(bip84_passphrase)) ? "TOO LONG FOR A" : "NOT PLAIN TEXT ON ONE",
+                         ST7735_RED, ST7735_BLACK, 1);
+                if (len > 0) drawtext(5, 40, (len >= (int)sizeof(bip84_passphrase)) ? "PASSPHRASE" :
+                                      "LINE (A-Z, 0-9, SYMBOLS)", ST7735_RED, ST7735_BLACK, 1);
+                grid_back_only();
+            }
+            redraw = false;
+        }
+        int bt = wait_any_key();
+        if (bt == BACK_BT) break;
+        if (bt == OK_BT && ok) {
+            memzero(bip84_passphrase, sizeof(bip84_passphrase));
+            memcpy(bip84_passphrase, buffer, len);
+            used = true;
+            break;
+        }
+        if (ok && bt == UP_BT && reader_page > 0) {
+            reader_page--;
+            redraw = true;
+        } else if (ok && bt == DOWN_BT && reader_page < reader_pages() - 1) {
+            reader_page++;
+            redraw = true;
+        }
+    }
+    memzero(buffer, sizeof(buffer));
+    memzero(title, sizeof(title));
+    return used;
+}
+
+// The vault of the seed and passphrase on screen, listing only its entries
+// of 'type' (PASSPHRASE > FROM VAULT, IMPORT DESCRIPTOR > FROM VAULT). 'use'
+// gets the entry chosen and returns true to leave the list; BACK leaves it
+// too. 'none_*' explain an empty list. True if 'use' returned true.
+static bool vault_pick_type(uint8_t type, const char *none_title, const char *none_l1, const char *none_l2,
+                            bool (*use)(int k)) {
+    bool used = false;
+    int sel = 0;
+
+    if (!vault_setup()) return false;
+    vault_status_t r = vault_load();
+    if (r == VAULT_OK) {
+        uint16_t n = 0;
+        for (uint16_t i = 0; i < vault_count; i++) {
+            if (vault_list[i].type == type) vault_list[n++] = vault_list[i];
+        }
+        vault_count = n;
+        vault_pick = true;
+        if (n == 0) vault_message(none_title, ST7735_YELLOW, none_l1, none_l2);
+        while (n > 0 && !used) {
+            vault_draw_list(sel, true);
+            int bt;
+            while (1) {
+                bt = wait_any_key();
+                if ((bt == UP_BT || bt == DOWN_BT) && n > 1) {
+                    sel = (sel + ((bt == DOWN_BT) ? 1 : n - 1)) % n;
+                    vault_draw_list(sel, false);
+                } else if (bt == OK_BT || bt == BACK_BT) {
+                    break;
+                }
+            }
+            if (bt == BACK_BT) break;
+            used = use(sel);
+        }
+    } else if (r != VAULT_CANCELLED) {
+        vault_error(r);
+    }
+    vault_teardown();
+    return used;
+}
+
+// PASSPHRASE > FROM VAULT. True if an entry became the passphrase (the caller
+// derives the keys again).
+static bool vault_pick_passphrase(void) {
+    return vault_pick_type(VAULT_TYPE_PASSPHRASE, "NO PASSPHRASE ENTRIES", "SAVE ONE WITH VAULT >",
+                      "NEW ENTRY > PASSPHRASE", vault_use_passphrase);
+}
+
+// One DESCRIPTOR entry: the checks and review of IMPORT DESCRIPTOR; leaves the
+// list once a wallet is loaded (BACK in the review returns to it)
+static bool vault_use_descriptor(int k) {
+    uint8_t loads = ms_wallet_loads;
+    vault_status_t r = vault_load_descriptor(k);
+    if (r != VAULT_OK && r != VAULT_CANCELLED) vault_error(r);
+    return ms_wallet_loads != loads;
+}
+
+// IMPORT DESCRIPTOR > FROM VAULT. True if a wallet was loaded.
+static bool vault_pick_descriptor(void) {
+    return vault_pick_type(VAULT_TYPE_DESCRIPTOR, "NO DESCRIPTOR ENTRIES", "SAVE ONE WITH VAULT >",
+                      "NEW ENTRY > MULTISIG", vault_use_descriptor);
+}
+
+// VAULT in the wallet menu. The keys are already derived (vault_key, with
+// the wallet keys); everything the vault showed is wiped on the way out.
+static void vault_run(void) {
+    vault_status_t r;
+    int sel = 0;
+
+    if (!vault_setup()) return;
     r = vault_load();
     while (r == VAULT_OK) {
         vault_draw_list(sel, true);
@@ -7587,10 +8096,7 @@ static void vault_run(void) {
     }
     if (r != VAULT_OK && r != VAULT_CANCELLED) vault_error(r);
 done:
-    memzero(base, VAULT_RAM_LEN);
-    memzero(buffer, sizeof(buffer));
-    vault_close();
-    wait_keys_released();
+    vault_teardown();
 }
 
 // Total sectors of the card (starting it if needed), 0 if it cannot be read
@@ -10074,8 +10580,10 @@ int SSS_N = 9;
                         if (sign_menu_descriptor) {
                             if (sign_menu_pointer == cSIGN_QR) {
                                 import_descriptor_from_qr();
-                            } else {
+                            } else if (sign_menu_pointer == cSIGN_SD) {
                                 import_descriptor_from_sd();
+                            } else {
+                                (void)vault_pick_descriptor();
                             }
                         } else if (sign_menu_pointer == cSIGN_QR) {
                             scan_ur_animated_qr();
@@ -10104,7 +10612,7 @@ int SSS_N = 9;
                         print_sign_menu();
                         break;
                     case DOWN_BT:
-                        if (sign_menu_pointer < (cSIGN_n_opt - 1)) {
+                        if (sign_menu_pointer < (sign_menu_count() - 1)) {
                             sign_menu_pointer++;
                         }
                         print_sign_menu();
@@ -10630,7 +11138,16 @@ int SSS_N = 9;
                             }
                         } else if (passphrase_pointer == cPASS_QR) {
                             reader_open(true);
-                        }                                   // FROM VAULT: placeholder, nothing yet
+                        } else if (vault_pick_passphrase()) {   // FROM VAULT
+                            bip84_account_cached = false;   // Derive again with the new passphrase
+                            ms_account_cached = false;
+                            black_screen();
+                            bip84_qr_return_to_menu = true;
+                            estado = PRECOMPUTE_BIP84;
+                        } else {
+                            print_passphrase_menu();
+                        }
+                        pulsed_bt = NONE;
                         break;
                     case BACK_BT:
                         black_screen();

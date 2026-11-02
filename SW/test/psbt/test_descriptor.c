@@ -6,6 +6,7 @@
 #include "descriptor.h"
 #include "psbt_sign.h"
 #include "descriptor_vectors.h"
+#include "ur_encode.h"
 
 static int failures = 0;
 
@@ -57,6 +58,20 @@ static void test_crypto_output(void) {
     uint32_t len = sizeof(copy);
 
     CHECK(desc_parse_cbor(vec_output_cbor, len, &w) == DESC_OK, "crypto-output parses");
+
+    // As a single part UR (the static QR of Sparrow's PDF): encode, decode
+    // in place in the text as the scanner path does, parse
+    {
+        static char text[2 * sizeof(vec_output_cbor) + 64];
+        ur_encoder_t e;
+        CHECK(ur_encoder_init_type(&e, "crypto-output", vec_output_cbor, sizeof(vec_output_cbor), false,
+                                   sizeof(vec_output_cbor)) && e.seq_len == 1, "single part crypto-output");
+        CHECK(ur_encoder_part(&e, 1, text, sizeof(text)) > 0, "single part text");
+        uint32_t got = ur_decode_single(text + strlen("UR:CRYPTO-OUTPUT/"), (uint8_t *)text, sizeof(text));
+        CHECK(got == sizeof(vec_output_cbor) && memcmp(text, vec_output_cbor, got) == 0, "single part decodes");
+        CHECK(desc_parse_cbor((const uint8_t *)text, got, &w) == DESC_OK, "single part parses");
+        check_keys(&w, abc, "single part crypto-output");
+    }
     CHECK(w.sorted && w.has_checksum, "crypto-output is sortedmulti");
     check_keys(&w, abc, "crypto-output");
     uint32_t n = wallet_script(&w, VEC_CHANGE, VEC_INDEX, script);
@@ -102,6 +117,21 @@ int main(void) {
     uint32_t len = wallet_script(&w, VEC_CHANGE, VEC_INDEX, script);
     CHECK(len == sizeof(vec_script_sorted) && memcmp(script, vec_script_sorted, len) == 0, "sortedmulti change script");
 
+    // Only the descriptor line, as in the static QR of Sparrow's PDF export
+    {
+        const char *line = strstr(desc_text, "wsh(");
+        char one[1100];
+        size_t n = 0;
+        while (line != NULL && line[n] != '\0' && line[n] != '\n' && line[n] != '\r' && n < sizeof(one) - 1) {
+            one[n] = line[n];
+            n++;
+        }
+        one[n] = '\0';
+        CHECK(line != NULL && desc_parse(one, (uint32_t)n, &w) == DESC_OK, "one line descriptor parses");
+        CHECK(w.sorted && w.has_checksum, "one line: sortedmulti with checksum");
+        check_keys(&w, abc, "one line");
+    }
+
     // multi(): keys in the given order
     CHECK(desc_parse(desc_multi, (uint32_t)strlen(desc_multi), &w) == DESC_OK, "multi parses");
     CHECK(!w.sorted, "multi is not sorted");
@@ -126,6 +156,37 @@ int main(void) {
     }
 
     test_crypto_output();
+
+    // Vault copy: pack, unpack, same keys and scripts; strict refusals
+    {
+        uint8_t blob[DESC_PACK_MAX + 1];
+        desc_wallet_t w2;
+        CHECK(desc_parse(desc_text, (uint32_t)strlen(desc_text), &w) == DESC_OK, "descriptor for pack");
+        uint32_t n = desc_pack(&w, blob);
+        CHECK(n == DESC_PACK_LEN(3), "pack length 4 + 86 per key");
+        CHECK(desc_unpack(blob, n, &w2), "unpack");
+        check_keys(&w2, abc, "unpacked");
+        CHECK(w2.sorted && w2.has_checksum, "unpacked flags");
+        for (int i = 0; i < 3; i++) {
+            CHECK(memcmp(w2.keys[i].origin, w.keys[i].origin, sizeof(w.keys[i].origin)) == 0, "unpacked origin");
+        }
+        len = wallet_script(&w2, VEC_CHANGE, VEC_INDEX, script);
+        CHECK(len == sizeof(vec_script_sorted) && memcmp(script, vec_script_sorted, len) == 0, "unpacked change script");
+        CHECK(DESC_PACK_LEN(5) <= 450 && DESC_PACK_LEN(6) > 450, "5 keys fit one vault record");
+
+        CHECK(!desc_unpack(blob, n - 1, &w2) && w2.key_count == 0, "truncated refused, cleared");
+        CHECK(!desc_unpack(blob, n + 1, &w2), "too long refused");
+        blob[0] = 2;
+        CHECK(!desc_unpack(blob, n, &w2), "other format refused");
+        blob[0] = 1; blob[1] = 0;
+        CHECK(!desc_unpack(blob, n, &w2), "threshold 0 refused");
+        blob[1] = 4;
+        CHECK(!desc_unpack(blob, n, &w2), "threshold above keys refused");
+        blob[1] = 2; blob[3] = 4;
+        CHECK(!desc_unpack(blob, n, &w2), "unknown flag refused");
+        blob[3] = 3; blob[DESC_PACK_HEADER + 4 + 1 + 16 + 32] = 0x04;
+        CHECK(!desc_unpack(blob, n, &w2), "uncompressed key refused");
+    }
 
     // Hardened public derivation is impossible
     uint8_t chain[32], key[33];

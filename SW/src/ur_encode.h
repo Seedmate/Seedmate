@@ -77,4 +77,11 @@ uint32_t ur_account_cbor(const ur_account_key_t *key, uint8_t *out, uint32_t out
 // 0xFFFFFFFF and XOR the final value with 0xFFFFFFFF.
 uint32_t ur_crc32_update(uint32_t crc, const uint8_t *data, uint32_t len);
 
+// Body of a single part UR (what follows "ur:type/" when there is no
+// "seq-n/"): minimal Bytewords up to the first character that is not a
+// letter, the message followed by its CRC32. Decodes it into out (out may be
+// the text itself: decoding in place is allowed) and checks the CRC.
+// Returns the message length, 0 if it is not valid or does not fit in cap.
+uint32_t ur_decode_single(const char *bw, uint8_t *out, uint32_t cap);
+
 #endif // UR_ENCODE_H

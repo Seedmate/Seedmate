@@ -41,6 +41,7 @@ extern const char* const menu_bip84[];
 extern const char* const menu_bip84_multi[];
 extern const char* const menu_addresses[];
 extern const char* const menu_sign[];
+extern const char* const menu_import[];
 extern const char* const menu_input[];
 
 // Drawing functions

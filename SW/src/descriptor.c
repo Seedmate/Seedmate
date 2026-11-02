@@ -607,3 +607,56 @@ uint32_t desc_witness_script(const uint8_t keys[][33], uint8_t n, uint8_t m, boo
     out[len++] = 0xAE;                      // OP_CHECKMULTISIG
     return len;
 }
+uint32_t desc_pack(const desc_wallet_t *w, uint8_t *out) {
+    uint8_t *p = out;
+    *p++ = 1;                               // Format
+    *p++ = w->threshold;
+    *p++ = w->key_count;
+    *p++ = (uint8_t)((w->sorted ? 1u : 0u) | (w->has_checksum ? 2u : 0u));
+    for (int i = 0; i < w->key_count; i++) {
+        const desc_key_t *k = &w->keys[i];
+        memcpy(p, k->fingerprint, 4);
+        p += 4;
+        *p++ = k->origin_len;
+        for (int j = 0; j < DESC_ORIGIN_MAX; j++) {
+            for (int b = 3; b >= 0; b--) *p++ = (uint8_t)(k->origin[j] >> (8 * b));
+        }
+        memcpy(p, k->chain_code, 32);
+        p += 32;
+        memcpy(p, k->public_key, 33);
+        p += 33;
+    }
+    return (uint32_t)(p - out);
+}
+
+bool desc_unpack(const uint8_t *in, uint32_t len, desc_wallet_t *out) {
+    memset(out, 0, sizeof(*out));
+    if (len < DESC_PACK_HEADER || in[0] != 1 || in[2] == 0 || in[2] > DESC_MAX_KEYS ||
+        in[1] == 0 || in[1] > in[2] || (in[3] & ~3u) != 0 || len != DESC_PACK_LEN(in[2])) {
+        return false;
+    }
+    out->threshold = in[1];
+    out->key_count = in[2];
+    out->sorted = (in[3] & 1u) != 0;
+    out->has_checksum = (in[3] & 2u) != 0;
+    const uint8_t *p = in + DESC_PACK_HEADER;
+    for (int i = 0; i < out->key_count; i++) {
+        desc_key_t *k = &out->keys[i];
+        memcpy(k->fingerprint, p, 4);
+        p += 4;
+        k->origin_len = *p++;
+        for (int j = 0; j < DESC_ORIGIN_MAX; j++) {
+            k->origin[j] = (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+            p += 4;
+        }
+        memcpy(k->chain_code, p, 32);
+        p += 32;
+        memcpy(k->public_key, p, 33);
+        p += 33;
+        if (k->public_key[0] != 0x02 && k->public_key[0] != 0x03) {
+            memset(out, 0, sizeof(*out));
+            return false;
+        }
+    }
+    return true;
+}

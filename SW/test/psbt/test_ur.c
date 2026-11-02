@@ -138,6 +138,19 @@ static void test_round_trip(void) {
     int n = decode_words(single, raw, sizeof(raw));
     CHECK(n == (int)e.msg_len && memcmp(&raw[3], ur_test_signed_psbt, sizeof(ur_test_signed_psbt)) == 0);
 
+    // The firmware's single part decoder, also in place in the text buffer
+    const char *body = single + strlen("UR:CRYPTO-PSBT/");
+    CHECK(ur_decode_single(body, raw, sizeof(raw)) == e.msg_len &&
+          memcmp(&raw[3], ur_test_signed_psbt, sizeof(ur_test_signed_psbt)) == 0);
+    static char inplace[1000];
+    strcpy(inplace, single);
+    CHECK(ur_decode_single(inplace + strlen("UR:CRYPTO-PSBT/"), (uint8_t *)inplace, sizeof(inplace)) == e.msg_len &&
+          memcmp(&inplace[3], ur_test_signed_psbt, sizeof(ur_test_signed_psbt)) == 0);
+    strcpy(inplace, body);
+    inplace[10] = (inplace[10] == 'A') ? 'B' : 'A';     // One word changed: CRC fails
+    CHECK(ur_decode_single(inplace, raw, sizeof(raw)) == 0);
+    CHECK(ur_decode_single(body, raw, 20) == 0);        // Does not fit
+
     // Bad arguments
     CHECK(ur_encoder_init(&e, ur_test_signed_psbt, sizeof(ur_test_signed_psbt), 100));
     CHECK(ur_encoder_part(&e, 0, part, sizeof(part)) == 0);

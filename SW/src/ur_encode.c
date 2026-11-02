@@ -281,3 +281,22 @@ uint32_t ur_account_cbor(const ur_account_key_t *key, uint8_t *out, uint32_t out
 
     return w.overflow ? 0 : w.pos;
 }
+
+uint32_t ur_decode_single(const char *bw, uint8_t *out, uint32_t cap) {
+    uint32_t n = 0;
+
+    // out[n] is written after bw[2n] and bw[2n + 1] were read, so out may be bw
+    for (uint32_t k = 0; ; k += 2) {
+        char c1 = bw[k];
+        if (!((c1 >= 'A' && c1 <= 'Z') || (c1 >= 'a' && c1 <= 'z'))) break;
+        int v = decode_bytewords_pair(c1, bw[k + 1]);
+        if (v < 0 || n >= cap) return 0;
+        out[n++] = (uint8_t)v;
+    }
+    if (n <= 4) return 0;
+    n -= 4;
+    uint32_t crc = ur_crc32_update(0xFFFFFFFFu, out, n) ^ 0xFFFFFFFFu;
+    if (out[n] != (uint8_t)(crc >> 24) || out[n + 1] != (uint8_t)(crc >> 16) ||
+        out[n + 2] != (uint8_t)(crc >> 8) || out[n + 3] != (uint8_t)crc) return 0;
+    return n;
+}

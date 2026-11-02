@@ -214,24 +214,41 @@ it started from (the text is free once created) and how the device can use it.
 ## 7. Descriptors without extra RAM
 
 The loaded multisig wallet is already in RAM (`ms_wallet`). The vault stores a
-binary copy of what is needed to rebuild it, never the descriptor text:
+binary copy of it (`desc_pack()` / `desc_unpack()` in `descriptor.c`), never
+the descriptor text:
 
 ```
-threshold (1) | key count (1) | flags: sorted (1) | account (4) |
-per key: fingerprint (4) | chain code (32) | public key (33)      = 69 bytes each
+format = 1 (1) | threshold (1) | key count (1) | flags (1: bit 0 sorted, bit 1 had a checksum) |
+per key: fingerprint (4) | origin_len (1) | origin (4 x 4, big endian) |
+         chain code (32) | public key (33)                     = 86 bytes each
 ```
 
-- Up to 6 keys fit in one record; 7 keys take two records (parts 1/2 and 2/2),
-  each encrypted and authenticated on its own.
-- Saving and loading go one record at a time through the existing 512 byte
-  sector buffer, straight from / into `ms_wallet`: no new buffer.
+- The origin path is kept: it gives "SWITCH TO ACCOUNT n" when our key is
+  there for another account, as with IMPORT DESCRIPTOR.
+- Body of the first record: the sector of the second record (2 bytes, big
+  endian, 0 if there is none), then the packed wallet; the second record
+  holds the rest. Up to 5 keys fit in one record (434 of 450 bytes); 6 and 7
+  keys take two records (parts 0x12 and 0x22), each encrypted and
+  authenticated on its own. The list shows only the first; DEL frees both.
+- Saving and loading go one record at a time through `buffer`; the packed
+  wallet waits in the park area of the fountain buffer (606 bytes at most).
 - Loading a DESCRIPTOR entry runs the same checks as IMPORT DESCRIPTOR
   (`descriptor_check_and_load()`: our key must be one of the cosigners, the
   account must match, review screen) before it becomes the active wallet.
 - It is shown (policy, fingerprints, receive address 0) but not edited; to
   change it, import the new one and delete the old entry.
-- Only available in multisig mode, from the wallet that is loaded: "SAVE TO VAULT"
-  on the descriptor review screen.
+- Saved from VAULT > NEW ENTRY > MULTISIG DESCRIPTOR, with no editor: FROM QR
+  (the IMPORT DESCRIPTOR scan, UR or static text QR; our m/48'/0'/n'/2' key
+  must be a cosigner, derived first if needed, so it also works in single
+  sig mode; the review has OK = SAVE and the active wallet is not changed)
+  or CURRENT MS DESCRIPTOR (the wallet loaded now; dark gray and skipped when
+  there is none). Not from SD: the vault card holds no file system. Title
+  "MULTISIG m OF n XXXX" (4 hex digits of a SHA256 of the packed wallet), one
+  confirmation with the cosigner fingerprints (ours in green). LOAD outside
+  multisig mode says "SWITCH TO MULTI SIG".
+- Also loaded from IMPORT DESCRIPTOR > FROM VAULT (multisig menu): the list of
+  the vault's DESCRIPTOR entries only; after a wallet is loaded it returns to
+  the IMPORT DESCRIPTOR menu, BACK in the review returns to the list.
 
 ## 8. RAM
 
@@ -372,9 +389,10 @@ working between steps.
    Build and memory report.
 8. *(done with step 7)* **EFF PASSWORD** in the new entry menu: generator, then the editor with
    `PASSWORD: <generated>` and the cursor on the title.
-9. **PASSPHRASE** entries: empty note with the preset title, text-only QR
+9. *(done: PASSPHRASE > FROM VAULT lists the PASSPHRASE entries, shows the
+   chosen one in full and USE makes it the passphrase)* **PASSPHRASE** entries: empty note with the preset title, text-only QR
    *(these two done with step 7)*, PASSPHRASE > FROM VAULT lists them and loads the text.
-10. **DESCRIPTOR** entries: SAVE TO VAULT on the descriptor review, one or two
+10. *(done, saved from NEW ENTRY > MULTISIG DESCRIPTOR, see section 7)* **DESCRIPTOR** entries: SAVE TO VAULT on the descriptor review, one or two
     records through `buffer`, listed in both modes but loaded only in multisig
     ("SWITCH TO MULTI SIG"), always through `descriptor_check_and_load()`.
 11. **Documentation and device tests**: `CLAUDE.md`; on real cards: timings,

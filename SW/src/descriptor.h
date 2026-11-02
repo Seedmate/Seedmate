@@ -91,4 +91,18 @@ const char *desc_error_text(desc_result_t r);
 // sorted (BIP67) if 'sorted'. out must hold 3 + 34 * n bytes. Returns its length.
 uint32_t desc_witness_script(const uint8_t keys[][33], uint8_t n, uint8_t m, bool sorted, uint8_t *out);
 
+// Compact binary copy of a wallet, for the vault: format (1), threshold (1),
+// key count (1), flags (1: bit 0 sorted, bit 1 had a checksum), then per key
+// fingerprint (4), origin_len (1), origin (4 x 4, big endian), chain code
+// (32), public key (33). Returns its length (DESC_PACK_LEN(key_count)).
+#define DESC_PACK_HEADER    4u
+#define DESC_PACK_KEY       86u
+#define DESC_PACK_LEN(n)    (DESC_PACK_HEADER + DESC_PACK_KEY * (n))
+#define DESC_PACK_MAX       DESC_PACK_LEN(DESC_MAX_KEYS)
+uint32_t desc_pack(const desc_wallet_t *w, uint8_t *out);
+
+// The reverse, strict: exact length, format 1, 1 <= threshold <= keys <= 7,
+// compressed keys. On false *out is cleared.
+bool desc_unpack(const uint8_t *in, uint32_t len, desc_wallet_t *out);
+
 #endif // DESCRIPTOR_H

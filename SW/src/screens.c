@@ -46,7 +46,7 @@ const uint8_t opsec_menu_ids[cOPSEC_n_opt] = {cMAIN_SSS, cMAIN_XOR, cMAIN_OBFUS,
 const char* const menu_tools[]    = {"QR READER", "QR FROM TEXT", "EFF PASSWORD", "REVIEW PSBT"};
 const char* const menu_backup[]   = {"SD", "SEEDQR", "COMPACT SEEDQR"};
 const char* const menu_passphrase[] = {"FROM KEYBOARD", "FROM QR", "FROM VAULT"};
-const char* const menu_create[]   = {"THROW COINS", "ROLL DICE", "RANDOM WORD PICK", "DRAW CARDS", "STOPWATCH TEST ONLY", "TRIPLE MNEMONIC"};
+const char* const menu_create[]   = {"THROW COINS", "ROLL DICE", "RANDOM WORD PICK", "POKER CARDS", "STOPWATCH TEST ONLY", "TRIPLE MNEMONIC"};
 const char* const menu_dice[]     = {"RAW ENTROPY BITS", "STRING HASH"};
 const char* const menu_hash[]     = {"1-6 MODE", "0-5 MODE (KEYSTONE)"};
 const char* const menu_size[]     = {"12 WORDS", "24 WORDS"};
@@ -60,6 +60,7 @@ const char* const menu_bip84[] = {"SIGN", "DERIVE", "VAULT", "XPUB/ZPUB", "ADDRE
 const char* const menu_addresses[] = {"RECEIVE ADDRESS", "CHANGE ADDRESS", "SCAN ADDRESS"};
 const char* const menu_bip84_multi[] = {"SIGN", "DERIVE", "VAULT", "XPUB/ZPUB", "IMPORT DESCRIPTOR", "PASSPHRASE", "ACCOUNT", "MODE: MULTI SIG", "UNLOAD SEED"};
 const char* const menu_sign[]     = {"FROM QR", "FROM SD"};
+const char* const menu_import[]   = {"FROM QR", "FROM SD", "FROM VAULT"};
 const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD", "QR SCAN"};
 
 void draw_hex16(unsigned int x, unsigned int y, uint16_t numero, int N, unsigned int color, unsigned int bg, unsigned int size) {

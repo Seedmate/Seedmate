@@ -101,6 +101,8 @@
 #define cSIGN_QR 0
 #define cSIGN_SD 1
 #define cSIGN_n_opt 2
+#define cSIGN_VAULT 2               // IMPORT DESCRIPTOR only
+#define cIMPORT_n_opt 3             // IMPORT DESCRIPTOR FROM: QR, SD, VAULT
 #define cOBFUS_SHIFT 0
 #define cOBFUS_NOT 1
 #define cOBFUS_ADD 2

@@ -18,6 +18,6 @@ gcc -std=c99 -Wall -Wextra -Wno-unused-parameter -O1 -I..\..\src test_sign.c ..\
 if errorlevel 1 exit /b 1
 .\test_sign.exe
 if errorlevel 1 exit /b 1
-gcc -std=c99 -Wall -Wextra -Wno-unused-parameter -O1 -I..\..\src test_descriptor.c ..\..\src\descriptor.c ..\..\src\psbt_sign.c ..\..\src\psbt.c ..\..\src\sha256.c ..\..\src\sha512.c ..\..\src\kdf.c ..\..\src\crypto\bignum.c ..\..\src\crypto\ecdsa.c ..\..\src\crypto\secp256k1.c ..\..\src\crypto\segwit_addr.c ..\..\src\SSS\memzero.c -o test_descriptor.exe
+gcc -std=c99 -Wall -Wextra -Wno-unused-parameter -O1 -I..\..\src test_descriptor.c ..\..\src\descriptor.c ..\..\src\ur_encode.c ..\..\src\bytewords.c ..\..\src\psbt_sign.c ..\..\src\psbt.c ..\..\src\sha256.c ..\..\src\sha512.c ..\..\src\kdf.c ..\..\src\crypto\bignum.c ..\..\src\crypto\ecdsa.c ..\..\src\crypto\secp256k1.c ..\..\src\crypto\segwit_addr.c ..\..\src\SSS\memzero.c -o test_descriptor.exe
 if errorlevel 1 exit /b 1
 .\test_descriptor.exe
