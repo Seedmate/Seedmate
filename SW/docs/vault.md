@@ -1,4 +1,4 @@
-# Seedmate vault - design (draft for review, nothing implemented yet)
+# Seedmate vault - design (in progress, see section 12)
 
 The vault keeps small secrets on the seed SD card (notes, logins, card data,
 passphrases, multisig wallets), encrypted with a key that only the loaded seed
@@ -76,24 +76,32 @@ vault_key = BIP85 HEX, 32 bytes, index 8377      (m/83696968'/128169'/32'/8377')
 | 9 | 7 | Reserved, 0 |
 | 16 | 8 | `write_counter`, big endian |
 | 24 | 8 | `vault_id`: random number written by INITIALIZE CARD, identifies the card |
-| 32 | 194 | Occupancy bitmap: bit n = sector 502+n in use (1545 bits) |
+| 32 | 194 | Occupancy bitmap: bit n (byte n/8, bit n%8, LSB first) = sector 502+n in use (1545 bits) |
 | 226 | 282 | Reserved, 0 |
 | 508 | 4 | CRC32 of bytes 0..507 (`ur_crc32_update`) |
 
-- INITIALIZE CARD writes the header: magic, version, `vault_id`, counter 0 and
-  an empty bitmap. `vault_id` = the first 8 bytes of SHA-256(entropy pool,
-  timer, "VAULT"), where the pool is the one the Shamir coefficients use
-  (timer jitter of every key press, `update_entropy_coefficients()`).
+- INITIALIZE CARD writes the header: magic, version, `vault_id`, the first
+  `write_counter` and an empty bitmap. Hash = SHA-256(entropy pool, timers,
+  "VAULT"), where the pool is the one the Shamir coefficients use (timer jitter
+  of every key press, `update_entropy_coefficients()`, cleared afterwards since
+  both values are public): `vault_id` = bytes 0..7, first counter = bytes 8..15
+  shifted right by one (top bit clear, it never wraps).
+- The first counter is random, not 0: two cards holding a vault of the same
+  seed (a copy, a second card), or the same card initialized again, would
+  otherwise start at the same counter and reuse nonces with the same key,
+  which breaks AES-GCM (XOR of the texts, forged records).
 - A card without a valid header (initialized by an older firmware, or damaged)
   is not written: "VAULT MAP DAMAGED, INITIALIZE THE CARD". Reading what can
   be read still works.
 - The bitmap says which sectors are taken, not by whom: several vaults (other
   passphrases) can share a card without overwriting each other. It reveals how
   many sectors are used, nothing else.
-- Write order for a new or edited entry: the record (with the next counter
-  value), then the header with the counter and its bit. The device runs on
-  batteries, so power loss in the middle is not a design case; the order is
-  simply the natural one.
+- Write order for a new or edited entry: (1) the header with the counter
+  advanced by the number of records (the nonces are recorded as used before
+  any of them is written), (2) the records, each read back and decrypted,
+  (3) the header with the new bits set and the old ones cleared, (4) the old
+  records overwritten with zeros. A write that fails half way leaves the old
+  entry and never a reused nonce, even if the vault is closed and opened again.
 - `vault_id` is not secret. It only lets the device notice that the card in the
   slot is not the one the vault was opened from (see 5b): two cards that both
   have a vault have the same magic, but not the same random id.
@@ -104,7 +112,7 @@ vault_key = BIP85 HEX, 32 bytes, index 8377      (m/83696968'/128169'/32'/8377')
 |---|---|---|
 | 0 | 2 | Magic `VR` |
 | 2 | 1 | Version = 1 |
-| 3 | 1 | Part: high nibble = part index, low nibble = parts in the entry (1 or 2) |
+| 3 | 1 | Part: high nibble = part index (1..), low nibble = parts in the entry (1 or 2): 0x11 single, 0x12 / 0x22 two parts |
 | 4 | 4 | Sector number, big endian (also in the AAD) |
 | 8 | 12 | Nonce |
 | 20 | 476 | Ciphertext |
@@ -231,14 +239,14 @@ Nothing new is allocated, but buffers are shared, so who uses what is fixed:
 
 | Buffer | Size | Use while the vault is open |
 |---|---|---|
-| `buffer` (SD sector) | 512 B | Only SD reads and writes of one record (ciphertext); also the text of a QR being shown, never at the same time as SD I/O |
-| Fountain scratch | 8.7 KB | List: 255 x (sector 2 B + title 21 B) = 5.9 KB; then the plain text of the entry being viewed or edited (title 21 + text 401 B) |
+| `buffer` (SD sector) | 512 B | SD reads and writes of one record (ciphertext); the text being edited while the editor is open (no SD I/O then); the text of a QR being shown |
+| Fountain scratch | 8.7 KB | List: 255 x 24 B (sector 2, type 1, title 21) = 6.1 KB, bitmap copy 194 B; the last 512 B belong to the QR key of the editor |
 | Vault key | 32 B static | From wallet load to UNLOAD SEED (see 2) |
 
 - At most **255 entries** per vault (the list area).
-- The QR insert key of the editor must not read into the fountain buffer (it
-  would overwrite the list and the text): it reads into `buffer`, at most 400
-  characters, since no SD I/O happens while the editor is open.
+- The QR insert key of the editor reads into the last 512 B of the fountain
+  buffer (`editor_qr_read()`): `buffer` holds the text being edited and the
+  start of the fountain buffer the list.
 - Everything is wiped when leaving the vault.
 
 Titles and texts are shown as typed (lower case allowed), as data, like the
@@ -318,7 +326,8 @@ written from it.
 ## 11. Cost estimate
 
 - Flash: AES + GCM from trezor-crypto, the vault screens and the format, around
-  10-14 KB (today 169.4 KB of 238 KB used).
+  10-14 KB (today 169.4 KB of 238 KB used). Measured with step 7: about 16 KB
+  (AES-GCM 6.5 KB, format 2 KB, screens 6 KB, the rest editor and EFF keys).
 - RAM: none new (see 8).
 
 ## 12. Order of work
@@ -339,29 +348,32 @@ working between steps.
    with NIST GCM vectors and byte-exact records against a Python reference
    (`test/vault/gen_vault.py`, also the reference for the HTML page). Measure
    on the device the time to read and decrypt one record; flash report.
-4. **Format** (`vault.c`, no UI): header (magic, `vault_id`, counter, bitmap,
+4. *(done, host tested; reached by the screens of step 7)* **Format** (`vault.c`, no UI): header (magic, `vault_id`, counter, bitmap,
    CRC) written by INITIALIZE CARD *(done)*, free sector search, write and read-back
    check, delete, edit (new sector first, then free the old one), card swapped
    check (marker, `vault_id` and counter read again before every write),
    no write with a damaged header. Host test with a mock SD card: no nonce
    reused, a swapped card is refused.
-5. **Listing**: scan the marked sectors, keep ours, count the others, sort
+5. *(done: `vault_scan()`, host tested)* **Listing**: scan the marked sectors, keep ours, count the others, sort
    alphabetically in the fountain buffer, 255 entries; host test.
-6. **Text editor keys**: the RETURN key split in three columns, RETURN, **QR**
+6. *(done)* **Text editor keys**: the RETURN key split in three columns, RETURN, **QR**
    and a **die** (EFF). The die runs the EFF dice generator turned into a
-   function that both TOOLS and the editor call; QR scans into `buffer`,
+   function that both TOOLS and the editor call; QR scans into the end of the fountain buffer,
    previews with the length, and OK inserts at the cursor (400 character
    limit, printable ASCII only). Useful already for the passphrase.
-7. **Vault screens, notes**: VAULT in the wallet menu, opening with progress
+7. *(done; also a card initialized before the vault existed, whose header
+   sector is blank, is offered "CREATE AN EMPTY VAULT" without touching
+   anything else; the list counts other keys' records as "+n OTHERS")*
+   **Vault screens, notes**: VAULT in the wallet menu, opening with progress
    and the fingerprint, "EMPTY VAULT", list (LOAD / DEL / EDIT / NEW, paging,
    cursor kept), view with scroll and QR (VIEW only), new entry menu with
    NOTE, LOGIN and CREDIT CARD templates, title of 20 characters, save and
    delete confirmations, every error of section 9 and 5b.
    Build and memory report.
-8. **EFF PASSWORD** in the new entry menu: generator, then the editor with
+8. *(done with step 7)* **EFF PASSWORD** in the new entry menu: generator, then the editor with
    `PASSWORD: <generated>` and the cursor on the title.
-9. **PASSPHRASE** entries: empty note with the preset title, text-only QR,
-   PASSPHRASE > FROM VAULT lists them and loads the text.
+9. **PASSPHRASE** entries: empty note with the preset title, text-only QR
+   *(these two done with step 7)*, PASSPHRASE > FROM VAULT lists them and loads the text.
 10. **DESCRIPTOR** entries: SAVE TO VAULT on the descriptor review, one or two
     records through `buffer`, listed in both modes but loaded only in multisig
     ("SWITCH TO MULTI SIG"), always through `descriptor_check_and_load()`.

@@ -172,8 +172,9 @@ char bip84_passphrase[200] = {0}; // Holds the optional BIP39 passphrase
 
 //Text editor
 // Title on line y=2, text in a 5-line window (y 15..63) and the keyboard
-// below the separator: 3 rows of 9 keys plus a column for CANCEL / SAVE /
-// RETURN, then the 2x3 control keys at the bottom left of the button grid.
+// below the separator: 3 rows of 9 keys plus a column for CANCEL / SAVE and
+// a last row split in RETURN / QR / die, then the 2x3 control keys at the
+// bottom left of the button grid.
 #define EDITOR_TEXT_TOP     15
 #define EDITOR_TEXT_HEIGHT  50      // 5 lines of 10 px
 #define EDITOR_TEXT_CLEAR_Y 64      // Last pixel row of the text area
@@ -186,6 +187,8 @@ char bip84_passphrase[200] = {0}; // Holds the optional BIP39 passphrase
 #define KBD_ROWS            3
 #define KBD_SIDE_LEFT       112     // Column of CANCEL / SAVE / RETURN
 #define KBD_SIDE_RIGHT      158
+#define KBD_SPLIT_1         127     // Last row of the side column: RETURN | QR | die
+#define KBD_SPLIT_2         142
 #define KBD_BOX_COLOR       0x8410  // Dark gray key outlines
 // 2x3 control keys (aA, up, #@ / left, down, right): rows aligned with the
 // button grid, in their own box that ends 5 px left of it (x 1-58)
@@ -193,11 +196,15 @@ char bip84_passphrase[200] = {0}; // Holds the optional BIP39 passphrase
 #define KBD_CTRL_ROW_H      10
 
 // Keyboard focus indices: 0..26 are the keys (26 is the space), then the
-// side column; 30..35 are the control keys
+// side column; 30..35 are the control keys; 36, 37 the QR and die keys
+// next to RETURN
 #define KBD_SPACE   26
 #define KBD_CANCEL  27
 #define KBD_SAVE    28
 #define KBD_RETURN  29
+#define KBD_QR      36
+#define KBD_DIE     37
+#define KBD_LAST    37
 
 #define LAYER_ABC 0
 #define LAYER_ABC_UPPER 1
@@ -1000,10 +1007,21 @@ static char kbd_key_char(int idx, int layer) {
     return charset[idx];
 }
 
-// --- Keyboard focus as (row, column): column KBD_COLS is the side column ---
-static int kbd_key_row(int idx) { return (idx >= KBD_CANCEL) ? idx - KBD_CANCEL : idx / KBD_COLS; }
-static int kbd_key_col(int idx) { return (idx >= KBD_CANCEL) ? KBD_COLS : idx % KBD_COLS; }
-static int kbd_key_at(int row, int col) { return (col == KBD_COLS) ? KBD_CANCEL + row : row * KBD_COLS + col; }
+// --- Keyboard focus as (row, column): column KBD_COLS is the side column;
+// the last row has two more columns, QR and die ---
+static bool kbd_in_keys(int idx) { return idx <= KBD_RETURN || idx == KBD_QR || idx == KBD_DIE; }
+static int kbd_key_row(int idx) {
+    return (idx == KBD_QR || idx == KBD_DIE) ? KBD_ROWS - 1 : (idx >= KBD_CANCEL) ? idx - KBD_CANCEL : idx / KBD_COLS;
+}
+static int kbd_key_col(int idx) {
+    return (idx == KBD_QR) ? KBD_COLS + 1 : (idx == KBD_DIE) ? KBD_COLS + 2 :
+           (idx >= KBD_CANCEL) ? KBD_COLS : idx % KBD_COLS;
+}
+static int kbd_row_cols(int row) { return (row == KBD_ROWS - 1) ? KBD_COLS + 3 : KBD_COLS + 1; }
+static int kbd_key_at(int row, int col) {
+    if (col > KBD_COLS) return (row == KBD_ROWS - 1) ? ((col == KBD_COLS + 1) ? KBD_QR : KBD_DIE) : KBD_CANCEL + row;
+    return (col == KBD_COLS) ? KBD_CANCEL + row : row * KBD_COLS + col;
+}
 // Control key of the upper row (30 aA, 31 up, 32 #@) under a keyboard column
 static int kbd_control_below(int col) { return (col <= 1) ? 30 : (col == 2) ? 31 : 32; }
 
@@ -1020,6 +1038,8 @@ static void draw_keyboard_boxes(void) {
     }
     drawFastVLine(KBD_SIDE_LEFT, KBD_TOP, height, KBD_BOX_COLOR);
     drawFastVLine(KBD_SIDE_RIGHT, KBD_TOP, height, KBD_BOX_COLOR);
+    drawFastVLine(KBD_SPLIT_1, KBD_TOP + 2 * KBD_CELL_H, KBD_CELL_H + 1, KBD_BOX_COLOR);
+    drawFastVLine(KBD_SPLIT_2, KBD_TOP + 2 * KBD_CELL_H, KBD_CELL_H + 1, KBD_BOX_COLOR);
 
     // Control keys: columns at x 1, 20, 39, 58, apart from the button grid
     for (int r = 0; r <= 2; r++) {
@@ -1061,8 +1081,19 @@ static void draw_keyboard_key(int idx, int active_layer, bool is_selected, bool 
     } else if (idx == KBD_SAVE) {
         drawtext(KBD_SIDE_LEFT + 6, KBD_TOP + KBD_CELL_H + 2, " SAVE ", color, bg, 1);
 
+    } else if (idx == KBD_QR) {
+        drawtext(KBD_SPLIT_1 + 2, KBD_TOP + 2 * KBD_CELL_H + 2, "QR", color, bg, 1);
+    } else if (idx == KBD_DIE) {
+        // A die showing three: outline and a diagonal of pips
+        int dx = KBD_SPLIT_2 + 3;
+        int dy = KBD_TOP + 2 * KBD_CELL_H + 1;
+        drawFastHLine(dx, dy, 9, color);
+        drawFastHLine(dx, dy + 8, 9, color);
+        drawFastVLine(dx, dy, 9, color);
+        drawFastVLine(dx + 8, dy, 9, color);
+        for (int k = 2; k <= 6; k += 2) rectan(dx + k, dy + k, dx + k, dy + k, color);
     } else if (idx == KBD_RETURN) {
-        int sx = 132;
+        int sx = KBD_SIDE_LEFT + 4;
         int sy = KBD_TOP + 2 * KBD_CELL_H + 2;
         uint16_t c = is_selected ? ST7735_ORANGE : (allow_newlines ? ST7735_WHITE : 0x8410); // 0x8410 is Dark Gray
         
@@ -1194,6 +1225,36 @@ static bool editor_review_passphrase(const char* text, int len) {
 }
 
 
+// The next editor opens with the cursor on the title (vault templates)
+static bool editor_title_first;
+
+// Editor insert keys, defined with the EFF and QR READER code
+static int wait_any_key(void);
+static void fast_itoa(uint32_t val, char* buf);
+static int eff_generate(char *out);
+static int editor_qr_read(char *out, int room, bool newlines);
+#define cEFF_TEXT_MAX   (cEFF_MAX_WORDS * 8 - 1)    // EFF password: words of up to 6 letters, digit, space
+
+// --- The text generated does not fit in what is left of the field: nothing
+// is inserted, and the screen says why ---
+static void editor_no_room(int need, int room) {
+    char text[26];
+    char num[12];
+    black_screen();
+    draw_title("NOT INSERTED", ST7735_RED);
+    strcpy(text, "THE PASSWORD HAS ");
+    fast_itoa((uint32_t)need, num);
+    strcat(text, num);
+    drawtext(5, 25, text, ST7735_WHITE, ST7735_BLACK, 1);
+    strcpy(text, "CHARS, ONLY ");
+    fast_itoa((uint32_t)room, num);
+    strcat(text, num);
+    strcat(text, " LEFT");
+    drawtext(5, 35, text, ST7735_RED, ST7735_BLACK, 1);
+    grid_OK_only();
+    while (wait_any_key() != OK_BT) { }
+}
+
 // --- Main Modal Function ---
 bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len, bool allow_newlines) {
     int cursor_idx = 0; // Keyboard focus
@@ -1208,8 +1269,9 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
     int title_len = strlen(title);
     int title_cursor = title_len;
     int prev_title_cursor = title_cursor;
-    bool editing_title = false;
-    bool prev_editing_title = false;
+    bool editing_title = editor_title_first && allow_newlines;
+    bool prev_editing_title = !editing_title;
+    editor_title_first = false;
     bool title_changed = true;
     
     int scroll_y = EDITOR_TEXT_TOP;
@@ -1230,7 +1292,7 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
             draw_keyboard_boxes();
             grid_keyboard(); 
             
-            for (int i = 0; i <= 35; i++) {
+            for (int i = 0; i <= KBD_LAST; i++) {
                 draw_keyboard_key(i, active_layer, (i == cursor_idx), allow_newlines);
             }
             
@@ -1339,6 +1401,40 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
                     black_screen();
                     full_redraw = true;
                 } 
+                else if (cursor_idx == KBD_QR || cursor_idx == KBD_DIE) {
+                    // Text from a QR code or an EFF dice password, at the cursor
+                    char *field = editing_title ? title : buffer;
+                    int *len = editing_title ? &title_len : &text_len;
+                    int *cur = editing_title ? &title_cursor : &text_cursor;
+                    int room = (editing_title ? max_title_len : max_len) - 1 - *len;
+                    char add[cEFF_TEXT_MAX + 1];
+                    char *src = add;
+                    int n;
+
+                    LED = 0;
+                    if (cursor_idx == KBD_QR) {
+                        // Copied straight behind the cursor: the field has 'room' free bytes
+                        memmove(&field[*cur + room], &field[*cur], *len - *cur + 1);
+                        n = editor_qr_read(&field[*cur], room, allow_newlines && !editing_title);
+                        memmove(&field[*cur + n], &field[*cur + room], *len - *cur + 1);
+                        src = NULL;
+                    } else {
+                        n = eff_generate(add);
+                        if (n > room) {
+                            editor_no_room(n, room);
+                            n = 0;
+                        }
+                    }
+                    if (src != NULL && n > 0) {
+                        memmove(&field[*cur + n], &field[*cur], *len - *cur + 1);
+                        memcpy(&field[*cur], src, (size_t)n);
+                    }
+                    memzero(add, sizeof(add));
+                    *len += n;
+                    *cur += n;
+                    black_screen();
+                    full_redraw = true;
+                }
                 else if (cursor_idx == 30) { // Toggle aA
                     if (active_layer == LAYER_ABC) active_layer = LAYER_ABC_UPPER;
                     else if (active_layer == LAYER_ABC_UPPER) active_layer = LAYER_ABC;
@@ -1431,8 +1527,9 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
             delay_ms(30);
             if (BT6 == 0) {
                 update_entropy_coefficients();
-                if (cursor_idx <= KBD_RETURN) {
-                    cursor_idx = kbd_key_at(kbd_key_row(cursor_idx), (kbd_key_col(cursor_idx) + 1) % (KBD_COLS + 1));
+                if (kbd_in_keys(cursor_idx)) {
+                    int row = kbd_key_row(cursor_idx);
+                    cursor_idx = kbd_key_at(row, (kbd_key_col(cursor_idx) + 1) % kbd_row_cols(row));
                 }
                 else if (cursor_idx == 30) cursor_idx = 31; 
                 else if (cursor_idx == 31) cursor_idx = 32; 
@@ -1450,8 +1547,10 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
             delay_ms(30);
             if (BT2 == 0) {
                 update_entropy_coefficients();
-                if (cursor_idx <= KBD_RETURN) {
-                    cursor_idx = kbd_key_at(kbd_key_row(cursor_idx), (kbd_key_col(cursor_idx) + KBD_COLS) % (KBD_COLS + 1));
+                if (kbd_in_keys(cursor_idx)) {
+                    int row = kbd_key_row(cursor_idx);
+                    int cols = kbd_row_cols(row);
+                    cursor_idx = kbd_key_at(row, (kbd_key_col(cursor_idx) + cols - 1) % cols);
                 }
                 else if (cursor_idx == 30) cursor_idx = 32; 
                 else if (cursor_idx == 31) cursor_idx = 30; 
@@ -1469,7 +1568,7 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
             delay_ms(30);
             if (BT4 == 0) {
                 update_entropy_coefficients();
-                if (cursor_idx <= KBD_RETURN) {
+                if (kbd_in_keys(cursor_idx)) {
                     int row = kbd_key_row(cursor_idx);
                     int col = kbd_key_col(cursor_idx);
                     cursor_idx = (row < KBD_ROWS - 1) ? kbd_key_at(row + 1, col) : kbd_control_below(col);
@@ -1488,7 +1587,7 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
             delay_ms(30);
             if (BT5 == 0) {
                 update_entropy_coefficients();
-                if (cursor_idx <= KBD_RETURN) {
+                if (kbd_in_keys(cursor_idx)) {
                     int row = kbd_key_row(cursor_idx);
                     int col = kbd_key_col(cursor_idx);
                     cursor_idx = (row > 0) ? kbd_key_at(row - 1, col) : kbd_control_below(col) + 3;
@@ -5028,23 +5127,35 @@ static void psbt_progress_begin(const char *title) {
 
 // Redraws the step lines (any may be NULL) and moves the bar to done/total.
 // what: e.g. "INPUT 2 OF 3"; detail: e.g. a derivation path; step: the action.
+// One line of the progress screen, padded with spaces to the screen width so
+// it covers the previous text without clearing it first (no flicker)
+static void progress_line(int y, const char *s) {
+    char text[PSBT_VIEW_LINE_CHARS];
+    size_t n = (s != NULL) ? strlen(s) : 0;
+    if (n > sizeof(text) - 1) n = sizeof(text) - 1;
+    memset(text, ' ', sizeof(text) - 1);
+    if (n > 0) memcpy(text, s, n);
+    text[sizeof(text) - 1] = '\0';
+    drawtext(5, y, text, ST7735_CYAN, ST7735_BLACK, 1);
+}
+
 static void psbt_progress_step(const char *what, const char *detail, const char *step,
                                uint32_t done, uint32_t total) {
+    static uint32_t detail_hash;            // Detail on screen (FNV-1a), redrawn only when it changes
+    uint32_t h = 2166136261u;
     char text[PSBT_PATH_STR_LEN];
 
-    rectan(0, 20, 159, 72, BLACK);
-    if (what != NULL) {
-        strcpy(text, what);
-        drawtext(5, 25, text, ST7735_CYAN, ST7735_BLACK, 1);
+    progress_line(25, what);
+    for (const char *c = (detail != NULL) ? detail : ""; *c; c++) h = (h ^ (uint8_t)*c) * 16777619u;
+    if (done == 0 || h != detail_hash) {    // First step of a flow, or a new path
+        detail_hash = h;
+        rectan(0, 35, 159, 56, BLACK);
+        if (detail != NULL) {
+            strcpy(text, detail);
+            draw_bip84_wrapped_text(text, 5, 37, PSBT_VIEW_LINE_CHARS, 2);
+        }
     }
-    if (detail != NULL) {
-        strcpy(text, detail);
-        draw_bip84_wrapped_text(text, 5, 37, PSBT_VIEW_LINE_CHARS, 2);
-    }
-    if (step != NULL) {
-        strcpy(text, step);
-        drawtext(5, 62, text, ST7735_CYAN, ST7735_BLACK, 1);
-    }
+    progress_line(62, step);
     uint32_t fill = (total > 0) ? (140u * done) / total : 0;
     if (fill > 0) rectan(10, 121, 10 + fill, 124, ST7735_GREEN);
 }
@@ -6335,14 +6446,31 @@ static uint8_t eff_done;                    // Words completed
 static uint8_t eff_dice[4];                 // Dice of the current word
 static uint8_t eff_ndice;
 static uint8_t eff_key;                     // Selected die key, 0..5 = 1..6
+static bool eff_rolling;                    // Dice screen (false: configuration)
 
+// Wipes the words and dice (the result text belongs to the caller)
 static void eff_wipe(void) {
     memzero(eff_index, sizeof(eff_index));
     memzero(eff_digit, sizeof(eff_digit));
     memzero(eff_dice, sizeof(eff_dice));
     eff_done = 0;
     eff_ndice = 0;
-    memzero(buffer, sizeof(buffer));        // The result text
+}
+
+// Waits for one of the six keys (pressed and released) in a modal screen,
+// feeding the key press entropy pool like the main loop does
+static int wait_any_key(void) {
+    while (BT_OK == 0 || BT1 == 0 || BT2 == 0 || BT4 == 0 || BT5 == 0 || BT6 == 0) SYS_Tasks();
+    delay_ms(30);
+    while (1) {
+        SYS_Tasks();
+        int bt = (BT_OK == 0) ? OK_BT : (BT1 == 0) ? BACK_BT : (BT2 == 0) ? LEFT_BT :
+                 (BT4 == 0) ? DOWN_BT : (BT5 == 0) ? UP_BT : (BT6 == 0) ? RIGHT_BT : NONE;
+        if (bt == NONE) continue;
+        delay_ms(30);
+        update_entropy_coefficients();
+        return bt;
+    }
 }
 
 // Digit 0..9 from the timer: its first nibble below 10
@@ -6461,23 +6589,130 @@ static void print_eff_result(void) {
     estado = EFF_RESULT;
 }
 
-// The text of the password in buffer (for its QR)
-static void eff_build_result(void) {
+// The text of the password, lower case with one space between words, in out
+// (at least cEFF_TEXT_MAX + 1 bytes)
+static void eff_build_result(char *out) {
     char w[8];
-    buffer[0] = '\0';
+    out[0] = '\0';
     for (int i = 0; i < eff_done; i++) {
         eff_word_text(i, false, w);
-        if (i > 0) strcat((char *)buffer, " ");
-        strcat((char *)buffer, w);
+        if (i > 0) strcat(out, " ");
+        strcat(out, w);
     }
     memzero(w, sizeof(w));
+}
+
+typedef enum { EFF_GOING, EFF_LEFT, EFF_FINISHED } eff_step_t;
+
+// One key on the configuration or the dice screen (shared by EFF PASSWORD in
+// TOOLS and by the die key of the text editor). EFF_LEFT: BACK on the
+// configuration; EFF_FINISHED: every word is complete.
+static eff_step_t eff_key_press(int bt) {
+    if (!eff_rolling) {
+        switch (bt) {
+            case OK_BT:
+                eff_wipe();
+                eff_key = 0;
+                eff_rolling = true;
+                print_eff_roll(EFF_DRAW_FULL);
+                break;
+            case BACK_BT:
+                return EFF_LEFT;
+            case UP_BT:
+            case DOWN_BT:
+                if (eff_cursor == 1) {
+                    eff_numbers = !eff_numbers;
+                } else if (bt == UP_BT && eff_words < cEFF_MAX_WORDS) {
+                    eff_words++;
+                } else if (bt == DOWN_BT && eff_words > 1) {
+                    eff_words--;
+                }
+                print_eff_config(false);
+                break;
+            case LEFT_BT:
+            case RIGHT_BT:
+                eff_cursor = (bt == RIGHT_BT) ? 1 : 0;
+                print_eff_config(false);
+                break;
+            default:
+                break;
+        }
+        return EFF_GOING;
+    }
+
+    uint8_t parts = 0;
+    switch (bt) {
+        case OK_BT:                         // One die
+            eff_dice[eff_ndice++] = (uint8_t)(eff_key + 1);
+            if (eff_ndice == 4) {
+                parts = EFF_DRAW_WORDS;
+                eff_index[eff_done] = (uint16_t)((eff_dice[0] - 1) * 216 + (eff_dice[1] - 1) * 36 +
+                                                 (eff_dice[2] - 1) * 6 + (eff_dice[3] - 1));
+                eff_digit[eff_done] = eff_numbers ? timer_digit() : 0;
+                eff_done++;
+                eff_ndice = 0;
+                memzero(eff_dice, sizeof(eff_dice));
+                if (eff_done == eff_words) {
+                    eff_rolling = false;
+                    return EFF_FINISHED;
+                }
+            }
+            break;
+        case BACK_BT:                       // DEL: the last die, else the last word
+            if (eff_ndice > 0) {
+                eff_ndice--;
+                eff_dice[eff_ndice] = 0;
+            } else if (eff_done > 0) {
+                eff_done--;
+                eff_index[eff_done] = 0;
+                eff_digit[eff_done] = 0;
+                parts = EFF_DRAW_WORDS;
+            } else {
+                eff_rolling = false;        // Nothing entered: back to the settings
+                print_eff_config(true);
+                return EFF_GOING;
+            }
+            break;
+        case LEFT_BT:
+            eff_key = (uint8_t)((eff_key + 5) % 6);
+            break;
+        case RIGHT_BT:
+            eff_key = (uint8_t)((eff_key + 1) % 6);
+            break;
+        default:
+            return EFF_GOING;
+    }
+    print_eff_roll(parts);
+    return EFF_GOING;
 }
 
 static void eff_open(void) {
     eff_wipe();
     eff_cursor = 0;
+    eff_rolling = false;
     print_eff_config(true);
     estado = EFF_CONFIG;
+}
+
+// Die key of the text editor: the same EFF screens, then the password goes to
+// out. Returns its length, 0 if BACK left the configuration screen.
+static int eff_generate(char *out) {
+    eff_wipe();                             // Same screens, the state machine untouched
+    eff_cursor = 0;
+    eff_rolling = false;
+    print_eff_config(true);
+    while (1) {
+        eff_step_t r = eff_key_press(wait_any_key());
+        if (r == EFF_LEFT) {
+            eff_wipe();
+            return 0;
+        }
+        if (r == EFF_FINISHED) {
+            eff_build_result(out);
+            eff_wipe();
+            return (int)strlen(out);
+        }
+    }
 }
 
 // QR READER: the last code read, kept in the fountain buffer while it is shown
@@ -6487,6 +6722,9 @@ static int reader_len;              // Bytes read; 0 none, -1 too long or bytes 
 static int reader_page;
 static bool reader_hex;             // Not printable: shown in hexadecimal
 static bool reader_passphrase;      // Opened from PASSPHRASE FROM QR: OK uses the text read
+static bool reader_insert;          // Opened from the QR key of the text editor
+static int reader_room;             // Insert mode: characters left in the editor
+static bool reader_newlines;        // Insert mode: line breaks allowed
 static int passphrase_pointer = 0;  // Selected entry of the PASSPHRASE FROM menu
 
 static void print_passphrase_menu(void) {
@@ -6505,7 +6743,20 @@ static bool reader_passphrase_ok(void) {
 }
 
 static const char *reader_title(void) {
-    return reader_passphrase ? "PASSPHRASE FROM QR" : menu_tools[cTOOLS_READER];
+    return reader_insert ? "INSERT FROM QR" : reader_passphrase ? "PASSPHRASE FROM QR" : menu_tools[cTOOLS_READER];
+}
+
+// Insert mode: characters the text adds (a CR is dropped), -1 if it holds a
+// character the editor cannot take
+static int reader_insert_chars(void) {
+    int n = 0;
+    for (int i = 0; i < reader_len; i++) {
+        uint8_t c = reader_data[i];
+        if (c == '\r' && reader_newlines) continue;
+        if ((c < 0x20 || c > 0x7E) && !(c == '\n' && reader_newlines)) return -1;
+        n++;
+    }
+    return n;
 }
 
 #define READER_COLS 25
@@ -6575,6 +6826,10 @@ static void print_reader_screen(void) {
         if (reader_len < 0) {
             drawtext(5, 20, "QR TOO LONG OR", ST7735_RED, ST7735_BLACK, 1);
             drawtext(5, 30, "DATA LOST", ST7735_RED, ST7735_BLACK, 1);
+        } else if (reader_page < 0 && reader_insert) {         // Nothing scanned yet
+            drawtext(5, 20, "SCAN A QR CODE", ST7735_WHITE, ST7735_BLACK, 1);
+            drawtext(5, 35, "ITS TEXT IS SHOWN, THEN", ST7735_WHITE, ST7735_BLACK, 1);
+            drawtext(5, 45, "ADDED AT THE CURSOR", ST7735_WHITE, ST7735_BLACK, 1);
         } else if (reader_page < 0 && reader_passphrase) {     // Nothing scanned yet
             drawtext(5, 20, "SCAN THE PASSPHRASE QR", ST7735_WHITE, ST7735_BLACK, 1);
             drawtext(5, 35, "IT IS SHOWN TO CONFIRM", ST7735_WHITE, ST7735_BLACK, 1);
@@ -6587,6 +6842,35 @@ static void print_reader_screen(void) {
             drawtext(5, 20, "NO QR DETECTED", ST7735_RED, ST7735_BLACK, 1);
         }
         grid_scan_back();
+        return;
+    }
+
+    if (reader_insert) {                        // Shown in full, OK inserts it
+        int n = reader_insert_chars();
+        bool ok = !reader_hex && n > 0 && n <= reader_room;
+        strcpy(text, ok ? "TEXT, " : "NOT INSERTED, ");
+        fast_itoa((uint32_t)reader_len, num);
+        strcat(text, num);
+        strcat(text, reader_hex ? " BYTES" : " CHARS");
+        drawtext(1, 12, text, ok ? ST7735_CYAN : ST7735_RED, ST7735_BLACK, 1);
+        if (!ok) {
+            if (reader_hex || n < 0) {
+                drawtext(5, 30, reader_newlines ? "NOT PLAIN TEXT" : "NOT PLAIN TEXT ON ONE",
+                         ST7735_RED, ST7735_BLACK, 1);
+                drawtext(5, 40, reader_newlines ? "(A-Z, 0-9, SYMBOLS)" : "LINE (A-Z, 0-9, SYMBOLS)",
+                         ST7735_RED, ST7735_BLACK, 1);
+            } else {
+                strcpy(text, "ONLY ");
+                fast_itoa((uint32_t)reader_room, num);
+                strcat(text, num);
+                strcat(text, " CHARS LEFT");
+                drawtext(5, 30, "DOES NOT FIT IN THE TEXT", ST7735_RED, ST7735_BLACK, 1);
+                drawtext(5, 40, text, ST7735_RED, ST7735_BLACK, 1);
+            }
+            grid_scan_back();
+            return;
+        }
+        reader_draw_pages("ADD");
         return;
     }
 
@@ -6657,14 +6941,656 @@ static void reader_wipe(void) {
     reader_len = 0;
 }
 
+// Reads one code into reader_data and shows it
+static void reader_scan(void) {
+    black_screen();
+    draw_title((char *)reader_title(), ST7735_LIGHTGREY);
+    drawtext(5, 20, "SCANNING...", ST7735_CYAN, ST7735_BLACK, 1);
+    reader_wipe();
+    reader_len = qr_read_raw(reader_data, reader_cap);
+    reader_hex = false;
+    for (int i = 0; i < reader_len; i++) {
+        uint8_t c = reader_data[i];
+        if ((c < 0x20 && c != '\n' && c != '\r' && c != '\t') || c >= 0x7F) reader_hex = true;
+    }
+    reader_page = 0;
+    print_reader_screen();
+}
+
+// QR key of the text editor: scans a code, shows it in full and, on ADD,
+// copies it to out (at most 'room' characters, CR dropped, line breaks only
+// if 'newlines'). Reads into the last 512 bytes of the fountain buffer: the
+// editor text is in buffer, and a vault keeps its list at the start of the
+// fountain buffer. Returns the characters copied, 0 if BACK.
+static int editor_qr_read(char *out, int room, bool newlines) {
+    uint32_t size;
+    uint8_t *scratch = fountain_scratch_buffer(&size);
+    int n = 0;
+
+    reader_insert = true;
+    reader_room = room;
+    reader_newlines = newlines;
+    reader_data = scratch + size - 512;
+    reader_cap = 512;
+    reader_wipe();
+    reader_page = -1;
+    print_reader_screen();
+    while (1) {
+        int bt = wait_any_key();
+        if (bt == OK_BT) {
+            int chars = reader_insert_chars();
+            if (reader_page >= 0 && !reader_hex && chars > 0 && chars <= room) {
+                for (int i = 0; i < reader_len; i++) {
+                    if (reader_data[i] != '\r' || !newlines) out[n++] = (char)reader_data[i];
+                }
+                break;
+            }
+            reader_scan();
+        } else if (bt == BACK_BT) {
+            break;
+        } else if (bt == UP_BT && reader_len > 0 && reader_page > 0) {
+            reader_page--;
+            print_reader_screen();
+        } else if (bt == DOWN_BT && reader_len > 0 && reader_page < reader_pages() - 1) {
+            reader_page++;
+            print_reader_screen();
+        }
+    }
+    reader_wipe();
+    reader_insert = false;
+    return n;
+}
+
 // Opens QR READER (or PASSPHRASE FROM QR) with nothing scanned
 static void reader_open(bool for_passphrase) {
     reader_passphrase = for_passphrase;
+    reader_insert = false;
     reader_data = fountain_scratch_buffer(&reader_cap);
     reader_wipe();
     reader_page = -1;
     print_reader_screen();
     estado = QR_READER;
+}
+
+// ============================================================================
+// VAULT (wallet menu): entries on the seed SD card, see vault.h and
+// ../docs/vault.md. A modal flow like the editor: vault_run() returns to the
+// wallet menu.
+// ============================================================================
+
+// Fountain buffer while the vault is open, word aligned (vault_entry_t holds
+// a uint16_t): the list, a copy of the bitmap, and the title and text of an
+// entry while it is written (buffer is needed for the SD I/O then). The last
+// 512 B belong to the QR key of the editor (editor_qr_read()).
+#define VAULT_PARK_LEN  (VAULT_TITLE_MAX + 1 + VAULT_TEXT_MAX + 1)
+#define VAULT_RAM_LEN   (VAULT_MAX_ENTRIES * sizeof(vault_entry_t) + VAULT_BITMAP_LEN + VAULT_PARK_LEN)
+#define VAULT_ROWS      9           // List rows, y 13..93
+#define VAULT_CANCELLED VAULT_ERR_CLOSED    // The user left with BACK: no message
+
+static vault_entry_t *vault_list;
+static uint8_t *vault_bitmap;
+static char *vault_park;
+static uint16_t vault_count;        // Our entries
+static uint16_t vault_others;       // Marked sectors of other keys (or damaged)
+
+static void vault_new_id(uint8_t id[VAULT_ID_LEN], uint64_t *counter);     // With INITIALIZE CARD
+
+static const char *const vault_new_options[] = {"NOTE", "LOGIN", "PASSPHRASE", "CREDIT CARD", "EFF PASSWORD"};
+#define VAULT_NEW_NOTE      0
+#define VAULT_NEW_LOGIN     1
+#define VAULT_NEW_PASS      2
+#define VAULT_NEW_CARD      3
+#define VAULT_NEW_EFF       4
+#define VAULT_NEW_N         5
+
+static void wait_keys_released(void) {
+    while (BT_OK == 0 || BT1 == 0 || BT2 == 0 || BT4 == 0 || BT5 == 0 || BT6 == 0) SYS_Tasks();
+    delay_ms(30);
+}
+
+// "VAULT 73C5DA0A": the master fingerprint of the seed and passphrase in use
+static void vault_title_text(char *out) {
+    strcpy(out, "VAULT ");
+    u16_to_hex4((bip84_master_fingerprint >> 16) & 0xFFFF, out + 6);
+    u16_to_hex4(bip84_master_fingerprint & 0xFFFF, out + 10);
+    out[14] = '\0';
+}
+
+// Message with a title in its color and up to two lines; OK continues
+static void vault_message(const char *title, uint16_t color, const char *l1, const char *l2) {
+    black_screen();
+    draw_title((char *)title, color);
+    if (l1 != NULL) drawtext(5, 30, (char *)l1, ST7735_WHITE, ST7735_BLACK, 1);
+    if (l2 != NULL) drawtext(5, 42, (char *)l2, ST7735_WHITE, ST7735_BLACK, 1);
+    grid_OK_only();
+    while (wait_any_key() != OK_BT) { }
+}
+
+// Why something failed, in plain words (rule 4)
+static void vault_error(vault_status_t r) {
+    switch (r) {
+        case VAULT_ERR_READ:      vault_message("SD READ ERROR", ST7735_RED, "CHECK THE CARD AND", "OPEN THE VAULT AGAIN"); break;
+        case VAULT_ERR_WRITE:     vault_message("SD WRITE ERROR", ST7735_RED, "THE CARD DID NOT TAKE", "THE WRITE, CHECK IT"); break;
+        case VAULT_ERR_NO_MARKER: vault_message("CARD NOT INITIALIZED", ST7735_RED, "USE SD CARD >", "INITIALIZE CARD"); break;
+        case VAULT_ERR_DAMAGED:   vault_message("VAULT MAP DAMAGED", ST7735_RED, "NOTHING IS WRITTEN", "INITIALIZE THE CARD"); break;
+        case VAULT_ERR_CHANGED:   vault_message("CARD CHANGED", ST7735_RED, "NOTHING WAS WRITTEN", "OPEN THE VAULT AGAIN"); break;
+        case VAULT_ERR_FULL:      vault_message("VAULT FULL", ST7735_RED, "DELETE AN ENTRY", "FIRST"); break;
+        case VAULT_ERR_ENTRY:
+        case VAULT_ERR_NOT_OURS:  vault_message("ENTRY DAMAGED", ST7735_RED, "IT DOES NOT DECRYPT", "OR IS OUT OF RANGE"); break;
+        default:                  vault_message("VAULT ERROR", ST7735_RED, NULL, NULL); break;
+    }
+}
+
+// Progress while the entries are read: count above the bar
+static void vault_progress(uint16_t done, uint16_t total) {
+    char text[26];
+    char num[12];
+    strcpy(text, "ENTRY ");
+    fast_itoa(done + 1u, num);
+    strcat(text, num);
+    strcat(text, " OF ");
+    fast_itoa(total, num);
+    strcat(text, num);
+    progress_line(80, text);
+    if (done == 0) rectan(9, 92, 151, 97, WHITE);
+    rectan(10, 93, 10 + (140u * (done + 1u)) / total, 96, ST7735_GREEN);
+}
+
+// A card initialized before the vault existed has a blank header sector:
+// offer to write an empty vault header there (nothing else is touched)
+static vault_status_t vault_create(void) {
+    black_screen();
+    draw_title("NO VAULT ON THIS CARD", ST7735_LIGHTGREY);
+    drawtext(5, 25, "THE CARD IS INITIALIZED", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 35, "BUT HAS NO VAULT YET", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 50, "CREATE AN EMPTY VAULT?", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 60, "SEED SLOTS NOT TOUCHED", ST7735_WHITE, ST7735_BLACK, 1);
+    grid_labels("BACK", NULL, "MAKE", NULL, NULL, NULL);
+    while (1) {
+        int bt = wait_any_key();
+        if (bt == BACK_BT) return VAULT_CANCELLED;
+        if (bt == OK_BT) break;
+    }
+
+    uint8_t id[VAULT_ID_LEN];
+    uint64_t counter;
+    black_screen();
+    draw_title("NO VAULT ON THIS CARD", ST7735_LIGHTGREY);
+    drawtext(5, 25, "WRITING THE VAULT HEADER", ST7735_CYAN, ST7735_BLACK, 1);
+    vault_new_id(id, &counter);
+    vault_header_init(buffer, id, counter);
+    bool ok = vault_io_write(VAULT_HEADER_SECTOR, buffer);
+    memzero(buffer, sizeof(buffer));
+    ok = ok && vault_io_read(VAULT_HEADER_SECTOR, buffer) && vault_header_valid(buffer) &&
+         memcmp(&buffer[VAULT_HDR_ID], id, VAULT_ID_LEN) == 0;
+    memzero(buffer, sizeof(buffer));
+    return ok ? VAULT_OK : VAULT_ERR_WRITE;
+}
+
+// Opens the vault of the card in the slot and lists our entries, with the
+// progress on screen
+static vault_status_t vault_load(void) {
+    char title[16];
+    vault_status_t r;
+    bool blank = true;
+
+    vault_close();
+    vault_title_text(title);
+    black_screen();
+    draw_title(title, ST7735_LIGHTGREY);
+    drawtext(5, 25, "READING THE SD CARD...", ST7735_CYAN, ST7735_BLACK, 1);
+    if (!SD_ready) SD_ready = sd_init();
+    if (!SD_ready || !vault_io_read(cSD_MARKER_SECTOR, buffer)) return VAULT_ERR_READ;
+    if (!vault_io_marker_valid(buffer)) return VAULT_ERR_NO_MARKER;
+    r = vault_open(buffer, vault_bitmap);
+    for (int i = 0; i < 512; i++) if (buffer[i] != 0) blank = false;
+    if (r == VAULT_ERR_DAMAGED && blank) {
+        r = vault_create();
+        if (r != VAULT_OK) return r;
+        black_screen();
+        draw_title(title, ST7735_LIGHTGREY);
+        r = vault_open(buffer, vault_bitmap);
+    }
+    if (r != VAULT_OK) return r;
+
+    uint16_t total = vault_bitmap_count(vault_bitmap);
+    if (total > 0) drawtext(5, 70, "READING THE ENTRIES", ST7735_CYAN, ST7735_BLACK, 1);
+    r = vault_scan(buffer, vault_key, vault_bitmap, vault_list, VAULT_MAX_ENTRIES,
+                   &vault_count, &vault_others, vault_progress);
+    return (r == VAULT_ERR_FULL) ? VAULT_OK : r;   // Over 255: the first 255 are listed, NEW says full
+}
+
+// List: titles in order, NEW ENTRY last, the counts at the bottom left.
+// full: the whole screen; otherwise the rows are drawn over the old ones
+static void vault_draw_list(int sel, bool full) {
+    static bool grid_on_new;
+    char row[VAULT_TITLE_MAX + 2];
+    char text[16];
+    char num[12];
+    int top = (sel >= VAULT_ROWS) ? sel - VAULT_ROWS + 1 : 0;
+    bool on_new = (sel == vault_count);
+
+    if (full) {
+        black_screen();
+        vault_title_text(text);
+        draw_title(text, ST7735_LIGHTGREY);
+        if (vault_count == 0) {
+            strcpy(text, "NO ENTRIES");
+        } else {
+            fast_itoa(vault_count, text);
+            strcat(text, (vault_count == 1) ? " ENTRY" : " ENTRIES");
+        }
+        drawtext(1, 107, text, ST7735_CYAN, ST7735_BLACK, 1);
+        if (vault_others > 0) {             // Records of other passphrases or seeds
+            strcpy(text, "+");
+            fast_itoa(vault_others, num);
+            strcat(text, num);
+            strcat(text, " OTHERS");
+            drawtext(1, 117, text, ST7735_CYAN, ST7735_BLACK, 1);
+        }
+    }
+    for (int i = 0; i < VAULT_ROWS; i++) {
+        int k = top + i;
+        memset(row, ' ', sizeof(row) - 1);
+        row[sizeof(row) - 1] = '\0';
+        if (k < vault_count) {
+            const char *t = vault_list[k].title[0] ? vault_list[k].title : "(NO TITLE)";
+            memcpy(row, t, strlen(t));
+        } else if (k == vault_count) {
+            memcpy(row, "NEW ENTRY", 9);
+        }
+        drawtext(1, 13 + 10 * i, row, (k == sel) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+    }
+    if (full || on_new != grid_on_new) {
+        if (on_new) grid_labels("BACK", NULL, "NEW", NULL, NULL, NULL);
+        else grid_labels("BACK", NULL, "LOAD", "DEL", NULL, "EDIT");
+        if (vault_count > 0) {              // UP / DOWN only when there is somewhere to go
+            print_up_arrow(106, 114, ST7735_WHITE);
+            print_down_arrow(106, 123, ST7735_WHITE);
+        }
+        grid_on_new = on_new;
+    }
+}
+
+// Reads entry k: its title to 'title', the text to buffer[0..] (NUL
+// terminated, characters the screen cannot draw shown as '?')
+static vault_status_t vault_read_entry(int k, char *title, uint8_t *type, uint16_t *len) {
+    vault_status_t r = vault_read_record(buffer, vault_key, vault_list[k].sector);
+    if (r != VAULT_OK) {
+        memzero(buffer, sizeof(buffer));
+        return r;
+    }
+    const uint8_t *pt = &buffer[VAULT_REC_DATA];
+    uint8_t tl = pt[VAULT_PT_TITLE_LEN];
+    uint16_t bl = (uint16_t)((pt[VAULT_PT_BODY_LEN] << 8) | pt[VAULT_PT_BODY_LEN + 1]);
+    memcpy(title, &pt[VAULT_PT_TITLE], tl);
+    title[tl] = '\0';
+    *type = pt[VAULT_PT_TYPE];
+    *len = bl;
+    memmove(buffer, &pt[VAULT_PT_BODY], bl);
+    memzero(&buffer[bl], sizeof(buffer) - bl);
+    for (uint16_t i = 0; i < bl; i++) {
+        if ((buffer[i] < 0x20 || buffer[i] > 0x7E) && buffer[i] != '\n') buffer[i] = '?';
+    }
+    return VAULT_OK;
+}
+
+// Full screen QR of the text in buffer: OK zooms into a tile, the arrows move
+// between tiles, BACK leaves the tile, then the QR
+static void vault_qr_view(void) {
+    int tile = -1;
+    int tiles = draw_text_qr_view((const char *)buffer, tile);
+    while (1) {
+        int bt = wait_any_key();
+        if (bt == BACK_BT) {
+            if (tile < 0) break;
+            tile = -1;
+        } else if (bt == OK_BT && tiles > 0) {
+            tile = (tile < 0) ? 0 : -1;
+        } else if (tile >= 0 && tiles > 0) {
+            int tx = tile % tiles, ty = tile / tiles, moved = tile;
+            if (bt == LEFT_BT && tx > 0) tx--;
+            else if (bt == RIGHT_BT && tx < tiles - 1) tx++;
+            else if (bt == UP_BT && ty > 0) ty--;
+            else if (bt == DOWN_BT && ty < tiles - 1) ty++;
+            tile = ty * tiles + tx;
+            if (tile == moved) continue;
+        } else {
+            continue;
+        }
+        tiles = draw_text_qr_view((const char *)buffer, tile);
+    }
+}
+
+static const char *vault_type_name(uint8_t type) {
+    switch (type) {
+        case VAULT_TYPE_LOGIN:      return "LOGIN";
+        case VAULT_TYPE_PASSPHRASE: return "PASSPHRASE";
+        case VAULT_TYPE_CARD:       return "CREDIT CARD";
+        case VAULT_TYPE_DESCRIPTOR: return "DESCRIPTOR";
+        default:                    return "NOTE";
+    }
+}
+
+// LOAD: title and text (UP / DOWN pages), OK shows the QR of title and text,
+// or of the text only for a PASSPHRASE
+static vault_status_t vault_view(int k) {
+    char title[VAULT_TITLE_MAX + 1];
+    char text[26];
+    char num[12];
+    uint8_t type;
+    uint16_t len;
+
+    vault_status_t r = vault_read_entry(k, title, &type, &len);
+    if (r != VAULT_OK) return r;
+    if (type == VAULT_TYPE_DESCRIPTOR) {
+        memzero(buffer, sizeof(buffer));
+        vault_message("DESCRIPTOR ENTRY", ST7735_YELLOW, "NOT SUPPORTED BY THIS", "VERSION YET");
+        return VAULT_OK;
+    }
+    reader_insert = false;
+    reader_passphrase = false;
+    reader_data = buffer;
+    reader_cap = sizeof(buffer);
+    reader_len = len;
+    reader_hex = false;
+    reader_page = 0;
+    bool redraw = true;
+    while (1) {
+        if (redraw) {
+            black_screen();
+            draw_title(title, ST7735_LIGHTGREY);
+            strcpy(text, vault_type_name(type));
+            strcat(text, ", ");
+            fast_itoa(len, num);
+            strcat(text, num);
+            strcat(text, " CHARS");
+            drawtext(1, 12, text, ST7735_CYAN, ST7735_BLACK, 1);
+            reader_draw_pages("QR");
+            redraw = false;
+        }
+        int bt = wait_any_key();
+        if (bt == BACK_BT) break;
+        if (bt == UP_BT && reader_page > 0) {
+            reader_page--;
+            redraw = true;
+        } else if (bt == DOWN_BT && reader_page < reader_pages() - 1) {
+            reader_page++;
+            redraw = true;
+        } else if (bt == OK_BT) {
+            size_t tl = (type == VAULT_TYPE_PASSPHRASE) ? 0 : strlen(title);
+            if (tl > 0) {                   // Title and text, one per line
+                memmove(&buffer[tl + 1], buffer, len + 1u);
+                memcpy(buffer, title, tl);
+                buffer[tl] = '\n';
+            }
+            bool show = true;
+            if (text_looks_like_seed((const char *)buffer, strlen((const char *)buffer))) {
+                print_text_seed_warning();
+                int w;
+                do { w = wait_any_key(); } while (w != OK_BT && w != BACK_BT);
+                show = (w == OK_BT);
+            }
+            if (show) vault_qr_view();
+            if (tl > 0) {
+                memmove(buffer, &buffer[tl + 1], len + 1u);
+                memzero(&buffer[len + 1u], tl + 1);
+            }
+            redraw = true;
+        }
+    }
+    memzero(buffer, sizeof(buffer));
+    memzero(title, sizeof(title));
+    return VAULT_OK;
+}
+
+// Builds the plaintext of a record in buffer from the parked title and text
+static void vault_build_plain(uint8_t type) {
+    const char *title = vault_park;
+    const char *body = vault_park + VAULT_TITLE_MAX + 1;
+    size_t tl = strlen(title), bl = strlen(body);
+    uint8_t *pt = &buffer[VAULT_REC_DATA];
+
+    memzero(buffer, sizeof(buffer));
+    pt[VAULT_PT_TYPE] = type;
+    pt[VAULT_PT_TITLE_LEN] = (uint8_t)tl;
+    memcpy(&pt[VAULT_PT_TITLE], title, tl);
+    pt[VAULT_PT_BODY_LEN] = (uint8_t)(bl >> 8);
+    pt[VAULT_PT_BODY_LEN + 1] = (uint8_t)bl;
+    memcpy(&pt[VAULT_PT_BODY], body, bl);
+}
+
+// Editor on title and buffer, confirmation, then the write: a new record in
+// a free sector, and the old one ('old', 0 for a new entry) freed only after
+// it. The sector written goes to *keep (0 if nothing was written).
+static vault_status_t vault_edit_and_save(uint8_t type, char *title, uint16_t old, uint16_t *keep) {
+    char text[26];
+    char num[12];
+    vault_status_t r;
+
+    *keep = 0;
+    while (1) {
+        if (!full_text_editor(title, VAULT_TITLE_MAX + 1, (char *)buffer, VAULT_TEXT_MAX + 1, NOTE_MODE)) {
+            r = VAULT_CANCELLED;            // CANCEL: nothing changes
+            goto wipe;
+        }
+        if (title[0] == '\0') {
+            vault_message("TITLE NEEDED", ST7735_RED, "EVERY ENTRY NEEDS A", "TITLE FOR THE LIST");
+            editor_title_first = true;
+            continue;
+        }
+        black_screen();
+        draw_title("SAVE TO VAULT", ST7735_LIGHTGREY);
+        drawtext(5, 25, title, ST7735_WHITE, ST7735_BLACK, 1);
+        strcpy(text, vault_type_name(type));
+        strcat(text, ", ");
+        fast_itoa((uint32_t)strlen((char *)buffer), num);
+        strcat(text, num);
+        strcat(text, " CHARS");
+        drawtext(5, 37, text, ST7735_CYAN, ST7735_BLACK, 1);
+        drawtext(5, 52, "ENCRYPTED, 1 SECTOR", ST7735_WHITE, ST7735_BLACK, 1);
+        if (old != 0) drawtext(5, 62, "REPLACES THE OLD VERSION", ST7735_WHITE, ST7735_BLACK, 1);
+        grid_labels("EDIT", NULL, "SAVE", NULL, NULL, NULL);
+        int bt;
+        do { bt = wait_any_key(); } while (bt != OK_BT && bt != BACK_BT);
+        if (bt == OK_BT) break;
+    }
+
+    // buffer does the SD I/O from now on: the text waits in the fountain buffer
+    strcpy(vault_park, title);
+    strcpy(vault_park + VAULT_TITLE_MAX + 1, (char *)buffer);
+    memzero(buffer, sizeof(buffer));
+    black_screen();
+    draw_title("SAVE TO VAULT", ST7735_LIGHTGREY);
+    drawtext(5, 25, "WRITING TO THE SD CARD", ST7735_CYAN, ST7735_BLACK, 1);
+
+    uint16_t sector;
+    uint64_t counter;
+    r = vault_reserve(buffer, 1, &sector, &counter);
+    if (r == VAULT_OK) {
+        vault_build_plain(type);
+        r = vault_write_record(buffer, vault_key, sector, counter, VAULT_PART_SINGLE);
+    }
+    if (r == VAULT_OK) r = vault_commit(buffer, &sector, 1, (old != 0) ? &old : NULL, (old != 0) ? 1 : 0);
+    if (r == VAULT_OK) {
+        *keep = sector;
+        drawtext(5, 40, "SAVED", ST7735_GREEN, ST7735_BLACK, 1);
+        delay_ms(700);
+    }
+wipe:
+    memzero(vault_park, VAULT_PARK_LEN);
+    memzero(buffer, sizeof(buffer));
+    memzero(title, VAULT_TITLE_MAX + 1);
+    return r;
+}
+
+// NEW ENTRY: the template, then the editor (cursor on the title)
+static vault_status_t vault_new_entry(uint16_t *keep) {
+    char title[VAULT_TITLE_MAX + 1] = "";
+    uint8_t type = VAULT_TYPE_NOTE;
+    int sel = 0;
+
+    *keep = 0;
+    if (vault_count >= VAULT_MAX_ENTRIES) return VAULT_ERR_FULL;
+    black_screen();
+    print_titled_menu("NEW ENTRY", vault_new_options, VAULT_NEW_N, sel);
+    while (1) {
+        int bt = wait_any_key();
+        if (bt == BACK_BT) return VAULT_CANCELLED;
+        if (bt == OK_BT) break;
+        if (bt == UP_BT || bt == DOWN_BT) {
+            sel = (sel + ((bt == DOWN_BT) ? 1 : VAULT_NEW_N - 1)) % VAULT_NEW_N;
+            print_titled_menu("NEW ENTRY", vault_new_options, VAULT_NEW_N, sel);
+        }
+    }
+
+    memzero(buffer, sizeof(buffer));
+    editor_title_first = true;
+    switch (sel) {
+        case VAULT_NEW_LOGIN:
+            type = VAULT_TYPE_LOGIN;
+            strcpy((char *)buffer, "SITE: \nUSER: \nPASSWORD: ");
+            break;
+        case VAULT_NEW_PASS:
+            type = VAULT_TYPE_PASSPHRASE;   // Title preset, cursor in the text
+            strcpy(title, "PASSPHRASE");
+            editor_title_first = false;
+            break;
+        case VAULT_NEW_CARD:
+            type = VAULT_TYPE_CARD;
+            strcpy((char *)buffer, "NAME: \nNUMBER: \nEXPIRY: \nCVV: \nPIN: ");
+            break;
+        case VAULT_NEW_EFF: {
+            char pw[cEFF_TEXT_MAX + 1];
+            type = VAULT_TYPE_LOGIN;
+            int n = eff_generate(pw);
+            if (n > 0) {
+                strcpy((char *)buffer, "PASSWORD: ");
+                strcat((char *)buffer, pw);
+            }
+            memzero(pw, sizeof(pw));
+            if (n == 0) {
+                editor_title_first = false;
+                return VAULT_CANCELLED;
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    return vault_edit_and_save(type, title, 0, keep);
+}
+
+// EDIT: the editor with the current title and text, saved as a new version
+static vault_status_t vault_edit_entry(int k, uint16_t *keep) {
+    char title[VAULT_TITLE_MAX + 1];
+    uint8_t type;
+    uint16_t len;
+
+    *keep = 0;
+    vault_status_t r = vault_read_entry(k, title, &type, &len);
+    if (r != VAULT_OK) return r;
+    if (type == VAULT_TYPE_DESCRIPTOR || len > VAULT_TEXT_MAX) {
+        memzero(buffer, sizeof(buffer));
+        memzero(title, sizeof(title));
+        vault_message("NOT EDITABLE", ST7735_YELLOW, (type == VAULT_TYPE_DESCRIPTOR) ? "DESCRIPTORS ARE NOT" :
+                      "TEXT LONGER THAN THE", (type == VAULT_TYPE_DESCRIPTOR) ? "EDITED, IMPORT AGAIN" : "EDITOR TAKES");
+        return VAULT_CANCELLED;
+    }
+    return vault_edit_and_save(type, title, vault_list[k].sector, keep);
+}
+
+// DEL: red confirmation, then the record is freed and overwritten (*keep
+// becomes non zero once something was written)
+static vault_status_t vault_delete_entry(int k, uint16_t *keep) {
+    black_screen();
+    draw_title("DELETE ENTRY", ST7735_RED);
+    drawtext(5, 25, vault_list[k].title, ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 40, "IT IS OVERWRITTEN ON", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 50, "THE CARD", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 65, "IT CANNOT BE UNDONE", ST7735_RED, ST7735_BLACK, 1);
+    grid_labels("BACK", NULL, "DEL", NULL, NULL, NULL);
+    int bt;
+    do { bt = wait_any_key(); } while (bt != OK_BT && bt != BACK_BT);
+    *keep = 0;
+    if (bt == BACK_BT) return VAULT_CANCELLED;
+
+    uint16_t sector = vault_list[k].sector;
+    drawtext(5, 80, "ERASING...", ST7735_CYAN, ST7735_BLACK, 1);
+    vault_status_t r = vault_delete(buffer, &sector, 1);
+    *keep = 1;                              // Not a record sector: the cursor stays
+    return r;
+}
+
+// VAULT in the wallet menu. The keys are already derived (vault_key, with
+// the wallet keys); everything the vault showed is wiped on the way out.
+static void vault_run(void) {
+    uint32_t size;
+    uint8_t *base = fountain_scratch_buffer(&size);
+    uint32_t pad = (4u - ((uintptr_t)base & 3u)) & 3u;
+    vault_status_t r;
+    int sel = 0;
+
+    if (!bip84_account_cached || size < pad + VAULT_RAM_LEN + 512u) {
+        vault_message("VAULT ERROR", ST7735_RED, "THE WALLET KEYS ARE", "NOT LOADED");
+        wait_keys_released();
+        return;
+    }
+    base += pad;
+    vault_list = (vault_entry_t *)base;
+    vault_bitmap = base + VAULT_MAX_ENTRIES * sizeof(vault_entry_t);
+    vault_park = (char *)vault_bitmap + VAULT_BITMAP_LEN;
+    memzero(base, VAULT_RAM_LEN);
+
+    r = vault_load();
+    while (r == VAULT_OK) {
+        vault_draw_list(sel, true);
+        uint16_t keep = 0;
+        bool reload = false;
+        while (r == VAULT_OK && !reload) {
+            int bt = wait_any_key();
+            int n = vault_count + 1;
+            bool on_entry = sel < vault_count;
+            if (bt == BACK_BT) goto done;
+            if ((bt == UP_BT || bt == DOWN_BT) && n > 1) {
+                sel = (sel + ((bt == DOWN_BT) ? 1 : n - 1)) % n;
+                vault_draw_list(sel, false);
+                continue;
+            }
+            if (bt == OK_BT && !on_entry) {
+                r = vault_new_entry(&keep);
+            } else if (bt == OK_BT) {
+                r = vault_view(sel);
+            } else if (bt == LEFT_BT && on_entry) {
+                r = vault_delete_entry(sel, &keep);
+            } else if (bt == RIGHT_BT && on_entry) {
+                r = vault_edit_entry(sel, &keep);
+            } else {
+                continue;
+            }
+            if (r == VAULT_CANCELLED) r = VAULT_OK;
+            // Something was written (or a write failed half way): read the list again
+            reload = (r == VAULT_OK && keep != 0) || r == VAULT_ERR_WRITE;
+            if (r != VAULT_OK) {
+                vault_error(r);
+                if (r != VAULT_ERR_WRITE && r != VAULT_ERR_FULL && r != VAULT_ERR_ENTRY &&
+                    r != VAULT_ERR_NOT_OURS) goto done;     // Card changed, unreadable...: leave
+                r = VAULT_OK;
+            }
+            if (!reload) vault_draw_list(sel, true);
+        }
+        r = vault_load();
+        if (keep != 0) {                    // Cursor on the entry just saved
+            for (int i = 0; i < vault_count; i++) if (vault_list[i].sector == keep) sel = i;
+        }
+        if (sel > vault_count) sel = vault_count;
+    }
+    if (r != VAULT_OK && r != VAULT_CANCELLED) vault_error(r);
+done:
+    memzero(base, VAULT_RAM_LEN);
+    memzero(buffer, sizeof(buffer));
+    vault_close();
+    wait_keys_released();
 }
 
 // Total sectors of the card (starting it if needed), 0 if it cannot be read
@@ -6698,6 +7624,19 @@ static bool sd_marker_valid(const uint8_t *b) {
     return memcmp(b, "SEEDMATE", 8) == 0 && b[8] == cSD_FORMAT_VERSION && b[9] == (uint8_t)~sum;
 }
 
+// SD access for the vault format (vault.c has no SD code of its own)
+bool vault_io_read(uint32_t sector, uint8_t buf[512]) {
+    return sd_read_block(sector, buf);
+}
+
+bool vault_io_write(uint32_t sector, const uint8_t buf[512]) {
+    return sd_write_block(sector, buf);
+}
+
+bool vault_io_marker_valid(const uint8_t buf[512]) {
+    return sd_marker_valid(buf);
+}
+
 // 0: the card is initialized, 1: no valid marker, 2: the card cannot be read
 static int sd_marker_state(void) {
     bool ok;
@@ -6710,11 +7649,12 @@ static int sd_marker_state(void) {
     return ok ? 0 : 1;
 }
 
-// New vault_id for INITIALIZE CARD: SHA256 of the key press jitter pool (the
-// same one the Shamir coefficients use), both timers and the text "VAULT".
-// It is written in clear on the card, so the pool is cleared afterwards, as
-// expand_sss_coefficients() does: no later Shamir split reuses what it hashed.
-static void vault_new_id(uint8_t id[VAULT_ID_LEN]) {
+// New vault_id and first write_counter for INITIALIZE CARD: SHA256 of the key
+// press jitter pool (the same one the Shamir coefficients use), both timers
+// and the text "VAULT". Both are written in clear on the card, so the pool is
+// cleared afterwards, as expand_sss_coefficients() does: no later Shamir split
+// reuses what it hashed.
+static void vault_new_id(uint8_t id[VAULT_ID_LEN], uint64_t *counter) {
     SHA256_CTX ctx;
     uint8_t hash[32];
     uint32_t t[2] = {TMR1, _CP0_GET_COUNT()};
@@ -6725,6 +7665,9 @@ static void vault_new_id(uint8_t id[VAULT_ID_LEN]) {
     sha256_update(&ctx, (const BYTE *)"VAULT", 5);
     sha256_final(&ctx, hash);
     memcpy(id, hash, VAULT_ID_LEN);
+    *counter = 0;
+    for (int i = 0; i < 8; i++) *counter = (*counter << 8) | hash[VAULT_ID_LEN + i];
+    *counter >>= 1;                                     // Top bit clear: never wraps
     memzero(hash, sizeof(hash));
     memzero(&ctx, sizeof(ctx));
     memzero(sss_entropy_pool, sizeof(sss_entropy_pool));
@@ -6753,8 +7696,9 @@ static bool sd_initialize_card(uint32_t *bad_sector) {
     psbt_count_label("SECTOR ", VAULT_HEADER_SECTOR, total, label);
     psbt_progress_step(label, NULL, "WRITING THE VAULT HEADER", cSD_MARKER_SECTOR, total);
     uint8_t vault_id[VAULT_ID_LEN];
-    vault_new_id(vault_id);
-    vault_header_init(buffer, vault_id);
+    uint64_t first_counter;
+    vault_new_id(vault_id, &first_counter);
+    vault_header_init(buffer, vault_id, first_counter);
     bool ok = sd_write_block(VAULT_HEADER_SECTOR, buffer);
     memzero(buffer, sizeof(buffer));
     if (!ok || !sd_read_block(VAULT_HEADER_SECTOR, buffer) || !vault_header_valid(buffer) ||
@@ -9101,7 +10045,10 @@ int SSS_N = 9;
                             print_unload_confirm();
                             estado = CONFIRM_UNLOAD;
                         } else if (bip84_option() == cBIP84_VAULT) {
-                            // Placeholder: nothing yet
+                            vault_run();
+                            black_screen();
+                            print_bip84_menu();
+                            pulsed_bt = NONE;
                         } else {
                             print_bip84_info_screen();
                         }
@@ -9702,91 +10649,19 @@ int SSS_N = 9;
                 }
                 break;
             case EFF_CONFIG:
-                switch (pulsed_bt) {
-                    case OK_BT:
-                        eff_wipe();
-                        eff_key = 0;
-                        print_eff_roll(EFF_DRAW_FULL);
-                        estado = EFF_ROLL;
-                        break;
-                    case BACK_BT:
+            case EFF_ROLL:
+                if (pulsed_bt != NONE) {
+                    eff_step_t r = eff_key_press(pulsed_bt);
+                    if (r == EFF_LEFT) {
                         black_screen();
                         print_generic_menu(menu_tools, cTOOLS_n_opt, tools_pointer);
                         estado = TOOLS_MENU;
-                        break;
-                    case UP_BT:
-                    case DOWN_BT:
-                        if (eff_cursor == 1) {
-                            eff_numbers = !eff_numbers;
-                        } else if (pulsed_bt == UP_BT && eff_words < cEFF_MAX_WORDS) {
-                            eff_words++;
-                        } else if (pulsed_bt == DOWN_BT && eff_words > 1) {
-                            eff_words--;
-                        }
-                        print_eff_config(false);
-                        break;
-                    case LEFT_BT:
-                        eff_cursor = 0;
-                        print_eff_config(false);
-                        break;
-                    case RIGHT_BT:
-                        eff_cursor = 1;
-                        print_eff_config(false);
-                        break;
-                    default:
-                        break;
-                }
-                break;
-            case EFF_ROLL:
-                switch (pulsed_bt) {
-                    case OK_BT: {                   // One die
-                        uint8_t parts = 0;
-                        eff_dice[eff_ndice++] = (uint8_t)(eff_key + 1);
-                        if (eff_ndice == 4) {
-                            parts = EFF_DRAW_WORDS;
-                            eff_index[eff_done] = (uint16_t)((eff_dice[0] - 1) * 216 + (eff_dice[1] - 1) * 36 +
-                                                             (eff_dice[2] - 1) * 6 + (eff_dice[3] - 1));
-                            eff_digit[eff_done] = eff_numbers ? timer_digit() : 0;
-                            eff_done++;
-                            eff_ndice = 0;
-                            memzero(eff_dice, sizeof(eff_dice));
-                            if (eff_done == eff_words) {
-                                eff_build_result();
-                                print_eff_result();
-                                break;
-                            }
-                        }
-                        print_eff_roll(parts);
-                        break;
+                    } else if (r == EFF_FINISHED) {
+                        eff_build_result((char *)buffer);
+                        print_eff_result();
+                    } else {
+                        estado = eff_rolling ? EFF_ROLL : EFF_CONFIG;
                     }
-                    case BACK_BT: {                 // DEL: the last die, else the last word
-                        uint8_t parts = 0;
-                        if (eff_ndice > 0) {
-                            eff_ndice--;
-                            eff_dice[eff_ndice] = 0;
-                        } else if (eff_done > 0) {
-                            eff_done--;
-                            eff_index[eff_done] = 0;
-                            eff_digit[eff_done] = 0;
-                            parts = EFF_DRAW_WORDS;
-                        } else {
-                            print_eff_config(true); // Nothing entered: back to the settings
-                            estado = EFF_CONFIG;
-                            break;
-                        }
-                        print_eff_roll(parts);
-                        break;
-                    }
-                    case LEFT_BT:
-                        eff_key = (uint8_t)((eff_key + 5) % 6);
-                        print_eff_roll(0);
-                        break;
-                    case RIGHT_BT:
-                        eff_key = (uint8_t)((eff_key + 1) % 6);
-                        print_eff_roll(0);
-                        break;
-                    default:
-                        break;
                 }
                 break;
             case EFF_RESULT:
@@ -9798,6 +10673,7 @@ int SSS_N = 9;
                     estado = VIEW_QR;
                 } else if (pulsed_bt == BACK_BT) {
                     eff_wipe();
+                    memzero(buffer, sizeof(buffer));    // The password text
                     qr_from_eff = false;
                     black_screen();
                     print_generic_menu(menu_tools, cTOOLS_n_opt, tools_pointer);
@@ -9820,18 +10696,7 @@ int SSS_N = 9;
                             estado = PRECOMPUTE_BIP84;
                             break;
                         }
-                        black_screen();
-                        draw_title((char *)reader_title(), ST7735_LIGHTGREY);
-                        drawtext(5, 20, "SCANNING...", ST7735_CYAN, ST7735_BLACK, 1);
-                        reader_wipe();
-                        reader_len = qr_read_raw(reader_data, reader_cap);
-                        reader_hex = false;
-                        for (int i = 0; i < reader_len; i++) {
-                            uint8_t c = reader_data[i];
-                            if ((c < 0x20 && c != '\n' && c != '\r' && c != '\t') || c >= 0x7F) reader_hex = true;
-                        }
-                        reader_page = 0;
-                        print_reader_screen();
+                        reader_scan();
                         pulsed_bt = NONE;
                         break;
                     case BACK_BT:
