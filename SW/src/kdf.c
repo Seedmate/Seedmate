@@ -65,6 +65,26 @@ void HmacSha512(const uint8_t *key, size_t keyLen,
     hmac_sha512_2(key, keyLen, data, dataLen, NULL, 0, out);
 }
 
+// One HMAC-SHA512 from the states after the key blocks (see PBKDF2 below):
+// out = H(opad state || H(ipad state || data1 || data2)). Two SHA512
+// compressions for a 64-byte message instead of four.
+static void hmac_sha512_from_pads(const Sha512Context *inner, const Sha512Context *outer,
+                                  const uint8_t *data1, size_t len1,
+                                  const uint8_t *data2, size_t len2,
+                                  Sha512Context *ctx, uint8_t *out) {
+    SHA512_HASH hash;
+
+    *ctx = *inner;
+    Sha512Update(ctx, data1, (uint32_t)len1);
+    if (len2 > 0) Sha512Update(ctx, data2, (uint32_t)len2);
+    Sha512Finalise(ctx, &hash);
+    *ctx = *outer;
+    Sha512Update(ctx, hash.bytes, KDF_SHA512_SIZE);
+    Sha512Finalise(ctx, &hash);
+    memcpy(out, hash.bytes, KDF_SHA512_SIZE);
+    memzero(&hash, sizeof(hash));
+}
+
 bool PBKDF2_HMAC_SHA512(const char *password, const char *salt,
                         uint32_t iterations, uint8_t *output, size_t dkLen,
                         kdf_progress_t progress) {
@@ -72,9 +92,33 @@ bool PBKDF2_HMAC_SHA512(const char *password, const char *salt,
     uint8_t U[KDF_SHA512_SIZE];
     uint8_t T[KDF_SHA512_SIZE];
     uint8_t counter[4];
-    size_t passwordLen = strlen(password);
+    uint8_t pad[SHA512_BLOCK];
+    SHA512_HASH key_hash;
+    Sha512Context inner, outer, ctx;
+    const uint8_t *key = (const uint8_t *)password;
+    size_t keyLen = strlen(password);
     size_t saltLen = strlen(salt);
     uint32_t blockCount = (uint32_t)((dkLen + KDF_SHA512_SIZE - 1) / KDF_SHA512_SIZE);
+
+    // The key never changes: absorb K ^ ipad and K ^ opad once and start every
+    // HMAC from copies of those two states (keys longer than a block are
+    // hashed first, RFC 2104)
+    if (keyLen > SHA512_BLOCK) {
+        Sha512Initialise(&ctx);
+        Sha512Update(&ctx, key, (uint32_t)keyLen);
+        Sha512Finalise(&ctx, &key_hash);
+        key = key_hash.bytes;
+        keyLen = KDF_SHA512_SIZE;
+    }
+    memset(pad, 0x36, sizeof(pad));
+    for (size_t i = 0; i < keyLen; i++) pad[i] ^= key[i];
+    Sha512Initialise(&inner);
+    Sha512Update(&inner, pad, SHA512_BLOCK);
+    for (size_t i = 0; i < SHA512_BLOCK; i++) pad[i] ^= 0x36 ^ 0x5C;
+    Sha512Initialise(&outer);
+    Sha512Update(&outer, pad, SHA512_BLOCK);
+    memzero(pad, sizeof(pad));
+    memzero(&key_hash, sizeof(key_hash));
 
     for (uint32_t i = 1; i <= blockCount; i++) {
         // U1 = HMAC(password, salt || INT_32_BE(i)): no copy of the salt
@@ -82,12 +126,11 @@ bool PBKDF2_HMAC_SHA512(const char *password, const char *salt,
         counter[1] = (uint8_t)(i >> 16);
         counter[2] = (uint8_t)(i >> 8);
         counter[3] = (uint8_t)i;
-        hmac_sha512_2((const uint8_t *)password, passwordLen,
-                      (const uint8_t *)salt, saltLen, counter, 4, U);
+        hmac_sha512_from_pads(&inner, &outer, (const uint8_t *)salt, saltLen, counter, 4, &ctx, U);
         memcpy(T, U, KDF_SHA512_SIZE);
 
         for (uint32_t j = 2; j <= iterations; j++) {
-            HmacSha512((const uint8_t *)password, passwordLen, U, KDF_SHA512_SIZE, U);
+            hmac_sha512_from_pads(&inner, &outer, U, KDF_SHA512_SIZE, NULL, 0, &ctx, U);
             for (int k = 0; k < KDF_SHA512_SIZE; k++) T[k] ^= U[k];
             if (progress != NULL && (j % KDF_PROGRESS_EVERY) == 0 && !progress(j, iterations)) {
                 completed = false;
@@ -103,6 +146,9 @@ bool PBKDF2_HMAC_SHA512(const char *password, const char *salt,
 
     memzero(U, sizeof(U));
     memzero(T, sizeof(T));
+    memzero(&inner, sizeof(inner));     // Both states depend on the password
+    memzero(&outer, sizeof(outer));
+    memzero(&ctx, sizeof(ctx));
     if (!completed) memzero(output, dkLen);
     return completed;
 }
