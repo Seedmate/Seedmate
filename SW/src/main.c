@@ -91,6 +91,7 @@
 #include "EFF_short.h"
 #include "bip85.h"
 #include "vault.h"
+#include "nostr.h"
 #include "crypto/fault_handler.h"
 
 
@@ -8099,6 +8100,280 @@ done:
     vault_teardown();
 }
 
+// ============================================================================
+// WALLET > DERIVE: BIP85 child seed (CHILD_CONFIG), BIP85 passwords and the
+// Nostr keys of NIP-06, all from the BIP32 root of the seed and passphrase
+// on screen (the root is not kept: each one derives it again, BACK cancels)
+// ============================================================================
+
+static const char *const menu_derive[] = {"BIP85 CHILD SEED", "BIP85 PASSWORD", "NOSTR KEYS"};
+#define cDERIVE_CHILD       0
+#define cDERIVE_PASSWORD    1
+#define cDERIVE_NOSTR       2
+#define cDERIVE_n_opt       3
+
+static uint8_t pwd_format = BIP85_PWD_BASE64;   // Kept for the session, like the BIP85 size and index
+static uint8_t pwd_len = 21;                    // The length Coldcard and Krux use by default
+static uint32_t pwd_index = 0;
+static uint8_t pwd_cursor = 0;                  // 0 format, 1 length, 2 index
+
+// "DERIVING FROM THE KEY ON SCREEN" and the seed PBKDF2 (BACK cancels it)
+static bool derive_root_screen(const char *title, HDNode *root) {
+    black_screen();
+    draw_title((char *)title, ST7735_LIGHTGREY);
+    drawtext(5, 25, "DERIVING FROM THE KEY", ST7735_CYAN, ST7735_BLACK, 1);
+    drawtext(5, 35, "ON SCREEN", ST7735_CYAN, ST7735_BLACK, 1);
+    grid_back_only();
+    bool ok = derive_root_with_progress(root, true);
+    if (!ok) memzero(root, sizeof(*root));
+    wait_keys_released();
+    return ok;
+}
+
+// "FROM FINGERPRINT xxxxxxxx", green when it is the wallet loaded now
+static void draw_derived_from(int y, uint32_t fp) {
+    char text[26];
+    strcpy(text, "FROM FINGERPRINT ");
+    u16_to_hex4((uint16_t)(fp >> 16), &text[17]);
+    u16_to_hex4((uint16_t)fp, &text[21]);
+    text[25] = '\0';
+    drawtext(1, y, text, (fp == bip84_master_fingerprint) ? ST7735_GREEN : ST7735_WHITE, ST7735_BLACK, 1);
+}
+
+// A secret in groups of 4 characters, 5 groups per line, to type it by hand
+static void draw_grouped(const char *s, int y) {
+    char line[26];
+    int n = 0, groups = 0;
+    for (const char *p = s; *p; p++) {
+        line[n++] = *p;
+        if (((p - s) % 4) == 3 && p[1] != '\0') {
+            if (++groups == 5) {
+                line[n] = '\0';
+                drawtext(5, y, line, ST7735_WHITE, ST7735_BLACK, 1);
+                y += 10;
+                n = groups = 0;
+            } else {
+                line[n++] = ' ';
+            }
+        }
+    }
+    line[n] = '\0';
+    if (n > 0) drawtext(5, y, line, ST7735_WHITE, ST7735_BLACK, 1);
+    memzero(line, sizeof(line));
+}
+
+// The text in buffer as a zoomable QR, then wiped
+static void derive_show_qr(const char *text) {
+    memzero(buffer, sizeof(buffer));
+    strcpy((char *)buffer, text);
+    vault_qr_view();
+    memzero(buffer, sizeof(buffer));
+}
+
+static void print_password_config(void) {
+    char text[26];
+    char num[12];
+    int bits = (pwd_format == BIP85_PWD_BASE64) ? pwd_len * 6 : pwd_len * 641 / 100;
+
+    black_screen();
+    draw_title((char *)menu_derive[cDERIVE_PASSWORD], ST7735_LIGHTGREY);
+    drawtext(1, 13, "FORMAT:", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(10, 23, (pwd_format == BIP85_PWD_BASE64) ? "BASE64" : "BASE85",
+             (pwd_cursor == 0) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 38, "LENGTH:", ST7735_WHITE, ST7735_BLACK, 1);
+    fast_itoa(pwd_len, num);
+    drawtext(10, 48, num, (pwd_cursor == 1) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 63, "INDEX:", ST7735_WHITE, ST7735_BLACK, 1);
+    fast_itoa(pwd_index, num);
+    drawtext(10, 73, num, (pwd_cursor == 2) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+    strcpy(text, "ABOUT ");
+    fast_itoa((uint32_t)bits, num);
+    strcat(text, num);
+    strcat(text, " BITS");
+    drawtext(1, 88, text, ST7735_CYAN, ST7735_BLACK, 1);
+    drawtext(1, 107, "SAME SEED,", ST7735_CYAN, ST7735_BLACK, 1);    // What makes it come back
+    drawtext(1, 117, "SAME INDEX", ST7735_CYAN, ST7735_BLACK, 1);
+    grid_bip85();
+}
+
+// The password derived: format, length and index, the fingerprint it comes
+// from, the password in groups of 4; OK shows its QR
+static void bip85_password_show(void) {
+    char pwd[BIP85_PWD64_MAX + 1];
+    char text[26];
+    char num[12];
+    HDNode root;
+
+    if (!derive_root_screen(menu_derive[cDERIVE_PASSWORD], &root)) return;
+    key_progress_phase("2/2 BIP85 PASSWORD", 4);
+    bool ok = bip85_password(root.private_key, root.chain_code, pwd_format, pwd_len, pwd_index, pwd,
+                             key_progress_step);
+    uint32_t fp = hdnode_fingerprint(&root);
+    memzero(&root, sizeof(root));
+    if (!ok) return;                        // Lengths are kept in range by the screen
+
+    while (1) {
+        black_screen();
+        draw_title((char *)menu_derive[cDERIVE_PASSWORD], ST7735_LIGHTGREY);
+        strcpy(text, (pwd_format == BIP85_PWD_BASE64) ? "BASE64, " : "BASE85, ");
+        fast_itoa(pwd_len, num);
+        strcat(text, num);
+        strcat(text, " CHARS, INDEX ");
+        fast_itoa(pwd_index, num);
+        strcat(text, num);
+        drawtext(1, 12, text, ST7735_CYAN, ST7735_BLACK, 1);
+        draw_derived_from(22, fp);
+        draw_grouped(pwd, 36);
+        drawtext(1, 92, "A SECRET: QR ONLY TO", ST7735_YELLOW, ST7735_BLACK, 1);
+        drawtext(1, 107, "YOUR OWN", ST7735_YELLOW, ST7735_BLACK, 1);
+        drawtext(1, 117, "DEVICES", ST7735_YELLOW, ST7735_BLACK, 1);
+        grid_confirm("QR");
+        int bt;
+        do { bt = wait_any_key(); } while (bt != OK_BT && bt != BACK_BT);
+        if (bt == BACK_BT) break;
+        derive_show_qr(pwd);
+    }
+    memzero(pwd, sizeof(pwd));
+    wait_keys_released();
+}
+
+// BIP85 PASSWORD: format, length and index (LEFT / RIGHT field, UP / DOWN
+// value), OK derives it, BACK returns to DERIVE
+static void bip85_password_run(void) {
+    print_password_config();
+    while (1) {
+        int bt = wait_any_key();
+        uint8_t lo = (pwd_format == BIP85_PWD_BASE64) ? BIP85_PWD64_MIN : BIP85_PWD85_MIN;
+        uint8_t hi = (pwd_format == BIP85_PWD_BASE64) ? BIP85_PWD64_MAX : BIP85_PWD85_MAX;
+        if (bt == BACK_BT) return;
+        if (bt == OK_BT) {
+            bip85_password_show();
+        } else if (bt == LEFT_BT) {
+            pwd_cursor = (uint8_t)((pwd_cursor + 2) % 3);
+        } else if (bt == RIGHT_BT) {
+            pwd_cursor = (uint8_t)((pwd_cursor + 1) % 3);
+        } else if (pwd_cursor == 0) {
+            pwd_format = (pwd_format == BIP85_PWD_BASE64) ? BIP85_PWD_BASE85 : BIP85_PWD_BASE64;
+            lo = (pwd_format == BIP85_PWD_BASE64) ? BIP85_PWD64_MIN : BIP85_PWD85_MIN;
+            hi = (pwd_format == BIP85_PWD_BASE64) ? BIP85_PWD64_MAX : BIP85_PWD85_MAX;
+            if (pwd_len < lo) pwd_len = lo;
+            if (pwd_len > hi) pwd_len = hi;
+        } else if (pwd_cursor == 1) {
+            if (bt == UP_BT && pwd_len < hi) pwd_len++;
+            else if (bt == DOWN_BT && pwd_len > lo) pwd_len--;
+        } else if (bt == UP_BT && pwd_index < 0x7FFFFFFFu) {
+            pwd_index++;
+        } else if (bt == DOWN_BT && pwd_index > 0) {
+            pwd_index--;
+        }
+        print_password_config();
+    }
+}
+
+// The nsec gives control of the Nostr identity: a red warning every time
+static bool nostr_nsec_warning(void) {
+    black_screen();
+    drawtext(1, 10, "THE NSEC IS YOUR NOSTR", ST7735_WHITE, ST7735_RED, 1);
+    drawtext(1, 25, "IDENTITY: WHOEVER SEES", ST7735_WHITE, ST7735_RED, 1);
+    drawtext(1, 40, "IT CAN POST AS YOU", ST7735_WHITE, ST7735_RED, 1);
+    drawtext(1, 55, "SHOW IT ONLY TO A", ST7735_WHITE, ST7735_RED, 1);
+    drawtext(1, 70, "NOSTR APP YOU TRUST", ST7735_WHITE, ST7735_RED, 1);
+    grid_confirm("SHOW");
+    int bt;
+    do { bt = wait_any_key(); } while (bt != OK_BT && bt != BACK_BT);
+    return bt == OK_BT;
+}
+
+// NOSTR KEYS: m/44'/1237'/account'/0/0 (NIP-06, the account of the wallet
+// menu). The npub first; RIGHT shows the nsec after its warning, LEFT goes
+// back to the npub, OK shows the QR of the one on screen.
+static void nostr_keys_run(void) {
+    char text[NOSTR_BECH32_LEN + 1];
+    char path[26];
+    char num[12];
+    HDNode node;
+
+    if (!derive_root_screen(menu_derive[cDERIVE_NOSTR], &node)) return;
+    uint32_t fp = hdnode_fingerprint(&node);
+    key_progress_phase("2/2 NOSTR KEY", 5);
+    hdnode_private_ckd(&node, 0x80000000u | NOSTR_ACCOUNT_PURPOSE);
+    key_progress_step();
+    hdnode_private_ckd(&node, 0x80000000u | NOSTR_COIN_TYPE);
+    key_progress_step();
+    hdnode_private_ckd(&node, 0x80000000u | bip84_account_index);
+    key_progress_step();
+    hdnode_private_ckd(&node, 0);
+    key_progress_step();
+    hdnode_private_ckd(&node, 0);
+    hdnode_fill_public_key(&node);
+    key_progress_step();
+
+    strcpy(path, "m/44'/1237'/");
+    fast_itoa(bip84_account_index, num);
+    strcat(path, num);
+    strcat(path, "'/0/0");
+    bool nsec = false;
+    while (1) {
+        bool ok = nostr_bech32(nsec ? "nsec" : "npub", nsec ? node.private_key : node.public_key + 1, text);
+        black_screen();
+        draw_title(nsec ? "NOSTR NSEC" : "NOSTR NPUB", ST7735_LIGHTGREY);
+        drawtext(1, 12, path, ST7735_CYAN, ST7735_BLACK, 1);
+        draw_derived_from(22, fp);
+        if (ok) draw_bip84_wrapped_text(text, 5, 37, PSBT_VIEW_LINE_CHARS - 1, 3);
+        if (nsec) {
+            drawtext(1, 72, "PRIVATE KEY: KEEP IT", ST7735_RED, ST7735_BLACK, 1);
+            drawtext(1, 82, "SECRET", ST7735_RED, ST7735_BLACK, 1);
+            grid_labels("BACK", NULL, "QR", "NPUB", NULL, NULL);
+        } else {
+            drawtext(1, 72, "PUBLIC KEY: SAFE TO", ST7735_CYAN, ST7735_BLACK, 1);
+            drawtext(1, 82, "SHARE", ST7735_CYAN, ST7735_BLACK, 1);
+            grid_labels("BACK", NULL, "QR", NULL, NULL, "NSEC");
+        }
+        int bt = wait_any_key();
+        if (bt == BACK_BT) break;
+        if (bt == OK_BT && ok) {
+            derive_show_qr(text);
+        } else if (bt == RIGHT_BT && !nsec) {
+            nsec = nostr_nsec_warning();
+        } else if (bt == LEFT_BT && nsec) {
+            nsec = false;
+        }
+    }
+    memzero(text, sizeof(text));
+    memzero(&node, sizeof(node));
+    wait_keys_released();
+}
+
+// The DERIVE submenu. True: BIP85 CHILD SEED was chosen (the caller opens
+// CHILD_CONFIG); false: BACK, back to the wallet menu.
+static bool derive_menu_run(void) {
+    static int sel = 0;
+    while (1) {
+        black_screen();
+        print_titled_menu("DERIVE", menu_derive, cDERIVE_n_opt, sel);
+        int bt;
+        while (1) {
+            bt = wait_any_key();
+            if (bt == UP_BT || bt == DOWN_BT) {
+                sel = (sel + ((bt == DOWN_BT) ? 1 : cDERIVE_n_opt - 1)) % cDERIVE_n_opt;
+                print_titled_menu("DERIVE", menu_derive, cDERIVE_n_opt, sel);
+            } else if (bt == OK_BT || bt == BACK_BT) {
+                break;
+            }
+        }
+        if (bt == BACK_BT) {
+            wait_keys_released();
+            return false;
+        }
+        if (sel == cDERIVE_CHILD) {
+            wait_keys_released();
+            return true;
+        }
+        if (sel == cDERIVE_PASSWORD) bip85_password_run();
+        else nostr_keys_run();
+    }
+}
+
 // Total sectors of the card (starting it if needed), 0 if it cannot be read
 static uint32_t sd_card_sectors(void) {
     uint32_t sectors = 0;
@@ -8348,16 +8623,7 @@ int main ( void ){
     while (BT_OK == 0 || BT6 == 0) SYS_Tasks();     // Keys released before the app reads them
 #endif
 
-    print_logo();
-    drawtext(1,40, "KEEP YOUR SEEDS OFFLINE", ST7735_GREEN, ST7735_BLACK, 1);
-    drawtext(1,51, "NO PHONE PHOTOS/QR", ST7735_RED, ST7735_BLACK, 1);
-    drawtext(1,62, "SD AWAY FROM A COMPUTER", ST7735_RED, ST7735_BLACK, 1);
-    print_camera(5,95,cSAFE);
-    drawtext(23,87, "=QR SAFE FOR PHONE", ST7735_GREEN, ST7735_BLACK, 1);
-    print_camera(5,110,cNOTSAFE);
-    drawtext(23,102, "=QR NOT SAFE FOR PHONE", ST7735_RED, ST7735_BLACK, 1);
-    drawtext(5,119, "(PRESS ANY BUTTON)", ST7735_WHITE, ST7735_BLACK, 1);  // Start screen: no grid
-    version_display();
+    print_logo();       // Animated logo, prompt and version (start screen: no grid)
 
     PULSED_BT_t pulsed_bt = NONE;
 
@@ -10542,10 +10808,16 @@ int SSS_N = 9;
                             black_screen();
                             print_address_menu();
                         } else if (bip84_option() == cBIP84_DERIVE) {
-                            derive_from_wallet = true;
-                            black_screen();
-                            print_child_config_screen();
-                            estado = CHILD_CONFIG;
+                            if (derive_menu_run()) {         // BIP85 CHILD SEED
+                                derive_from_wallet = true;
+                                black_screen();
+                                print_child_config_screen();
+                                estado = CHILD_CONFIG;
+                            } else {
+                                black_screen();
+                                print_bip84_menu();
+                            }
+                            pulsed_bt = NONE;
                         } else if (bip84_option() == cBIP84_UNLOAD) {
                             unload_from_menu = true;
                             print_unload_confirm();

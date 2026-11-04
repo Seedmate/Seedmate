@@ -24,6 +24,7 @@
 #include "app_defs.h"
 #include "app_state.h"
 #include "screens.h"
+#include "SPI.h"                            // delay_ms()
 
 // ============================================================================
 // BITMAP GRAPHICS REPLACEMENT
@@ -319,9 +320,8 @@ void draw_title_pair(const char *a, uint16_t color_a, const char *b, uint16_t co
 }
 
 void version_display(){
-
-    drawtext(120,119, cVersion, ST7735_WHITE, ST7735_BLACK, 1);     // Bottom right of the start screen
-
+    // Bottom right of the start screen
+    drawtext(SCREEN_WIDTH - 1 - 6 * (int)strlen(cVersion), 119, cVersion, ST7735_CYAN, ST7735_BLACK, 1);
 }
 
 // ============================================================================
@@ -1047,9 +1047,72 @@ void update_dice_bit_count_display(int bit_count_dice_local){
     drawtext(45,15, bit_count_text, ST7735_WHITE, ST7735_BLACK, 1);
 }
 
- void   print_logo(){
-    drawtext(10,10, "SEEDMATE", ST7735_WHITE, ST7735_BLACK, 3);
- }
+// ============================================================================
+// Start screen: the logo (web/img/logo.png) built from its 6 rectangles
+// ============================================================================
+
+// The logo is two interlocking S halves, each three bars. Scaled from the
+// 432 px square of logo.png to LOGO_SIZE: bars 16 / 7 px, gaps 6 px.
+// Coordinates relative to the logo's top left corner, inclusive.
+#define LOGO_SIZE       64
+#define LOGO_X          ((SCREEN_WIDTH - LOGO_SIZE) / 2)
+#define LOGO_Y          10
+#define LOGO_ORANGE     0xEC27      // #E8873D, the logo's own color (brand, this screen only)
+#define LOGO_FRAMES     26
+#define LOGO_TRAVEL     (LOGO_X + LOGO_SIZE)    // From fully outside the screen to the middle
+
+typedef struct { int8_t x0, y0, x1, y1; } logo_rect_t;
+static const logo_rect_t logo_left[3] = {   // Slides in from the left
+    {0, 0, 63, 15}, {0, 0, 10, 41}, {0, 35, 46, 41}
+};
+static const logo_rect_t logo_right[3] = {  // Slides in from the right
+    {0, 48, 63, 63}, {53, 22, 63, 63}, {17, 22, 63, 28}
+};
+
+// rectan() clipped to the screen (the pieces start outside it)
+static void fill_clipped(int x0, int y0, int x1, int y1, uint16_t color) {
+    if (x0 < 0) x0 = 0;
+    if (x1 > SCREEN_WIDTH - 1) x1 = SCREEN_WIDTH - 1;
+    if (x0 > x1 || y0 > y1) return;
+    rectan((unsigned char)x0, (unsigned char)y0, (unsigned char)x1, (unsigned char)y1, color);
+}
+
+// Moves a piece from x 'from' to x 'to': the strip it leaves is cleared and
+// the bars are drawn at the new place (no full redraw, no flicker). The two
+// pieces never cross while they approach, so a cleared strip is always the
+// piece's own.
+static void logo_piece_move(const logo_rect_t *r, int from, int to) {
+    for (int i = 0; i < 3; i++) {
+        int y0 = LOGO_Y + r[i].y0, y1 = LOGO_Y + r[i].y1;
+        if (to > from) fill_clipped(from + r[i].x0, y0, to + r[i].x0 - 1, y1, ST7735_BLACK);
+        else if (to < from) fill_clipped(to + r[i].x1 + 1, y0, from + r[i].x1, y1, ST7735_BLACK);
+        fill_clipped(to + r[i].x0, y0, to + r[i].x1, y1, LOGO_ORANGE);
+    }
+}
+
+// Black screen, the two halves slide in from the sides and lock in the middle
+// (ease out), then the name, the prompt below the logo and the firmware
+// version at the bottom right. The start screen has no button grid on purpose.
+void print_logo(void) {
+    int left = LOGO_X - LOGO_TRAVEL, right = LOGO_X + LOGO_TRAVEL;
+
+    black_screen();
+    for (int f = 1; f <= LOGO_FRAMES; f++) {
+        // Distance still to go: travel * (1 - t)^3, so the pieces slow down as they meet
+        int rest = LOGO_FRAMES - f;
+        int off = (int)((long)LOGO_TRAVEL * rest * rest * rest / ((long)LOGO_FRAMES * LOGO_FRAMES * LOGO_FRAMES));
+        logo_piece_move(logo_left, left, LOGO_X - off);
+        logo_piece_move(logo_right, right, LOGO_X + off);
+        left = LOGO_X - off;
+        right = LOGO_X + off;
+        delay_ms(20);
+    }
+    delay_ms(250);
+    drawtext((SCREEN_WIDTH - 6 * 15) / 2, LOGO_Y + LOGO_SIZE + 8, "S E E D M A T E", ST7735_WHITE, ST7735_BLACK, 1);
+    delay_ms(250);
+    drawtext((SCREEN_WIDTH - 6 * 16) / 2, LOGO_Y + LOGO_SIZE + 26, "PRESS ANY BUTTON", ST7735_WHITE, ST7735_BLACK, 1);
+    version_display();
+}
 
 // Text of a SeedQR: the 4 digit index of every word. data is the entropy plus
 // the checksum byte, as append_checksum() returns it.

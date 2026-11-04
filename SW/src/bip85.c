@@ -82,3 +82,45 @@ void bip85_entropy(const uint8_t master_k[32], const uint8_t master_c[32],
     memzero(c, sizeof(c));
     memzero(data, sizeof(data));
 }
+
+static const char b64_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+static const char b85_chars[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!#$%&()*+-;<=>?@^_`{|}~";
+
+bool bip85_password(const uint8_t master_k[32], const uint8_t master_c[32], uint8_t format,
+                    uint8_t len, uint32_t index, char *out, void (*step)(void)) {
+    bool b85 = (format == BIP85_PWD_BASE85);
+    if (b85 ? (len < BIP85_PWD85_MIN || len > BIP85_PWD85_MAX)
+            : (len < BIP85_PWD64_MIN || len > BIP85_PWD64_MAX)) return false;
+
+    const uint32_t path[4] = {
+        BIP85_HARDENED | 83696968u, BIP85_HARDENED | (b85 ? 707785u : 707764u),
+        BIP85_HARDENED | len, BIP85_HARDENED | index
+    };
+    uint8_t e[64];
+    char group[5];
+    uint8_t n = 0;
+
+    bip85_entropy(master_k, master_c, path, 4, e, step);
+    if (b85) {
+        // Each big endian 32 bit word gives 5 characters, most significant first
+        for (int i = 0; i < 64 && n < len; i += 4) {
+            uint32_t v = (uint32_t)e[i] << 24 | (uint32_t)e[i + 1] << 16 | (uint32_t)e[i + 2] << 8 | e[i + 3];
+            for (int j = 4; j >= 0; j--) {
+                group[j] = b85_chars[v % 85];
+                v /= 85;
+            }
+            for (int j = 0; j < 5 && n < len; j++) out[n++] = group[j];
+        }
+    } else {
+        // Standard base64; 86 characters never reach the padding of 64 bytes
+        for (int i = 0; i < 64 && n < len; i += 3) {
+            uint32_t v = (uint32_t)e[i] << 16 | (uint32_t)((i + 1 < 64) ? e[i + 1] : 0) << 8 |
+                         ((i + 2 < 64) ? e[i + 2] : 0);
+            for (int j = 0; j < 4 && n < len; j++) out[n++] = b64_chars[(v >> (18 - 6 * j)) & 63];
+        }
+    }
+    out[n] = '\0';
+    memzero(e, sizeof(e));
+    memzero(group, sizeof(group));
+    return true;
+}

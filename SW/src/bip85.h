@@ -11,6 +11,7 @@
 #define BIP85_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #define BIP85_HARDENED 0x80000000u
 
@@ -20,5 +21,19 @@
 // each derivation step (progress bar).
 void bip85_entropy(const uint8_t master_k[32], const uint8_t master_c[32],
                    const uint32_t *path, int depth, uint8_t out[64], void (*step)(void));
+
+// BIP85 passwords: PWD BASE64 (application 707764', 20..86 characters) and
+// PWD BASE85 (application 707785', 10..80 characters, the RFC 1924 alphabet
+// of Python's base64.b85encode), m/83696968'/app'/length'/index': the first
+// 'len' characters of the encoded 64 bytes of entropy. out holds len + 1.
+// False if the length is out of range for the format. Four derivation steps.
+#define BIP85_PWD_BASE64        0
+#define BIP85_PWD_BASE85        1
+#define BIP85_PWD64_MIN         20
+#define BIP85_PWD64_MAX         86
+#define BIP85_PWD85_MIN         10
+#define BIP85_PWD85_MAX         80
+bool bip85_password(const uint8_t master_k[32], const uint8_t master_c[32], uint8_t format,
+                    uint8_t len, uint32_t index, char *out, void (*step)(void));
 
 #endif // BIP85_H

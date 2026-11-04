@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Reference vectors for WALLET > DERIVE: BIP85 passwords and Nostr keys.
+
+An independent implementation (hashlib/hmac, pure Python secp256k1 and
+bech32) checked here against the published vectors of the BIP85 and NIP-06
+specifications, then written to derive_vectors.h for test_derive.c.
+
+Usage: python gen_derive.py
+"""
+import base64
+import hashlib
+import hmac
+import os
+
+N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+P = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+G = (0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798,
+     0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8)
+H = 0x80000000
+B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+BECH = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l'
+
+# BIP85 test master key (from the BIP85 specification)
+XPRV = ('xprv9s21ZrQH143K2LBWUUQRFXhucrQqBpKdRRxNVq2zBqsx8HVqFk2uYo8kmb'
+        'aLLHRdqtQpUm98uKfu3vca1LqdGhUtyoFnCNkfmXRyPXLjbKb')
+
+
+def point_add(a, b):
+    if a is None:
+        return b
+    if b is None:
+        return a
+    if a[0] == b[0] and (a[1] + b[1]) % P == 0:
+        return None
+    if a == b:
+        m = 3 * a[0] * a[0] * pow(2 * a[1], P - 2, P) % P
+    else:
+        m = (b[1] - a[1]) * pow(b[0] - a[0], P - 2, P) % P
+    x = (m * m - a[0] - b[0]) % P
+    return (x, (m * (a[0] - x) - a[1]) % P)
+
+
+def point_mul(k):
+    r, q = None, G
+    while k:
+        if k & 1:
+            r = point_add(r, q)
+        q = point_add(q, q)
+        k >>= 1
+    return r
+
+
+def pub33(k):
+    x, y = point_mul(int.from_bytes(k, 'big'))
+    return bytes([2 + (y & 1)]) + x.to_bytes(32, 'big')
+
+
+def ckd(k, c, i):
+    data = (b'\x00' + k if i & H else pub33(k)) + i.to_bytes(4, 'big')
+    I = hmac.new(c, data, hashlib.sha512).digest()
+    return ((int.from_bytes(I[:32], 'big') + int.from_bytes(k, 'big')) % N).to_bytes(32, 'big'), I[32:]
+
+
+def derive(k, c, path):
+    for i in path:
+        k, c = ckd(k, c, i)
+    return k, c
+
+
+def master_from_seed(seed):
+    I = hmac.new(b'Bitcoin seed', seed, hashlib.sha512).digest()
+    return I[:32], I[32:]
+
+
+def master_from_xprv(xprv):
+    n = 0
+    for ch in xprv:
+        n = n * 58 + B58.index(ch)
+    d = n.to_bytes(82, 'big')[:-4]
+    return d[46:78], d[13:45]
+
+
+def bip85_entropy(k, c, path):
+    k, _ = derive(k, c, path)
+    return hmac.new(b'bip-entropy-from-k', k, hashlib.sha512).digest()
+
+
+def bech32(hrp, data8):
+    acc, bits, data = 0, 0, []
+    for b in data8:
+        acc = (acc << 8) | b
+        bits += 8
+        while bits >= 5:
+            bits -= 5
+            data.append((acc >> bits) & 31)
+    if bits:
+        data.append((acc << (5 - bits)) & 31)
+    gen = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
+    values = [ord(x) >> 5 for x in hrp] + [0] + [ord(x) & 31 for x in hrp] + data + [0] * 6
+    chk = 1
+    for v in values:
+        top = chk >> 25
+        chk = (chk & 0x1ffffff) << 5 ^ v
+        for i in range(5):
+            chk ^= gen[i] if (top >> i) & 1 else 0
+    chk ^= 1
+    return hrp + '1' + ''.join(BECH[d] for d in data + [(chk >> 5 * (5 - i)) & 31 for i in range(6)])
+
+
+def c_array(name, data):
+    out = 'static const uint8_t %s[%d] = {' % (name, len(data))
+    for i, b in enumerate(data):
+        out += ('\n    ' if i % 16 == 0 else ' ') + '0x%02x,' % b
+    return out + '\n};\n'
+
+
+# ---- BIP85 passwords (application 707764' base64, 707785' base85)
+mk, mc = master_from_xprv(XPRV)
+pwd64 = base64.b64encode(bip85_entropy(mk, mc, [H | 83696968, H | 707764, H | 21, H | 0])).decode()[:21]
+pwd85 = base64.b85encode(bip85_entropy(mk, mc, [H | 83696968, H | 707785, H | 12, H | 0])).decode()[:12]
+assert pwd64 == 'dKLoepugzdVJvdL56ogNV', pwd64
+assert pwd85 == '_s`{TW89)i4`', pwd85
+pwd64_86 = base64.b64encode(bip85_entropy(mk, mc, [H | 83696968, H | 707764, H | 86, H | 7])).decode()[:86]
+pwd85_80 = base64.b85encode(bip85_entropy(mk, mc, [H | 83696968, H | 707785, H | 80, H | 7])).decode()[:80]
+
+# ---- Nostr keys (NIP-06: m/44'/1237'/account'/0/0)
+nip06 = [
+    ('leader monkey parrot ring guide accident before fence cannon height naive bean',
+     '7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a',
+     'nsec10allq0gjx7fddtzef0ax00mdps9t2kmtrldkyjfs8l5xruwvh2dq0lhhkp',
+     '17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917',
+     'npub1zutzeysacnf9rru6zqwmxd54mud0k44tst6l70ja5mhv8jjumytsd2x7nu'),
+    ('what bleak badge arrange retreat wolf trade produce cricket blur garlic valid '
+     'proud rude strong choose busy staff weather area salt hollow arm fade',
+     'c15d739894c81a2fcfd3a2df85a0d2c0dbc47a280d092799f144d73d7ae78add',
+     'nsec1c9wh8xy5eqdzln7n5t0ctgxjcrdug73gp5yj0x03gntn67h83twssdfhel',
+     'd41b22899549e1f3d335a31002cfd382174006e166d3e658e3a5eecdb6463573',
+     'npub16sdj9zv4f8sl85e45vgq9n7nsgt5qphpvmf7vk8r5hhvmdjxx4es8rq74h'),
+]
+out = ['// Generated by gen_derive.py - do not edit\n#include <stdint.h>\n']
+out.append(c_array('vec_master_k', mk))
+out.append(c_array('vec_master_c', mc))
+out.append('static const char vec_pwd64_21_0[] = "%s";\nstatic const char vec_pwd85_12_0[] = "%s";\n' % (pwd64, pwd85))
+out.append('static const char vec_pwd64_86_7[] = "%s";\nstatic const char vec_pwd85_80_7[] = "%s";\n'
+           % (pwd64_86, pwd85_80.replace('\\', '\\\\').replace('"', '\\"')))
+for n, (words, priv, nsec, pub, npub) in enumerate(nip06):
+    seed = hashlib.pbkdf2_hmac('sha512', words.encode(), b'mnemonic', 2048)
+    k, c = master_from_seed(seed)
+    nk, _ = derive(k, c, [H | 44, H | 1237, H | 0, 0, 0])
+    assert nk.hex() == priv and pub33(nk)[1:].hex() == pub
+    assert bech32('nsec', nk) == nsec and bech32('npub', pub33(nk)[1:]) == npub
+    out.append(c_array('vec_nip06_%d_master_k' % n, k))
+    out.append(c_array('vec_nip06_%d_master_c' % n, c))
+    out.append(c_array('vec_nip06_%d_priv' % n, nk))
+    out.append(c_array('vec_nip06_%d_xonly' % n, pub33(nk)[1:]))
+    out.append('static const char vec_nip06_%d_nsec[] = "%s";\nstatic const char vec_nip06_%d_npub[] = "%s";\n'
+               % (n, nsec, n, npub))
+path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'derive_vectors.h')
+with open(path, 'w', newline='\n') as f:
+    f.write('\n'.join(out))
+print('wrote', path)
