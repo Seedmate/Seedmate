@@ -22,6 +22,7 @@ extern int obfuscation_pointer;
 extern bool seedqr_enabled;
 extern bool sdwrite_enabled;
 extern bool decoy_enabled;
+extern bool stopwatch_enabled;
 extern bool SD_ready;
 extern int SD_page;
 

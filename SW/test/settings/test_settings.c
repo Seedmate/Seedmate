@@ -43,16 +43,16 @@ int main(void) {
     // A new or erased page means the factory defaults
     fresh_page();
     CHECK(settings_load() == SETTINGS_DEFAULT);
-    CHECK((settings_load() & SETTING_DECOY_ON) && (settings_load() & SETTING_SEEDQR_OFF));
+    CHECK((settings_load() & SETTING_DECOY_OFF) && (settings_load() & SETTING_SEEDQR_OFF));
     CHECK(settings_load() & SETTING_SDWRITE_OFF);
 
     // Saving the current value writes nothing
     CHECK(settings_save(SETTINGS_DEFAULT) && writes == 0);
 
     // Round trip, newest wins
-    CHECK(settings_save((uint8_t)~SETTING_DECOY_ON) && settings_load() == (uint8_t)~SETTING_DECOY_ON);
-    CHECK(settings_save((uint8_t)~(SETTING_DECOY_ON | SETTING_SEEDQR_OFF)));
-    CHECK(settings_load() == (uint8_t)~(SETTING_DECOY_ON | SETTING_SEEDQR_OFF));
+    CHECK(settings_save((uint8_t)~SETTING_DECOY_OFF) && settings_load() == (uint8_t)~SETTING_DECOY_OFF);
+    CHECK(settings_save((uint8_t)~(SETTING_DECOY_OFF | SETTING_SEEDQR_OFF)));
+    CHECK(settings_load() == (uint8_t)~(SETTING_DECOY_OFF | SETTING_SEEDQR_OFF));
     CHECK(settings_save(SETTINGS_DEFAULT) && settings_load() == SETTINGS_DEFAULT);
     CHECK(writes == 3 && erases == 0 && double_writes == 0);
 

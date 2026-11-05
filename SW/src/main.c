@@ -140,7 +140,8 @@
 
 bool seedqr_enabled = false;        // Permanent settings (settings.c), loaded at power-on
 bool sdwrite_enabled = false;       // Writing seeds to the SD card
-bool decoy_enabled = true;
+bool decoy_enabled = false;         // Off by default: a new user would only see a snake game
+bool stopwatch_enabled = false;     // STOPWATCH in CREATE: its entropy cannot be checked
 int settings_pointer = 0;
 
 
@@ -1778,7 +1779,39 @@ static void key_progress_step(void) {
     rectan(10, 93, 10 + (140u * key_steps_done) / key_steps_total, 96, ST7735_GREEN);
 }
 
+// The BIP32 root of the seed and passphrase on screen, kept while the wallet
+// is loaded so DERIVE and the multisig keys do not run the PBKDF2 again.
+// Bound to bip84_seed_tag_now() (entropy, size, passphrase); wiped with the
+// keys in transition_to_main().
+static HDNode wallet_root;
+static uint8_t wallet_root_tag[8];
+static bool wallet_root_ok;
+static void bip84_seed_tag_now(uint8_t tag[8]);
+static bool derive_root_pbkdf2(HDNode *root, bool cancellable);
+
 static bool derive_root_with_progress(HDNode *root, bool cancellable) {
+    if (wallet_root_ok) {
+        uint8_t tag[8];
+        bip84_seed_tag_now(tag);
+        bool same = memcmp(tag, wallet_root_tag, sizeof(tag)) == 0;
+        memzero(tag, sizeof(tag));
+        if (same) {
+            *root = wallet_root;
+            return true;
+        }
+        memzero(&wallet_root, sizeof(wallet_root));     // Another seed or passphrase
+        wallet_root_ok = false;
+    }
+    bool ok = derive_root_pbkdf2(root, cancellable);
+    if (ok) {
+        wallet_root = *root;
+        bip84_seed_tag_now(wallet_root_tag);
+        wallet_root_ok = true;
+    }
+    return ok;
+}
+
+static bool derive_root_pbkdf2(HDNode *root, bool cancellable) {
     char mnemonic_str[250];
     char bip39_salt[250] = "mnemonic";
     uint8_t seed[64];
@@ -1922,9 +1955,11 @@ static bool load_wallet_keys(void) {
     memzero(tag, sizeof(tag));
     if (same_seed) return true;
 
-    // Keys of another seed (or none yet): derive again
+    // Keys of another seed (or none yet): derive again, the old root goes now
     bip84_account_cached = false;
     ms_account_cached = false;
+    memzero(&wallet_root, sizeof(wallet_root));
+    wallet_root_ok = false;
     black_screen();
     draw_title("LOADING WALLET", ST7735_LIGHTGREY);
     drawtext(5, 25, "DERIVING THE KEYS", ST7735_CYAN, ST7735_BLACK, 1);
@@ -2144,6 +2179,8 @@ static bool unload_from_menu = false;       // CONFIRM_UNLOAD came from the wall
 static uint8_t derive_child[36];            // Entropy of the child seed
 static uint32_t derive_child_fp;            // Master fingerprint of the key it comes from
 static uint8_t transcript_tag[8];           // Seed whose transcript was verified or skipped (see transcript_pending)
+static bool warned_seedqr;                  // The SeedQR warning was accepted in this session
+static bool warned_nsec;                    // The nsec warning was accepted in this session
 
 // Derives the child (BACK cancels the PBKDF2) and shows where it comes from
 static void derive_child_seed(void) {
@@ -2206,7 +2243,7 @@ static void draw_child_words(void) {
 
 static void print_bip84_menu(void)
 {
-    print_generic_menu(bip84_multisig_mode ? menu_bip84_multi : menu_bip84, bip84_option_count(), bip84_menu_pointer);
+    print_titled_menu("WALLET", bip84_multisig_mode ? menu_bip84_multi : menu_bip84, bip84_option_count(), bip84_menu_pointer);
     // --- ADDED: Display master fingerprint at the bottom left ---
     // Convert the 32-bit fingerprint into an 8-character hex string
     // Fingerprint and, below it, the account at the bottom left: both fit in
@@ -3083,7 +3120,7 @@ void extract_11bit_groups(BYTE *data, size_t size) {
     }
     print_camera(145,20,cNOTSAFE);
     // QR functions moved to the next menu, so we just show a MENU hint
-    drawtext(120, 117, "LOAD", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(112, 117, "WALLET", ST7735_WHITE, ST7735_BLACK, 1);    // RIGHT opens the wallet menu
     print_rigth_arrow(150, 123, ST7735_WHITE);
     
     drawtext(7,117, "SEED BACKUP", ST7735_WHITE, ST7735_BLACK, 1);
@@ -3710,6 +3747,11 @@ void tc_fault_handler(const char *msg) {
 
 void transition_to_main(void) {
     black_screen();
+    memzero(&wallet_root, sizeof(wallet_root));
+    memzero(wallet_root_tag, sizeof(wallet_root_tag));
+    wallet_root_ok = false;
+    warned_seedqr = false;
+    warned_nsec = false;
     memzero(transcript_tag, sizeof(transcript_tag));
     memzero(bip84_passphrase, sizeof(bip84_passphrase)); // The seed is unloaded
     memzero(&ms_wallet, sizeof(ms_wallet));
@@ -3846,10 +3888,21 @@ void transition_to_size(void) {
 }
 
 
+// Entries of the CREATE menu: STOPWATCH is the last one and is left out
+// unless SETTINGS turned it on
+static int create_menu_count(void) {
+    return stopwatch_enabled ? cSEED_n_opt : cSEED_n_opt - 1;
+}
+
+static void draw_create_menu(void) {
+    if (seed_pointer >= create_menu_count()) seed_pointer = cSEED_coin;
+    print_generic_menu(menu_create, create_menu_count(), seed_pointer);
+}
+
 // Helper to transition to the CREATE_SEED screen
 void transition_to_create_seed(void) {
     black_screen();
-    print_generic_menu(menu_create, cSEED_n_opt, seed_pointer);
+    draw_create_menu();
     estado = CREATE_SEED;
 }
 
@@ -6443,8 +6496,9 @@ static void check_scanned_address(void) {
 static uint8_t setting_pending;     // Flags to save when the user confirms
 
 static uint8_t settings_flags_now(void) {
-    return (uint8_t)(0xF8u | (decoy_enabled ? SETTING_DECOY_ON : 0u) | (seedqr_enabled ? 0u : SETTING_SEEDQR_OFF) |
-                     (sdwrite_enabled ? 0u : SETTING_SDWRITE_OFF));
+    return (uint8_t)(0xE0u | SETTING_LEGACY_DECOY | (decoy_enabled ? 0u : SETTING_DECOY_OFF) |
+                     (seedqr_enabled ? 0u : SETTING_SEEDQR_OFF) | (sdwrite_enabled ? 0u : SETTING_SDWRITE_OFF) |
+                     (stopwatch_enabled ? 0u : SETTING_STOPWATCH_OFF));
 }
 
 // Asks to confirm the change of the selected setting (SeedQR, SD write or decoy game)
@@ -6458,9 +6512,12 @@ static void ask_setting_change(void) {
     } else if (settings_pointer == cSETTINGS_SDWRITE) {
         flags ^= SETTING_SDWRITE_OFF;
         new_on = (flags & SETTING_SDWRITE_OFF) == 0;
+    } else if (settings_pointer == cSETTINGS_STOPWATCH) {
+        flags ^= SETTING_STOPWATCH_OFF;
+        new_on = (flags & SETTING_STOPWATCH_OFF) == 0;
     } else {
-        flags ^= SETTING_DECOY_ON;
-        new_on = (flags & SETTING_DECOY_ON) != 0;
+        flags ^= SETTING_DECOY_OFF;
+        new_on = (flags & SETTING_DECOY_OFF) == 0;
     }
     setting_pending = flags;
     print_setting_confirm(settings_pointer, new_on);
@@ -6603,7 +6660,27 @@ static void eff_wipe(void) {
 
 // Waits for one of the six keys (pressed and released) in a modal screen,
 // feeding the key press entropy pool like the main loop does
+// UP / DOWN held down repeat: first after KEY_REPEAT_FIRST_MS, then every
+// KEY_REPEAT_NEXT_MS (lists and numbers). OK, BACK, LEFT and RIGHT never do.
+#define KEY_REPEAT_FIRST_MS     500u
+#define KEY_REPEAT_NEXT_MS      120u
 static int wait_any_key(void) {
+    static int last_bt = NONE;
+    static uint32_t last_t;
+    static bool repeating;
+
+    if ((last_bt == UP_BT && BT5 == 0) || (last_bt == DOWN_BT && BT4 == 0)) {
+        uint32_t wait = (repeating ? KEY_REPEAT_NEXT_MS : KEY_REPEAT_FIRST_MS) * (CPU_CLOCK_FREQUENCY / 2000u);
+        while ((last_bt == UP_BT) ? (BT5 == 0) : (BT4 == 0)) {
+            SYS_Tasks();
+            if ((uint32_t)(_CP0_GET_COUNT() - last_t) >= wait) {
+                last_t = _CP0_GET_COUNT();
+                repeating = true;
+                return last_bt;
+            }
+        }
+    }
+    repeating = false;
     while (BT_OK == 0 || BT1 == 0 || BT2 == 0 || BT4 == 0 || BT5 == 0 || BT6 == 0) SYS_Tasks();
     delay_ms(30);
     while (1) {
@@ -6613,6 +6690,8 @@ static int wait_any_key(void) {
         if (bt == NONE) continue;
         delay_ms(30);
         update_entropy_coefficients();
+        last_bt = bt;
+        last_t = _CP0_GET_COUNT();
         return bt;
     }
 }
@@ -8336,7 +8415,8 @@ static void nostr_keys_run(void) {
         if (bt == OK_BT && ok) {
             derive_show_qr(text);
         } else if (bt == RIGHT_BT && !nsec) {
-            nsec = nostr_nsec_warning();
+            nsec = warned_nsec || nostr_nsec_warning();     // Once in a session
+            warned_nsec = nsec;
         } else if (bt == LEFT_BT && nsec) {
             nsec = false;
         }
@@ -8788,7 +8868,8 @@ int main ( void ){
     SYS_Initialize ( NULL );
     {
         uint8_t saved = settings_load();    // Permanent settings; no record = factory defaults
-        decoy_enabled = (saved & SETTING_DECOY_ON) != 0;
+        decoy_enabled = (saved & SETTING_DECOY_OFF) == 0;
+        stopwatch_enabled = (saved & SETTING_STOPWATCH_OFF) == 0;
         seedqr_enabled = (saved & SETTING_SEEDQR_OFF) == 0;
         sdwrite_enabled = (saved & SETTING_SDWRITE_OFF) == 0;
     }
@@ -8893,6 +8974,8 @@ int main ( void ){
     int BT1_ST= 1;
     int BT2_ST= 1;
     int BT_OK_ST = 1;
+    int repeat_bt = NONE;               // UP / DOWN held: see the key repeat below
+    uint32_t repeat_t = 0, repeat_wait = 0;
     int BT4_ST= 1;
     int BT5_ST= 1;
     int BT6_ST= 1;
@@ -9011,6 +9094,25 @@ int SSS_N = 9;
             }
             if (BT6 ==1){
             BT6_ST=1;
+            }
+        }
+        // UP / DOWN held down repeat (lists, numbers): first after 500 ms, then
+        // every 120 ms. Never where an arrow enters entropy (coins and dice,
+        // stopwatch, cards, dice string), never OK, BACK, LEFT or RIGHT.
+        if (pulsed_bt == UP_BT || pulsed_bt == DOWN_BT) {
+            repeat_bt = pulsed_bt;
+            repeat_t = _CP0_GET_COUNT();
+            repeat_wait = KEY_REPEAT_FIRST_MS;
+        } else if (pulsed_bt == NONE && repeat_bt != NONE) {
+            bool held = (repeat_bt == UP_BT) ? (BT5 == 0) : (BT4 == 0);
+            bool entropy_screen = estado == ROLL_DICE1 || estado == TMR_INPUT || estado == CARD_INPUT ||
+                                  estado == DICE_STRING_INPUT;
+            if (!held || entropy_screen) {
+                repeat_bt = NONE;
+            } else if ((uint32_t)(_CP0_GET_COUNT() - repeat_t) >= repeat_wait * (CPU_CLOCK_FREQUENCY / 2000u)) {
+                pulsed_bt = repeat_bt;
+                repeat_t = _CP0_GET_COUNT();
+                repeat_wait = KEY_REPEAT_NEXT_MS;
             }
         }
         // End button pressing logic
@@ -9324,13 +9426,13 @@ int SSS_N = 9;
                         if (seed_pointer > 0) {
                             seed_pointer--;
                         }
-                        print_generic_menu(menu_create, cSEED_n_opt, seed_pointer);
+                        draw_create_menu();
                         break;
                     case DOWN_BT:
-                        if (seed_pointer < (cSEED_n_opt-1)) {
+                        if (seed_pointer < (create_menu_count() - 1)) {
                             seed_pointer++;
                         }
-                        print_generic_menu(menu_create, cSEED_n_opt, seed_pointer);
+                        draw_create_menu();
                         break;
                     case LEFT_BT:
                         break;
@@ -11388,7 +11490,7 @@ int SSS_N = 9;
                                 ask_setting_change();               // ON -> OFF
                             }
                         }
-                        else if (settings_pointer == cSETTINGS_DECOY) {
+                        else if (settings_pointer == cSETTINGS_DECOY || settings_pointer == cSETTINGS_STOPWATCH) {
                             ask_setting_change();
                         }
                     else if (settings_pointer == cSETTINGS_MCU_SERIAL) {
@@ -11428,6 +11530,7 @@ int SSS_N = 9;
             break;
             case WARNING_SEEDQR_VIEW:
             if (pulsed_bt == OK_BT) {
+                warned_seedqr = true;
                 show_seedqr();
             } else if (pulsed_bt == BACK_BT) {
                 print_backup_menu();
@@ -11481,7 +11584,7 @@ int SSS_N = 9;
                             pulsed_bt = NONE;
                         } else if (backup_pointer == cBACKUP_SD) {
                             if (!sdwrite_enabled) {
-                                print_blocked("SD WRITE IS OFF", "TURN IT ON IN", "SETTINGS > SD WRITE");
+                                print_blocked("SD SEED SAVE IS OFF", "TURN IT ON IN", "SETTINGS > SD SEED SAVE");
                                 estado = BACKUP_BLOCKED;
                             } else {
                                 print_sd_warning("NEXT");
@@ -11493,8 +11596,12 @@ int SSS_N = 9;
                                 print_blocked("SEEDQR IS OFF", "TURN IT ON IN", "SETTINGS > SEEDQR");
                                 estado = BACKUP_BLOCKED;
                             } else {
-                                print_seedqr_warning("SHOW");       // Every time, before the QR
-                                estado = WARNING_SEEDQR_VIEW;
+                                if (warned_seedqr) {
+                                    show_seedqr();                  // Accepted once in this session
+                                } else {
+                                    print_seedqr_warning("SHOW");
+                                    estado = WARNING_SEEDQR_VIEW;
+                                }
                             }
                         }
                         break;
@@ -11707,7 +11814,8 @@ int SSS_N = 9;
             if (pulsed_bt == OK_BT) {
                 black_screen();
                 if (settings_save(setting_pending)) {
-                    decoy_enabled = (setting_pending & SETTING_DECOY_ON) != 0;
+                    decoy_enabled = (setting_pending & SETTING_DECOY_OFF) == 0;
+                    stopwatch_enabled = (setting_pending & SETTING_STOPWATCH_OFF) == 0;
                     seedqr_enabled = (setting_pending & SETTING_SEEDQR_OFF) == 0;
                     sdwrite_enabled = (setting_pending & SETTING_SDWRITE_OFF) == 0;
                     drawtext(5, 50, "SETTING SAVED", ST7735_GREEN, ST7735_BLACK, 1);

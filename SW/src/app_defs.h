@@ -52,12 +52,13 @@
 #define cDICE_MODE_n_opt 2
 #define cHASH_MODE_n_opt 2
 #define cRESOURCE_n_opt 6
-#define cSETTINGS_n_opt 5
+#define cSETTINGS_n_opt 6
 #define cSETTINGS_SEEDQR 0
 #define cSETTINGS_SDWRITE 1
 #define cSETTINGS_DECOY 2
-#define cSETTINGS_MCU_SERIAL 3
-#define cSETTINGS_UPDATE_FW 4
+#define cSETTINGS_STOPWATCH 3
+#define cSETTINGS_MCU_SERIAL 4
+#define cSETTINGS_UPDATE_FW 5
 #define cEND_OF_LINE 150
 #define cENTROPY_BITS12W 127
 #define cENTROPY_BITS24W 255
@@ -114,8 +115,8 @@
 #define cSEED_dice 1
 #define cSEED_word 2
 #define cSEED_cards 3
-#define cSEED_timer 4
-#define cSEED_triple 5
+#define cSEED_triple 4
+#define cSEED_timer 5               // Last: not shown while SETTINGS keeps it off
 #define cSIZE_12 0
 #define cSIZE_24 1
 #define cKEYBOARD 0

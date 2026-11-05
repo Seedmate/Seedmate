@@ -47,7 +47,7 @@ const uint8_t opsec_menu_ids[cOPSEC_n_opt] = {cMAIN_SSS, cMAIN_XOR, cMAIN_OBFUS,
 const char* const menu_tools[]    = {"QR READER", "QR FROM TEXT", "EFF PASSWORD", "REVIEW PSBT"};
 const char* const menu_backup[]   = {"SD", "SEEDQR", "COMPACT SEEDQR", "VERIFY TRANSCRIPT"};
 const char* const menu_passphrase[] = {"FROM KEYBOARD", "FROM QR", "FROM VAULT"};
-const char* const menu_create[]   = {"THROW COINS", "ROLL DICE", "RANDOM WORD PICK", "POKER CARDS", "STOPWATCH TEST ONLY", "TRIPLE MNEMONIC"};
+const char* const menu_create[]   = {"THROW COINS", "ROLL DICE", "RANDOM WORD PICK", "POKER CARDS", "TRIPLE MNEMONIC", "STOPWATCH TEST ONLY"};
 const char* const menu_dice[]     = {"RAW ENTROPY BITS", "STRING HASH"};
 const char* const menu_hash[]     = {"1-6 MODE", "0-5 MODE (KEYSTONE)"};
 const char* const menu_size[]     = {"12 WORDS", "24 WORDS"};
@@ -62,7 +62,7 @@ const char* const menu_addresses[] = {"RECEIVE ADDRESS", "CHANGE ADDRESS", "SCAN
 const char* const menu_bip84_multi[] = {"SIGN", "DERIVE", "VAULT", "XPUB/ZPUB", "IMPORT DESCRIPTOR", "PASSPHRASE", "ACCOUNT", "MODE: MULTI SIG", "UNLOAD SEED"};
 const char* const menu_sign[]     = {"FROM QR", "FROM SD"};
 const char* const menu_import[]   = {"FROM QR", "FROM SD", "FROM VAULT"};
-const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD", "QR SCAN"};
+const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD", "FROM QR"};
 
 void draw_hex16(unsigned int x, unsigned int y, uint16_t numero, int N, unsigned int color, unsigned int bg, unsigned int size) {
     char hex_text[5]; // 4 hex digits plus null terminator
@@ -1436,11 +1436,13 @@ void sel_sd_block_screen_merge(int sel,int id) {
 
 void print_settings_screen(int sel) {
     char* text_seedqr = seedqr_enabled ? "SEEDQR ON " : "SEEDQR OFF";
-    char* text_sdwrite = sdwrite_enabled ? "SD WRITE ON " : "SD WRITE OFF";
+    char* text_sdwrite = sdwrite_enabled ? "SD SEED SAVE ON " : "SD SEED SAVE OFF";
     char* text_decoy = decoy_enabled ? "DECOY GAME ON " : "DECOY GAME OFF";
+    char* text_stopwatch = stopwatch_enabled ? "STOPWATCH SEED ON " : "STOPWATCH SEED OFF";
     uint16_t color_seedqr = (sel == cSETTINGS_SEEDQR) ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t color_sdwrite = (sel == cSETTINGS_SDWRITE) ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t color_decoy = (sel == cSETTINGS_DECOY) ? ST7735_ORANGE : ST7735_WHITE;
+    uint16_t color_stopwatch = (sel == cSETTINGS_STOPWATCH) ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t color_serial = (sel == cSETTINGS_MCU_SERIAL) ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t color_fw = (sel == cSETTINGS_UPDATE_FW) ? ST7735_ORANGE : ST7735_WHITE;
 
@@ -1448,8 +1450,9 @@ void print_settings_screen(int sel) {
     drawtext(1, 13, text_seedqr, color_seedqr, ST7735_BLACK, 1);
     drawtext(1, 23, text_sdwrite, color_sdwrite, ST7735_BLACK, 1);
     drawtext(1, 33, text_decoy, color_decoy, ST7735_BLACK, 1);
-    drawtext(1, 43, "MCU SERIAL NUMBER", color_serial, ST7735_BLACK, 1);
-    drawtext(1, 53, "UPDATE FIRMWARE", color_fw, ST7735_BLACK, 1);
+    drawtext(1, 43, text_stopwatch, color_stopwatch, ST7735_BLACK, 1);
+    drawtext(1, 53, "MCU SERIAL NUMBER", color_serial, ST7735_BLACK, 1);
+    drawtext(1, 63, "UPDATE FIRMWARE", color_fw, ST7735_BLACK, 1);
 
     // Versions at the bottom left, next to the button grid: this firmware and
     // the bootloader, whose tag it keeps at a fixed boot flash address
@@ -1595,8 +1598,25 @@ void print_unload_confirm(void) {
 }
 
 // Confirmation of a setting change, which is permanent (row = cSETTINGS_*)
+// The six keys at the bottom left, OK and RIGHT pressed (filled): how to skip
+// the decoy game at power-on
+static void draw_skip_keys(void) {
+    for (int i = 0; i < 6; i++) {
+        int x0 = 4 + (i % 3) * 17, y0 = 101 + (i / 3) * 12;
+        bool pressed = (i % 3) == 2;            // OK above RIGHT, the right column
+        drawFastHLine(x0, y0, 16, 0x8410);
+        drawFastHLine(x0, y0 + 11, 16, 0x8410);
+        drawFastVLine(x0, y0, 12, 0x8410);
+        drawFastVLine(x0 + 15, y0, 12, 0x8410);
+        if (pressed) rectan(x0 + 1, y0 + 1, x0 + 14, y0 + 10, ST7735_WHITE);
+    }
+    drawtext(4 + 34 + 2, 103, "OK", ST7735_BLACK, ST7735_WHITE, 1);
+    print_rigth_arrow(4 + 34 + 5, 120, ST7735_BLACK);
+}
+
 void print_setting_confirm(int row, bool new_on) {
     const char *name, *l1, *l2 = "", *l3 = "";
+    uint16_t body = ST7735_WHITE;
     rectan(0, 0, 159, 127, ST7735_BLACK);
     draw_title("SAVE SETTING?", ST7735_LIGHTGREY);
     if (row == cSETTINGS_SEEDQR) {
@@ -1605,23 +1625,29 @@ void print_setting_confirm(int row, bool new_on) {
         l2 = new_on ? "SEED AS A QR CODE" : "DISABLED";
         l3 = new_on ? "IN THE SEED BACKUP MENU" : "";
     } else if (row == cSETTINGS_SDWRITE) {
-        name = new_on ? "SD WRITE: ON" : "SD WRITE: OFF";
+        name = new_on ? "SD SEED SAVE: ON" : "SD SEED SAVE: OFF";
         l1 = new_on ? "SEEDS CAN BE WRITTEN TO" : "SEEDS CANNOT BE";
         l2 = new_on ? "THE SD CARD (NOT" : "WRITTEN TO THE SD CARD";
         l3 = new_on ? "ENCRYPTED)" : "";
+    } else if (row == cSETTINGS_STOPWATCH) {
+        name = new_on ? "STOPWATCH SEED: ON" : "STOPWATCH SEED: OFF";
+        l1 = new_on ? "THE ORIGIN OF ITS ENTROPY" : "";
+        l2 = new_on ? "CANNOT BE VERIFIED" : "";
+        if (new_on) body = ST7735_YELLOW;
     } else {
         name = new_on ? "DECOY GAME: ON" : "DECOY GAME: OFF";
         l1 = new_on ? "IT STARTS AS A SNAKE GAME" : "IT STARTS DIRECTLY AS";
-        l2 = new_on ? "OK + RIGHT AT POWER-ON" : "SEEDMATE";
-        l3 = new_on ? "OPENS SEEDMATE" : "";
+        l2 = new_on ? "TO SKIP IT HOLD THESE TWO" : "SEEDMATE";
+        l3 = new_on ? "KEYS WHILE TURNING ON" : "";
     }
     drawtext(5, 14, (char*)name, ST7735_CYAN, ST7735_BLACK, 1);
     drawtext(1, 30, "PERMANENT SETTING:", ST7735_YELLOW, ST7735_BLACK, 1);
     drawtext(1, 40, "KEPT AFTER POWER OFF AND", ST7735_YELLOW, ST7735_BLACK, 1);
     drawtext(1, 50, "AFTER FIRMWARE UPDATES", ST7735_YELLOW, ST7735_BLACK, 1);
-    drawtext(1, 68, (char*)l1, ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(1, 78, (char*)l2, ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(1, 88, (char*)l3, ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 68, (char*)l1, body, ST7735_BLACK, 1);
+    drawtext(1, 78, (char*)l2, body, ST7735_BLACK, 1);
+    drawtext(1, 88, (char*)l3, body, ST7735_BLACK, 1);
+    if (row == cSETTINGS_DECOY && new_on) draw_skip_keys();
     grid_confirm("SAVE");
 }
 

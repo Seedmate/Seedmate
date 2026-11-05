@@ -35,10 +35,15 @@
 
 #define SETTINGS_SLOTS      256                 // 2 KB / 8 byte records
 
-// Flags, 1 = factory default
-#define SETTING_DECOY_ON    0x01u               // Snake game at power-on (default on)
+// Flags, 1 = factory default. Bit 0x01 was "decoy on" until the decoy became
+// off by default: it is no longer read (kept 1), and the decoy has a new bit,
+// so a record saved by an older firmware turns it off instead of meaning the
+// opposite of what was chosen.
+#define SETTING_LEGACY_DECOY 0x01u              // Not used any more
 #define SETTING_SEEDQR_OFF  0x02u               // SeedQR disabled (default off: disabled)
 #define SETTING_SDWRITE_OFF 0x04u               // Writing seeds to the SD disabled (default: disabled)
+#define SETTING_DECOY_OFF   0x08u               // No snake game at power-on (default: no game)
+#define SETTING_STOPWATCH_OFF 0x10u             // STOPWATCH hidden in CREATE (default: hidden)
 #define SETTINGS_DEFAULT    0xFFu
 
 // Flags of the newest valid record, or SETTINGS_DEFAULT if there is none
