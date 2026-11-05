@@ -3,15 +3,15 @@
   <executable name="dist/default/production/bootloader.production.elf">                 
     <memory name="program">                 
       <units>bytes</units>                 
-      <length>14064</length>                 
-      <used>8556</used>                     
-      <free>5508</free>                     
+      <length>16112</length>                 
+      <used>10472</used>                     
+      <free>5640</free>                     
     </memory>                              
     <memory name="data">              
       <units>bytes</units>                 
       <length>32768</length>                 
-      <used>8504</used>                     
-      <free>24264</free>                     
+      <used>8440</used>                     
+      <free>24328</free>                     
     </memory>                              
   </executable>                            
 </project>                                 

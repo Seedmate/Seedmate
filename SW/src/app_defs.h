@@ -11,7 +11,7 @@
 #define APP_DEFS_H
 
 #define cVersion "v2.0b1"
-#define BOOT_TAG_ADDRESS 0x9D001FF0u    // Bootloader version tag ("BOOT 1.0"), see bootloader boot_ui.c
+#define BOOT_TAG_ADDRESS 0x9D0027F0u    // Bootloader version tag ("BOOT 1.0"), see bootloader boot_ui.c
 #define cMAIN_n_opt 8               // Entries of the main menu (positions)
 #define cOPSEC_n_opt 4              // Entries of the OPSEC menu
 #define cTOOLS_n_opt 4              // Entries of the TOOLS menu

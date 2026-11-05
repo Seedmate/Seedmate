@@ -24,7 +24,11 @@
 #include <stdbool.h>
 
 // Application flash area handled by the writer (physical addresses)
-#define HEXFLASH_APP_PHYS_BASE  0x1D002000u
+#define HEXFLASH_APP_PHYS_BASE  0x1D003000u
+// Where the app starts: its reset block, after its interrupt vectors (app linker
+// script). The app's code still starts at 0x9D004000, as with the 8 KB bootloader.
+#define HEXFLASH_APP_PHYS_RESET 0x1D003800u
+#define USER_APP_RESET_ADDRESS  0x9D003800u
 // The last 2 KB page (0x1D03F800) holds the app's settings: outside what the
 // bootloader erases and writes, so they survive firmware updates, and no hex
 // file can overwrite them

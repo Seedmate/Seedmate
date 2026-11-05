@@ -1,6 +1,6 @@
 /*--------------------------------------------------------------------------
  * MPLAB XC Compiler -  PIC32MM0256GPM036 linker script
- * SEEDMATE MAIN APP - Shifted by 0x2000 (8KB) for SD Bootloader
+ * SEEDMATE MAIN APP - After the 12 KB of the SD Bootloader (0x3000)
  *--------------------------------------------------------------------------*/
 
 OUTPUT_FORMAT("elf32-tradlittlemips")
@@ -16,13 +16,14 @@ OPTIONAL("processor.o")
 
 PROVIDE(_vector_spacing = 0x0001);
 
-/* IVT Ebase address aligned to 4K boundary inside the Application region (0x2000 + 0x1000) */
+/* IVT Ebase address aligned to 4K boundary: the start of the Application region */
 PROVIDE(_ebase_address = 0x9D003000);
 
-/* Reset and exception vectors shifted by 0x2000 (8KB) */
-_RESET_ADDR                    = 0x9D002000;
-_BEV_EXCPT_ADDR                = 0x9D002380;
-_DBG_EXCPT_ADDR                = 0x9D002480;
+/* Reset block after the interrupt vectors (they end at 0x9D003530). The bootloader
+   jumps to _RESET_ADDR: USER_APP_RESET_ADDRESS in its hex_flash.h */
+_RESET_ADDR                    = 0x9D003800;
+_BEV_EXCPT_ADDR                = 0x9D003B80;
+_DBG_EXCPT_ADDR                = 0x9D003C80;
 _DBG_CODE_ADDR                 = 0x9FC00490;
 _DBG_CODE_SIZE                 = 0x760;
 
@@ -31,15 +32,15 @@ _GEN_EXCPT_ADDR                = _ebase_address + 0x180;
 
 MEMORY
 {
-  /* Main App physical shift. 8KB reserved exclusively for the Bootloader */
-  kseg1_boot_mem              : ORIGIN = 0x9D002000, LENGTH = 0x490
-  debug_exec_mem              : ORIGIN = 0x9D002490, LENGTH = 0x760
+  /* 12 KB reserved exclusively for the Bootloader (0x9D000000..0x9D002FFF) */
+  kseg1_boot_mem              : ORIGIN = 0x9D003800, LENGTH = 0x490
+  debug_exec_mem              : ORIGIN = 0x9D003C90, LENGTH = 0x370
   
   /* Interrupt Vector Table */
-  exception_mem               : ORIGIN = 0x9D003000, LENGTH = 0x1000
+  exception_mem               : ORIGIN = 0x9D003000, LENGTH = 0x800
   
   /* kseg0_program_mem starts after the IVT. Origin: 0x9D004000. */
-  /* Total memory (0x40000) - Bootloader (0x2000) - IVT and startup (0x2000) - settings
+  /* Total memory (0x40000) - Bootloader (0x3000) - IVT and startup (0x1000) - settings
      page (0x800, 0x9D03F800, see settings.h: the bootloader does not touch it) = 0x3B800 */
   kseg0_program_mem     (rx)  : ORIGIN = 0x9D004000, LENGTH = 0x3B800
   

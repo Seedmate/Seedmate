@@ -8,13 +8,14 @@
 
 #include "../../SW/src/TFT.c"
 #include "boot_ui.h"
+#include "hex_flash.h"                  // USER_APP_RESET_ADDRESS
 
 #define LED_LCD     PORTBbits.RB10  // Backlight, as in the app
 
 #define GRID_X      63              // Same button grid position as the app
 #define BAR_Y       92              // Progress bar above the grid
 
-// Version tag at a fixed address (BOOT_TAG_ADDRESS 0x9D001FF0, linker script) so
+// Version tag at a fixed address (BOOT_TAG_ADDRESS 0x9D0027F0, linker script) so
 // the app can show which bootloader is installed: "BOOT 1.0". 16 bytes.
 const char boot_version_tag[16] __attribute__((section(".boot_version"), used)) = "BOOT " BOOT_VERSION;
 
@@ -67,13 +68,12 @@ void ui_grid(bool back, bool ok) {
 }
 
 // =========================================================================
-// UPDATE FLOW HELPERS (here, in the boot flash, to keep the main 8 KB free)
+// UPDATE FLOW HELPERS (here, in the boot flash, to keep the main flash free)
 // =========================================================================
 
 #define LED                     PORTAbits.RA2       // As in main.c
 #define BTN_BACK                PORTBbits.RB2
 #define BTN_OK                  PORTCbits.RC1
-#define USER_APP_RESET_ADDRESS  0x9D002000
 
 void JumpToApp(void);           // main.c
 

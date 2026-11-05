@@ -30,8 +30,9 @@ _GEN_EXCPT_ADDR                = _ebase_address + 0x180;
 
 MEMORY
 {
-  /* Allocate exactly 8KB (0x2000) of main flash for the bootloader's heavy code */
-  kseg0_program_mem     (rx)  : ORIGIN = 0x9D000000, LENGTH = 0x1FF0
+  /* The bootloader owns 12 KB of main flash: 10 KB for its code (with the version tag
+     at the end) and the last 2 KB page, 0x9D002800, for its state (BOOT_STATE_PHYS) */
+  kseg0_program_mem     (rx)  : ORIGIN = 0x9D000000, LENGTH = 0x27F0
   
   debug_exec_mem              : ORIGIN = 0x9FC00490, LENGTH = 0x760
   kseg0_boot_mem        (rx)  : ORIGIN = 0x9FC00490, LENGTH = 0x0
@@ -50,9 +51,9 @@ MEMORY
      the SHA-256 code */
   boot_gap1_mem         (rx)  : ORIGIN = 0x9FC00140, LENGTH = 0x240
   /* Version tag of the bootloader, read by the app at this fixed address: the
-     last 16 bytes of the 8 KB main flash (not the boot flash, where the app
-     read of the tag hung the device) */
-  boot_version_mem      (r)   : ORIGIN = 0x9D001FF0, LENGTH = 0x10
+     last 16 bytes of the code area in main flash (not the boot flash, where
+     the app read of the tag hung the device) */
+  boot_version_mem      (r)   : ORIGIN = 0x9D0027F0, LENGTH = 0x10
   boot_gap2_mem         (rx)  : ORIGIN = 0x9FC0038C, LENGTH = 0xF4
   
   config_BFC01744             : ORIGIN = 0xBFC01744, LENGTH = 0x4
@@ -154,11 +155,12 @@ SECTIONS
 
   .boot_ui :
   {
+    *main.o(.text.ui_hash)
     *boot_ui.o(.text .text.*)
     *spi_boot.o(.text .text.* .rodata .rodata.*)
   } > boot_ui_code_mem
 
-  /* Move startup code and C runtime to 8KB main program memory */
+  /* Move startup code and C runtime to main program memory */
   .startup :
   {
     KEEP(*(.startup))

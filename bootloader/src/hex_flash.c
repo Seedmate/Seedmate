@@ -102,7 +102,7 @@ hexflash_status_t hexflash_check_record(const uint8_t *rec) {
                 uint32_t first = ((((uint32_t)rec[1] << 8) | rec[2]) + ext) & 0x1FFFFFFFu;
                 uint32_t last = first + rec[0] - 1u;
                 if (first < HEXFLASH_APP_PHYS_BASE || last >= HEXFLASH_APP_PHYS_END) return HEXFLASH_ERR_TARGET;
-                if (first <= HEXFLASH_APP_PHYS_BASE && last >= HEXFLASH_APP_PHYS_BASE) has_reset = true;
+                if (first <= HEXFLASH_APP_PHYS_RESET && last >= HEXFLASH_APP_PHYS_RESET) has_reset = true;
             }
             break;
         case END_OF_FILE_RECORD: {

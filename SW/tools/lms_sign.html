@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- This page can reach nothing: no network, no external file of any kind -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>Seedmate firmware signer</title>
+<style>
+:root {
+  --bg: #111418; --panel: #1b2026; --line: #39414b; --text: #eef1f4; --dim: #9aa5b1;
+  --red: #ff6b6b; --green: #4cd97b; --yellow: #ffd24d; --cyan: #5ad7e6; --orange: #ff9a3d;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, sans-serif; }
+main { max-width: 720px; margin: 0 auto; padding: 24px 16px 60px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+.sub { color: var(--dim); margin: 0 0 20px; }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 14px; }
+h2 { font-size: 15px; margin: 0 0 10px; }
+label { display: block; margin-bottom: 6px; }
+textarea, input[type=number] {
+  width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 10px; font: 15px/1.5 ui-monospace, Consolas, monospace;
+}
+textarea { height: 84px; resize: vertical; }
+input[type=number] { width: 120px; }
+button {
+  background: #2b333c; color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+  padding: 9px 14px; font: inherit; cursor: pointer; margin: 8px 8px 0 0;
+}
+button:hover:not(:disabled) { border-color: var(--dim); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.main { background: #1f6f43; border-color: #2b9159; font-weight: 600; }
+#drop {
+  border: 2px dashed var(--line); border-radius: 8px; padding: 26px 12px; text-align: center;
+  color: var(--dim); cursor: pointer;
+}
+#drop.over { border-color: var(--cyan); color: var(--text); }
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; overflow-wrap: anywhere; }
+.msg { margin-top: 8px; min-height: 1.4em; }
+.ok { color: var(--green); } .err { color: var(--red); } .warn { color: var(--yellow); } .info { color: var(--cyan); }
+.check { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; }
+.check input { margin-top: 4px; }
+#bar { height: 10px; border: 1px solid var(--text); margin-top: 8px; }
+#fill { height: 100%; width: 0; background: var(--green); }
+.hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Seedmate firmware signer</h1>
+  <p class="sub">Signs UPDATE.HEX with LMS (RFC 8554: SHA-256, 1024 signatures). Works offline, keeps nothing.</p>
+  <p id="online" class="warn hidden">THIS COMPUTER LOOKS ONLINE. Disconnect it before typing the signing words.</p>
+
+  <section>
+    <h2>1. Signing words</h2>
+    <label for="words">12 or 24 BIP39 words, used only for signing firmware, never for a wallet.</label>
+    <textarea id="words" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+    <div id="words-msg" class="msg"></div>
+    <button id="pub-btn" disabled>Show public key</button>
+    <button id="clear-btn">Clear the words</button>
+  </section>
+
+  <section>
+    <h2>2. Firmware</h2>
+    <div id="drop" tabindex="0">Drop UPDATE.HEX here, or click to choose it</div>
+    <input id="file" type="file" accept=".hex" class="hidden">
+    <div id="file-msg" class="msg"></div>
+  </section>
+
+  <section>
+    <h2>3. Sign</h2>
+    <label for="index">Signature index, 0 to 1023. One index signs one file, once.</label>
+    <input id="index" type="number" min="0" max="1023" step="1" autocomplete="off">
+    <label class="check"><input id="unused" type="checkbox"> <span>I checked SIGNATURES.md: this index has never signed a different file. Reusing it would let others forge signatures.</span></label>
+    <button id="sign-btn" class="main" disabled>Sign</button>
+    <div id="sign-msg" class="msg"></div>
+  </section>
+
+  <section id="progress" class="hidden">
+    <div id="step" class="info"></div>
+    <div id="bar"><div id="fill"></div></div>
+  </section>
+
+  <section id="pub-out" class="hidden">
+    <h2>Public key (goes into the bootloader)</h2>
+    <div id="pub-hex" class="mono"></div>
+    <button id="pub-save">Save lms_public_key.txt</button>
+  </section>
+
+  <section id="result" class="hidden">
+    <h2 id="result-title" class="ok"></h2>
+    <button id="sig-save" class="main">Save UPDATE.SIG</button>
+    <p>Add this line to SIGNATURES.md now:</p>
+    <div id="log-line" class="mono"></div>
+  </section>
+</main>
+
+<script id="core">
+"use strict";
+// Pure crypto, no page access (test/lms/test_lms.js runs this same script).
+//
+// Key material, from the BIP39 entropy (no PBKDF2 and no passphrase):
+//   SEED = SHA256("Seedmate firmware signing seed v1" || entropy)
+//   I    = SHA256("Seedmate firmware signing id v1" || entropy), first 16 bytes
+//   x_q[i] as in RFC 8554 Appendix A
+// C, normally random, is derived, so the same index and file always give the
+// same signature (signing the same file twice leaks nothing):
+//   C    = SHA256("Seedmate firmware signing C v1" || SEED || u32(q) || message)
+// The message signed is the 32 byte SHA-256 of the file. The .SIG file is a plain
+// RFC 8554 signature; the public key is u32 type || u32 otstype || I || T[1].
+
+const SHA_K = new Int32Array([
+  0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+  0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+  0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+  0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+  0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+  0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+  0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+  0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2]);
+const SHA_W = new Int32Array(64);
+const SHA_S = new Int32Array(8);
+const SHA_BLOCK = new Uint8Array(64);
+
+function shaCompress(b, o) {
+  const w = SHA_W, k = SHA_K, s = SHA_S;
+  for (let t = 0; t < 16; t++, o += 4) w[t] = (b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3];
+  for (let t = 16; t < 64; t++) {
+    const x = w[t - 15], y = w[t - 2];
+    w[t] = (((x >>> 7 | x << 25) ^ (x >>> 18 | x << 14) ^ (x >>> 3)) + w[t - 7] +
+            ((y >>> 17 | y << 15) ^ (y >>> 19 | y << 13) ^ (y >>> 10)) + w[t - 16]) | 0;
+  }
+  let a = s[0], c1 = s[1], c2 = s[2], d = s[3], e = s[4], f = s[5], g = s[6], h = s[7];
+  for (let t = 0; t < 64; t++) {
+    const t1 = (h + ((e >>> 6 | e << 26) ^ (e >>> 11 | e << 21) ^ (e >>> 25 | e << 7)) +
+                ((e & f) ^ (~e & g)) + k[t] + w[t]) | 0;
+    const t2 = (((a >>> 2 | a << 30) ^ (a >>> 13 | a << 19) ^ (a >>> 22 | a << 10)) +
+                ((a & c1) ^ (a & c2) ^ (c1 & c2))) | 0;
+    h = g; g = f; f = e; e = (d + t1) | 0; d = c2; c2 = c1; c1 = a; a = (t1 + t2) | 0;
+  }
+  s[0] = (s[0] + a) | 0; s[1] = (s[1] + c1) | 0; s[2] = (s[2] + c2) | 0; s[3] = (s[3] + d) | 0;
+  s[4] = (s[4] + e) | 0; s[5] = (s[5] + f) | 0; s[6] = (s[6] + g) | 0; s[7] = (s[7] + h) | 0;
+}
+
+// SHA-256 of the first len bytes of data, written at out[outOff] (out may be data)
+function sha256Into(data, len, out, outOff) {
+  const s = SHA_S, block = SHA_BLOCK;
+  s[0] = 0x6a09e667; s[1] = 0xbb67ae85; s[2] = 0x3c6ef372; s[3] = 0xa54ff53a;
+  s[4] = 0x510e527f; s[5] = 0x9b05688c; s[6] = 0x1f83d9ab; s[7] = 0x5be0cd19;
+  let off = 0;
+  for (; len - off >= 64; off += 64) shaCompress(data, off);
+  let n = 0;
+  while (off < len) block[n++] = data[off++];
+  block[n++] = 0x80;
+  if (n > 56) {
+    while (n < 64) block[n++] = 0;
+    shaCompress(block, 0);
+    n = 0;
+  }
+  while (n < 56) block[n++] = 0;
+  const hi = Math.floor(len / 0x20000000), lo = (len << 3) >>> 0;
+  block[56] = hi >>> 24; block[57] = hi >>> 16; block[58] = hi >>> 8; block[59] = hi;
+  block[60] = lo >>> 24; block[61] = lo >>> 16; block[62] = lo >>> 8; block[63] = lo;
+  shaCompress(block, 0);
+  for (let i = 0; i < 8; i++, outOff += 4) {
+    const v = s[i];
+    out[outOff] = v >>> 24; out[outOff + 1] = v >>> 16; out[outOff + 2] = v >>> 8; out[outOff + 3] = v;
+  }
+}
+
+function sha256(data) {
+  const out = new Uint8Array(32);
+  sha256Into(data, data.length, out, 0);
+  return out;
+}
+
+function concat(...parts) {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return out;
+}
+function ascii(s) { return Uint8Array.from(s, c => c.charCodeAt(0)); }
+function u32(v) { return new Uint8Array([v >>> 24, (v >>> 16) & 255, (v >>> 8) & 255, v & 255]); }
+function toHex(b) { return Array.from(b, v => v.toString(16).padStart(2, "0")).join(""); }
+function fromHex(s) { return Uint8Array.from(s.match(/../g) || [], v => parseInt(v, 16)); }
+
+// --- BIP39 ---------------------------------------------------------------
+// The entropy of a 12 or 24 word mnemonic, or { error } saying what is wrong
+function bip39Entropy(text, wordlist) {
+  const words = text.trim().toLowerCase().split(/\s+/).filter(w => w);
+  for (let i = 0; i < words.length; i++) {
+    if (wordlist.indexOf(words[i]) < 0) return { error: "WORD " + (i + 1) + " \"" + words[i] + "\" IS NOT A BIP39 WORD" };
+  }
+  if (words.length !== 12 && words.length !== 24) return { error: words.length + " WORDS: 12 OR 24 ARE NEEDED" };
+  const bits = [];
+  for (const w of words) {
+    const v = wordlist.indexOf(w);
+    for (let k = 10; k >= 0; k--) bits.push((v >> k) & 1);
+  }
+  const size = words.length === 12 ? 16 : 32, csBits = words.length / 3;
+  const entropy = new Uint8Array(size);
+  for (let i = 0; i < size * 8; i++) entropy[i >> 3] |= bits[i] << (7 - (i & 7));
+  const hash = sha256(entropy);
+  for (let i = 0; i < csBits; i++) {
+    if (bits[size * 8 + i] !== ((hash[i >> 3] >> (7 - (i & 7))) & 1)) return { error: "BAD CHECKSUM: A WORD IS WRONG OR OUT OF ORDER" };
+  }
+  bits.fill(0);
+  return { entropy };
+}
+
+function deriveKey(entropy) {
+  return {
+    seed: sha256(concat(ascii("Seedmate firmware signing seed v1"), entropy)),
+    id: sha256(concat(ascii("Seedmate firmware signing id v1"), entropy)).slice(0, 16)
+  };
+}
+
+function deriveC(seed, q, message) {
+  return sha256(concat(ascii("Seedmate firmware signing C v1"), seed, u32(q), message));
+}
+
+// --- LMS (RFC 8554) --------------------------------------------------------
+const LMS_H = { 5: 5, 10: 6 };              // Height to LMS type code
+const OTS_W = {                             // Winternitz parameter to LMOTS values
+  4: { type: 3, p: 67, ls: 4 },
+  8: { type: 4, p: 34, ls: 0 }
+};
+const PARAM_FIRMWARE = { h: 10, w: 8 };     // LMS_SHA256_M32_H10, LMOTS_SHA256_N32_W8
+
+function coef(s, i, w) {
+  const mask = (1 << w) - 1;
+  return mask & (s[Math.floor(i * w / 8)] >> (8 - (w * (i % (8 / w)) + w)));
+}
+
+// Q (32 bytes) followed by its checksum: the digits the chains stop at
+function digits(Q, w) {
+  const u = 256 / w, mask = (1 << w) - 1;
+  let sum = 0;
+  for (let i = 0; i < u; i++) sum += mask - coef(Q, i, w);
+  sum = sum << OTS_W[w].ls;
+  return concat(Q, new Uint8Array([sum >> 8, sum & 255]));
+}
+
+// H(I || q || i || j || tmp) repeated from step 'from' to step 'to' (excluded)
+// in buf, a shared 55 byte buffer that holds I and q; tmp is at buf[23]
+function chain(buf, i, from, to) {
+  buf[20] = i >> 8; buf[21] = i & 255;
+  for (let j = from; j < to; j++) {
+    buf[22] = j;
+    sha256Into(buf, 55, buf, 23);
+  }
+}
+
+function chainBuffer(id, q) {
+  const buf = new Uint8Array(55);
+  buf.set(id, 0);
+  buf.set(u32(q), 16);
+  return buf;
+}
+
+// x_q[i] of RFC 8554 Appendix A into buf[23]
+function secretInto(buf, seedBuf, i) {
+  seedBuf[20] = i >> 8; seedBuf[21] = i & 255;
+  sha256Into(seedBuf, 55, buf, 23);
+}
+
+function seedBuffer(id, q, seed) {
+  const b = chainBuffer(id, q);
+  b[22] = 0xff;
+  b.set(seed, 23);
+  return b;
+}
+
+// The one time public key K of leaf q
+function otsPublic(id, seed, q, w) {
+  const { p } = OTS_W[w], last = (1 << w) - 1;
+  const buf = chainBuffer(id, q), seedBuf = seedBuffer(id, q, seed);
+  const all = new Uint8Array(22 + p * 32);
+  all.set(id, 0); all.set(u32(q), 16); all[20] = 0x80; all[21] = 0x80;
+  for (let i = 0; i < p; i++) {
+    secretInto(buf, seedBuf, i);
+    chain(buf, i, 0, last);
+    for (let k = 0; k < 32; k++) all[22 + i * 32 + k] = buf[23 + k];
+  }
+  buf.fill(0); seedBuf.fill(0);
+  const out = new Uint8Array(32);
+  sha256Into(all, all.length, out, 0);
+  return out;
+}
+
+function otsMessageHash(id, q, C, message) {
+  return sha256(concat(id, u32(q), new Uint8Array([0x81, 0x81]), C, message));
+}
+
+function otsSign(id, seed, q, w, C, message) {
+  const { type, p } = OTS_W[w];
+  const V = digits(otsMessageHash(id, q, C, message), w);
+  const buf = chainBuffer(id, q), seedBuf = seedBuffer(id, q, seed);
+  const sig = new Uint8Array(36 + p * 32);
+  sig.set(u32(type), 0); sig.set(C, 4);
+  for (let i = 0; i < p; i++) {
+    secretInto(buf, seedBuf, i);
+    chain(buf, i, 0, coef(V, i, w));
+    for (let k = 0; k < 32; k++) sig[36 + i * 32 + k] = buf[23 + k];
+  }
+  buf.fill(0); seedBuf.fill(0);
+  return sig;
+}
+
+// Every node of the tree (node r at r * 32). Yields to the page between leaves.
+async function buildTree(id, seed, par, progress) {
+  const leaves = 1 << par.h;
+  const tree = new Uint8Array(2 * leaves * 32);
+  const D_LEAF = new Uint8Array([0x82, 0x82]), D_INTR = new Uint8Array([0x83, 0x83]);
+  for (let q = 0; q < leaves; q++) {
+    const r = leaves + q;
+    tree.set(sha256(concat(id, u32(r), D_LEAF, otsPublic(id, seed, q, par.w))), r * 32);
+    if (progress && (q % 8 === 7 || q === leaves - 1)) await progress(q + 1, leaves);
+  }
+  for (let r = leaves - 1; r >= 1; r--) {
+    tree.set(sha256(concat(id, u32(r), D_INTR, tree.subarray(2 * r * 32, (2 * r + 2) * 32))), r * 32);
+  }
+  return tree;
+}
+
+function publicKey(id, tree, par) {
+  return concat(u32(LMS_H[par.h]), u32(OTS_W[par.w].type), id, tree.subarray(32, 64));
+}
+
+function lmsSign(id, seed, tree, par, q, C, message) {
+  const path = [];
+  for (let r = (1 << par.h) + q; r > 1; r >>= 1) {
+    const sibling = r ^ 1;
+    path.push(tree.subarray(sibling * 32, (sibling + 1) * 32));
+  }
+  return concat(u32(q), otsSign(id, seed, q, par.w, C, message), u32(LMS_H[par.h]), ...path);
+}
+
+function readU32(b, o) { return ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0; }
+
+// RFC 8554 algorithms 4b and 6a: uses the public key only, nothing else of the signer
+function lmsVerify(pub, message, sig) {
+  if (pub.length !== 56) return false;
+  const h = Object.keys(LMS_H).map(Number).find(v => LMS_H[v] === readU32(pub, 0));
+  const w = Object.keys(OTS_W).map(Number).find(v => OTS_W[v].type === readU32(pub, 4));
+  if (h === undefined || w === undefined) return false;
+  const { p } = OTS_W[w], id = pub.subarray(8, 24), last = (1 << w) - 1;
+  if (sig.length !== 4 + 36 + p * 32 + 4 + h * 32) return false;
+  const q = readU32(sig, 0);
+  if (q >= (1 << h) || readU32(sig, 4) !== OTS_W[w].type || readU32(sig, 40 + p * 32) !== LMS_H[h]) return false;
+
+  const C = sig.subarray(8, 40);
+  const V = digits(otsMessageHash(id, q, C, message), w);
+  const buf = chainBuffer(id, q);
+  const all = new Uint8Array(22 + p * 32);
+  all.set(id, 0); all.set(u32(q), 16); all[20] = 0x80; all[21] = 0x80;
+  for (let i = 0; i < p; i++) {
+    for (let k = 0; k < 32; k++) buf[23 + k] = sig[40 + i * 32 + k];
+    chain(buf, i, coef(V, i, w), last);
+    for (let k = 0; k < 32; k++) all[22 + i * 32 + k] = buf[23 + k];
+  }
+  const Kc = new Uint8Array(32);
+  sha256Into(all, all.length, Kc, 0);
+
+  let r = (1 << h) + q;
+  let tmp = sha256(concat(id, u32(r), new Uint8Array([0x82, 0x82]), Kc));
+  let o = 44 + p * 32;
+  const D_INTR = new Uint8Array([0x83, 0x83]);
+  while (r > 1) {
+    const sibling = sig.subarray(o, o + 32);
+    const parent = r >> 1;
+    tmp = sha256((r & 1) ? concat(id, u32(parent), D_INTR, sibling, tmp) : concat(id, u32(parent), D_INTR, tmp, sibling));
+    r = parent;
+    o += 32;
+  }
+  let diff = 0;
+  for (let k = 0; k < 32; k++) diff |= tmp[k] ^ pub[24 + k];
+  return diff === 0;
+}
+
+// Refuses what is not an Intel HEX file; returns a reason or null
+function hexProblem(bytes) {
+  const text = new TextDecoder("latin1").decode(bytes);
+  const lines = text.split(/\r?\n/).filter(l => l.length > 0);
+  if (lines.length === 0) return "THE FILE IS EMPTY";
+  for (const l of lines) if (!/^:[0-9A-Fa-f]+$/.test(l)) return "NOT AN INTEL HEX FILE";
+  if (lines[lines.length - 1].toUpperCase() !== ":00000001FF") return "THE END RECORD IS MISSING: THE FILE IS CUT";
+  return null;
+}
+</script>
+
+<script>
+"use strict";
+const WORDLIST = "abandon ability able about above absent absorb abstract absurd abuse access accident account accuse achieve acid acoustic acquire across act action actor actress actual adapt add addict address adjust admit adult advance advice aerobic affair afford afraid again age agent agree ahead aim air airport aisle alarm album alcohol alert alien all alley allow almost alone alpha already also alter always amateur amazing among amount amused analyst anchor ancient anger angle angry animal ankle announce annual another answer antenna antique anxiety any apart apology appear apple approve april arch arctic area arena argue arm armed armor army around arrange arrest arrive arrow art artefact artist artwork ask aspect assault asset assist assume asthma athlete atom attack attend attitude attract auction audit august aunt author auto autumn average avocado avoid awake aware away awesome awful awkward axis baby bachelor bacon badge bag balance balcony ball bamboo banana banner bar barely bargain barrel base basic basket battle beach bean beauty because become beef before begin behave behind believe below belt bench benefit best betray better between beyond bicycle bid bike bind biology bird birth bitter black blade blame blanket blast bleak bless blind blood blossom blouse blue blur blush board boat body boil bomb bone bonus book boost border boring borrow boss bottom bounce box boy bracket brain brand brass brave bread breeze brick bridge brief bright bring brisk broccoli broken bronze broom brother brown brush bubble buddy budget buffalo build bulb bulk bullet bundle bunker burden burger burst bus business busy butter buyer buzz cabbage cabin cable cactus cage cake call calm camera camp can canal cancel candy cannon canoe canvas canyon capable capital captain car carbon card cargo carpet carry cart case cash casino castle casual cat catalog catch category cattle caught cause caution cave ceiling celery cement census century cereal certain chair chalk champion change chaos chapter charge chase chat cheap check cheese chef cherry chest chicken chief child chimney choice choose chronic chuckle chunk churn cigar cinnamon circle citizen city civil claim clap clarify claw clay clean clerk clever click client cliff climb clinic clip clock clog close cloth cloud clown club clump cluster clutch coach coast coconut code coffee coil coin collect color column combine come comfort comic common company concert conduct confirm congress connect consider control convince cook cool copper copy coral core corn correct cost cotton couch country couple course cousin cover coyote crack cradle craft cram crane crash crater crawl crazy cream credit creek crew cricket crime crisp critic crop cross crouch crowd crucial cruel cruise crumble crunch crush cry crystal cube culture cup cupboard curious current curtain curve cushion custom cute cycle dad damage damp dance danger daring dash daughter dawn day deal debate debris decade december decide decline decorate decrease deer defense define defy degree delay deliver demand demise denial dentist deny depart depend deposit depth deputy derive describe desert design desk despair destroy detail detect develop device devote diagram dial diamond diary dice diesel diet differ digital dignity dilemma dinner dinosaur direct dirt disagree discover disease dish dismiss disorder display distance divert divide divorce dizzy doctor document dog doll dolphin domain donate donkey donor door dose double dove draft dragon drama drastic draw dream dress drift drill drink drip drive drop drum dry duck dumb dune during dust dutch duty dwarf dynamic eager eagle early earn earth easily east easy echo ecology economy edge edit educate effort egg eight either elbow elder electric elegant element elephant elevator elite else embark embody embrace emerge emotion employ empower empty enable enact end endless endorse enemy energy enforce engage engine enhance enjoy enlist enough enrich enroll ensure enter entire entry envelope episode equal equip era erase erode erosion error erupt escape essay essence estate eternal ethics evidence evil evoke evolve exact example excess exchange excite exclude excuse execute exercise exhaust exhibit exile exist exit exotic expand expect expire explain expose express extend extra eye eyebrow fabric face faculty fade faint faith fall false fame family famous fan fancy fantasy farm fashion fat fatal father fatigue fault favorite feature february federal fee feed feel female fence festival fetch fever few fiber fiction field figure file film filter final find fine finger finish fire firm first fiscal fish fit fitness fix flag flame flash flat flavor flee flight flip float flock floor flower fluid flush fly foam focus fog foil fold follow food foot force forest forget fork fortune forum forward fossil foster found fox fragile frame frequent fresh friend fringe frog front frost frown frozen fruit fuel fun funny furnace fury future gadget gain galaxy gallery game gap garage garbage garden garlic garment gas gasp gate gather gauge gaze general genius genre gentle genuine gesture ghost giant gift giggle ginger giraffe girl give glad glance glare glass glide glimpse globe gloom glory glove glow glue goat goddess gold good goose gorilla gospel gossip govern gown grab grace grain grant grape grass gravity great green grid grief grit grocery group grow grunt guard guess guide guilt guitar gun gym habit hair half hammer hamster hand happy harbor hard harsh harvest hat have hawk hazard head health heart heavy hedgehog height hello helmet help hen hero hidden high hill hint hip hire history hobby hockey hold hole holiday hollow home honey hood hope horn horror horse hospital host hotel hour hover hub huge human humble humor hundred hungry hunt hurdle hurry hurt husband hybrid ice icon idea identify idle ignore ill illegal illness image imitate immense immune impact impose improve impulse inch include income increase index indicate indoor industry infant inflict inform inhale inherit initial inject injury inmate inner innocent input inquiry insane insect inside inspire install intact interest into invest invite involve iron island isolate issue item ivory jacket jaguar jar jazz jealous jeans jelly jewel job join joke journey joy judge juice jump jungle junior junk just kangaroo keen keep ketchup key kick kid kidney kind kingdom kiss kit kitchen kite kitten kiwi knee knife knock know lab label labor ladder lady lake lamp language laptop large later latin laugh laundry lava law lawn lawsuit layer lazy leader leaf learn leave lecture left leg legal legend leisure lemon lend length lens leopard lesson letter level liar liberty library license life lift light like limb limit link lion liquid list little live lizard load loan lobster local lock logic lonely long loop lottery loud lounge love loyal lucky luggage lumber lunar lunch luxury lyrics machine mad magic magnet maid mail main major make mammal man manage mandate mango mansion manual maple marble march margin marine market marriage mask mass master match material math matrix matter maximum maze meadow mean measure meat mechanic medal media melody melt member memory mention menu mercy merge merit merry mesh message metal method middle midnight milk million mimic mind minimum minor minute miracle mirror misery miss mistake mix mixed mixture mobile model modify mom moment monitor monkey monster month moon moral more morning mosquito mother motion motor mountain mouse move movie much muffin mule multiply muscle museum mushroom music must mutual myself mystery myth naive name napkin narrow nasty nation nature near neck need negative neglect neither nephew nerve nest net network neutral never news next nice night noble noise nominee noodle normal north nose notable note nothing notice novel now nuclear number nurse nut oak obey object oblige obscure observe obtain obvious occur ocean october odor off offer office often oil okay old olive olympic omit once one onion online only open opera opinion oppose option orange orbit orchard order ordinary organ orient original orphan ostrich other outdoor outer output outside oval oven over own owner oxygen oyster ozone pact paddle page pair palace palm panda panel panic panther paper parade parent park parrot party pass patch path patient patrol pattern pause pave payment peace peanut pear peasant pelican pen penalty pencil people pepper perfect permit person pet phone photo phrase physical piano picnic picture piece pig pigeon pill pilot pink pioneer pipe pistol pitch pizza place planet plastic plate play please pledge pluck plug plunge poem poet point polar pole police pond pony pool popular portion position possible post potato pottery poverty powder power practice praise predict prefer prepare present pretty prevent price pride primary print priority prison private prize problem process produce profit program project promote proof property prosper protect proud provide public pudding pull pulp pulse pumpkin punch pupil puppy purchase purity purpose purse push put puzzle pyramid quality quantum quarter question quick quit quiz quote rabbit raccoon race rack radar radio rail rain raise rally ramp ranch random range rapid rare rate rather raven raw razor ready real reason rebel rebuild recall receive recipe record recycle reduce reflect reform refuse region regret regular reject relax release relief rely remain remember remind remove render renew rent reopen repair repeat replace report require rescue resemble resist resource response result retire retreat return reunion reveal review reward rhythm rib ribbon rice rich ride ridge rifle right rigid ring riot ripple risk ritual rival river road roast robot robust rocket romance roof rookie room rose rotate rough round route royal rubber rude rug rule run runway rural sad saddle sadness safe sail salad salmon salon salt salute same sample sand satisfy satoshi sauce sausage save say scale scan scare scatter scene scheme school science scissors scorpion scout scrap screen script scrub sea search season seat second secret section security seed seek segment select sell seminar senior sense sentence series service session settle setup seven shadow shaft shallow share shed shell sheriff shield shift shine ship shiver shock shoe shoot shop short shoulder shove shrimp shrug shuffle shy sibling sick side siege sight sign silent silk silly silver similar simple since sing siren sister situate six size skate sketch ski skill skin skirt skull slab slam sleep slender slice slide slight slim slogan slot slow slush small smart smile smoke smooth snack snake snap sniff snow soap soccer social sock soda soft solar soldier solid solution solve someone song soon sorry sort soul sound soup source south space spare spatial spawn speak special speed spell spend sphere spice spider spike spin spirit split spoil sponsor spoon sport spot spray spread spring spy square squeeze squirrel stable stadium staff stage stairs stamp stand start state stay steak steel stem step stereo stick still sting stock stomach stone stool story stove strategy street strike strong struggle student stuff stumble style subject submit subway success such sudden suffer sugar suggest suit summer sun sunny sunset super supply supreme sure surface surge surprise surround survey suspect sustain swallow swamp swap swarm swear sweet swift swim swing switch sword symbol symptom syrup system table tackle tag tail talent talk tank tape target task taste tattoo taxi teach team tell ten tenant tennis tent term test text thank that theme then theory there they thing this thought three thrive throw thumb thunder ticket tide tiger tilt timber time tiny tip tired tissue title toast tobacco today toddler toe together toilet token tomato tomorrow tone tongue tonight tool tooth top topic topple torch tornado tortoise toss total tourist toward tower town toy track trade traffic tragic train transfer trap trash travel tray treat tree trend trial tribe trick trigger trim trip trophy trouble truck true truly trumpet trust truth try tube tuition tumble tuna tunnel turkey turn turtle twelve twenty twice twin twist two type typical ugly umbrella unable unaware uncle uncover under undo unfair unfold unhappy uniform unique unit universe unknown unlock until unusual unveil update upgrade uphold upon upper upset urban urge usage use used useful useless usual utility vacant vacuum vague valid valley valve van vanish vapor various vast vault vehicle velvet vendor venture venue verb verify version very vessel veteran viable vibrant vicious victory video view village vintage violin virtual virus visa visit visual vital vivid vocal voice void volcano volume vote voyage wage wagon wait walk wall walnut want warfare warm warrior wash wasp waste water wave way wealth weapon wear weasel weather web wedding weekend weird welcome west wet whale what wheat wheel when where whip whisper wide width wife wild will win window wine wing wink winner winter wire wisdom wise wish witness wolf woman wonder wood wool word work world worry worth wrap wreck wrestle wrist write wrong yard year yellow you young youth zebra zero zone zoo".split(" ");
+const $ = id => document.getElementById(id);
+let fileBytes = null, fileHash = null;
+let busy = false;
+const usedThisSession = new Map();          // Index to hash: lost on reload, SIGNATURES.md is the real record
+let sigUrl = null, pubUrl = null;
+
+function setMsg(el, text, cls) { el.textContent = text; el.className = "msg " + (cls || ""); }
+
+function updateOnline() { $("online").classList.toggle("hidden", !navigator.onLine); }
+window.addEventListener("online", updateOnline);
+window.addEventListener("offline", updateOnline);
+updateOnline();
+
+function wordsEntropy() {
+  const text = $("words").value;
+  return text.trim() ? bip39Entropy(text, WORDLIST) : { error: "" };
+}
+
+function refresh() {
+  const r = wordsEntropy();
+  if (r.entropy) {
+    setMsg($("words-msg"), (r.entropy.length === 16 ? "12" : "24") + " WORDS, CHECKSUM OK", "ok");
+    r.entropy.fill(0);
+  } else {
+    setMsg($("words-msg"), r.error, "err");
+  }
+  const index = indexValue();
+  $("pub-btn").disabled = busy || !r.entropy;
+  $("sign-btn").disabled = busy || !r.entropy || !fileBytes || index === null || !$("unused").checked;
+  $("words").disabled = busy;
+}
+
+function indexValue() {
+  const s = $("index").value.trim();
+  if (!/^\d+$/.test(s)) return null;
+  const v = Number(s);
+  return v <= 1023 ? v : null;
+}
+
+async function takeFile(file) {
+  if (busy || !file) return;
+  fileBytes = null; fileHash = null;
+  $("result").classList.add("hidden");
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const problem = hexProblem(bytes);
+  if (problem) {
+    setMsg($("file-msg"), file.name + ": " + problem, "err");
+  } else {
+    fileBytes = bytes;
+    fileHash = sha256(bytes);
+    const msg = $("file-msg");
+    msg.className = "msg";
+    msg.textContent = "";
+    const head = document.createElement("div");
+    head.textContent = file.name + ", " + bytes.length + " BYTES. SHA-256 (compare with certutil -hashfile):";
+    const hash = document.createElement("div");
+    hash.className = "mono ok";
+    hash.textContent = toHex(fileHash);
+    msg.append(head, hash);
+  }
+  refresh();
+}
+
+const drop = $("drop");
+window.addEventListener("dragover", e => e.preventDefault());
+window.addEventListener("drop", e => e.preventDefault());
+drop.addEventListener("click", () => $("file").click());
+drop.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") $("file").click(); });
+drop.addEventListener("dragover", () => drop.classList.add("over"));
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => { drop.classList.remove("over"); takeFile(e.dataTransfer.files[0]); });
+$("file").addEventListener("change", e => { takeFile(e.target.files[0]); e.target.value = ""; });
+$("words").addEventListener("input", refresh);
+$("index").addEventListener("input", refresh);
+$("unused").addEventListener("change", refresh);
+
+function showStep(text, part) {
+  $("step").textContent = text;
+  $("fill").style.width = Math.round(part * 100) + "%";
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+function treeProgress(done, total) {
+  return showStep("BUILDING THE KEY TREE: LEAF " + done + " OF " + total, 0.95 * done / total);
+}
+
+function saveLink(button, name, bytes, oldUrl) {
+  if (oldUrl) URL.revokeObjectURL(oldUrl);
+  const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+  button.onclick = () => {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+  };
+  return url;
+}
+
+function clearWords() {
+  $("words").value = "";
+  refresh();
+}
+
+async function withKey(run) {
+  const r = wordsEntropy();
+  if (!r.entropy) return;
+  busy = true;
+  refresh();
+  $("progress").classList.remove("hidden");
+  const key = deriveKey(r.entropy);
+  r.entropy.fill(0);
+  let tree = null;
+  try {
+    tree = await buildTree(key.id, key.seed, PARAM_FIRMWARE, treeProgress);
+    await run(key, tree);
+  } catch (e) {
+    setMsg($("sign-msg"), "FAILED: " + e.message, "err");
+  } finally {
+    key.seed.fill(0);
+    if (tree) tree.fill(0);
+    $("progress").classList.add("hidden");
+    busy = false;
+    refresh();
+  }
+}
+
+$("pub-btn").addEventListener("click", () => withKey(async (key, tree) => {
+  const pub = publicKey(key.id, tree, PARAM_FIRMWARE);
+  $("pub-hex").textContent = toHex(pub);
+  pubUrl = saveLink($("pub-save"), "lms_public_key.txt", toHex(pub) + "\n", pubUrl);
+  $("pub-out").classList.remove("hidden");
+}));
+
+$("sign-btn").addEventListener("click", () => {
+  const q = indexValue();
+  const hashHex = toHex(fileHash);
+  $("result").classList.add("hidden");
+  if (usedThisSession.has(q) && usedThisSession.get(q) !== hashHex) {
+    setMsg($("sign-msg"), "REFUSED: INDEX " + q + " ALREADY SIGNED ANOTHER FILE IN THIS SESSION", "err");
+    return;
+  }
+  setMsg($("sign-msg"), "");
+  const message = fileHash;
+  withKey(async (key, tree) => {
+    await showStep("SIGNING WITH INDEX " + q, 0.97);
+    const C = deriveC(key.seed, q, message);
+    const sig = lmsSign(key.id, key.seed, tree, PARAM_FIRMWARE, q, C, message);
+    const pub = publicKey(key.id, tree, PARAM_FIRMWARE);
+    await showStep("VERIFYING SIGNATURE", 0.99);
+    if (!lmsVerify(pub, message, sig)) {
+      setMsg($("sign-msg"), "THE SIGNATURE DID NOT VERIFY: NOT SAVED", "err");
+      return;
+    }
+    usedThisSession.set(q, hashHex);
+    sigUrl = saveLink($("sig-save"), "UPDATE.SIG", sig, sigUrl);
+    $("result-title").textContent = "VERIFIED: " + sig.length + " BYTE SIGNATURE, INDEX " + q;
+    $("log-line").textContent = "index " + q + " sha256 " + hashHex + " pubkey " + toHex(pub);
+    $("result").classList.remove("hidden");
+    $("words").value = "";
+    $("index").value = "";
+    $("unused").checked = false;
+    setMsg($("sign-msg"), "INDEX " + q + " IS NOW USED. THE WORDS WERE CLEARED.", "warn");
+  });
+});
+
+$("clear-btn").addEventListener("click", clearWords);
+refresh();
+</script>
+</body>
+</html>

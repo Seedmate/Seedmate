@@ -21,16 +21,11 @@
 #include "hex_flash.h"
 #include "boot_ui.h"
 #include "boot_sha.h"
+#include "boot_lms.c"                  // Compiled here, as TFT.c in boot_ui.c
 
 // --- Pin mapping for LED activity ---
 #define LED       PORTAbits.RA2
 #define LED_TRIS  TRISAbits.TRISA2
-
-// --- Memory Boundaries (Shifted by 8KB for Bootloader) ---
-#define USER_APP_RESET_ADDRESS  0x9D002000
-#define APP_FLASH_BASE_ADDRESS  0x9D002000
-#define APP_FLASH_END_ADDRESS   0x9D03FFFF  // 256KB total flash limit
-#define FLASH_PAGE_SIZE         2048        // 2KB pages on PIC32MM
 
 // --- Intel Hex Record Types ---
 #define DATA_RECORD             0x00
@@ -38,11 +33,16 @@
 #define EXT_SEG_ADRS_RECORD     0x02
 #define EXT_LIN_ADRS_RECORD     0x04
 
-// --- Memory Boundaries (Shifted by 8KB for Bootloader) ---
-#define USER_APP_RESET_ADDRESS  0x9D002000
-#define APP_FLASH_BASE_ADDRESS  0x9D002000
-#define APP_FLASH_END_ADDRESS   0x9D03FFFF  // 256KB total flash limit
-#define FLASH_PAGE_SIZE         2048        // 2KB pages on PIC32MM
+// --- Bootloader state: the last page of its 12 KB. What was installed last, written
+// by the update and read at every boot. Erased when an update starts; its last
+// double-word goes last, so a half written record does not count.
+//   Words 0..7: SHA-256 of the file. Word 8: BOOT_OFFICIAL if the signature was
+//   valid. Word 9: BOOT_STATE_MAGIC. A blank page means nothing is known (the app
+//   came from a programmer): treated as unofficial. ---
+#define BOOT_STATE_PHYS     0x1D002800u
+#define BOOT_STATE          ((const volatile uint32_t *)0xBD002800u)
+#define BOOT_STATE_MAGIC    0x54534D53u
+#define BOOT_OFFICIAL       0x5AA5C33Cu
 
 // --- Bootloader Shared Memory Flags ---
 #define UPDATE_FLAG_ADDR ((volatile uint32_t *)0x80007F00)
@@ -109,7 +109,7 @@ static bool forced_update_requested(void) {
 }
 
 // A SHA-256 as 4 lines of 2 groups of 8 hex digits, from y
-static void ui_hash(int y, const uint8_t hash[32], uint16_t color) {
+__attribute__((noinline)) static void ui_hash(int y, const uint8_t hash[32], uint16_t color) {
     static const char hex[] = "0123456789ABCDEF";
     char line[18];
     for (int l = 0; l < 4; l++) {
@@ -123,6 +123,53 @@ static void ui_hash(int y, const uint8_t hash[32], uint16_t color) {
         *p = '\0';
         ui_text(y + l * 10, line, color);
     }
+}
+
+__attribute__((noinline)) static bool state_known(void) {
+    return BOOT_STATE[9] == BOOT_STATE_MAGIC;
+}
+
+static bool state_official(void) {
+    return state_known() && BOOT_STATE[8] == BOOT_OFFICIAL;
+}
+
+static bool state_write(const uint8_t hash[32], bool official) {
+    uint32_t w[8];
+    memcpy(w, hash, sizeof(w));
+    for (uint32_t i = 0; i < 8u; i += 2u) {
+        if (!nvm_write_dw(BOOT_STATE_PHYS + i * 4u, w[i], w[i + 1u])) return false;
+    }
+    return nvm_write_dw(BOOT_STATE_PHYS + 32u, official ? BOOT_OFFICIAL : 0u, BOOT_STATE_MAGIC);
+}
+
+// Shown at every boot of an app without a valid signature. OK starts it.
+static void warn_unofficial(void) {
+    ui_init();
+    ui_screen("WARNING");
+    ui_text(14, "UNOFFICIAL FIRMWARE", UI_RED);
+    ui_text(26, "NOT SIGNED BY SEEDMATE", UI_WHITE);
+    if (state_known()) {
+        uint32_t w[8];
+        for (int i = 0; i < 8; i++) w[i] = BOOT_STATE[i];
+        ui_text(42, "SHA-256 OF ITS UPDATE.HEX", UI_WHITE);
+        ui_hash(52, (const uint8_t *)w, UI_YELLOW);
+    } else {
+        ui_text(42, "NO SIGNATURE RECORD", UI_YELLOW);
+    }
+    ui_grid(false, true);
+    (void)wait_ok_back(false);
+}
+
+// Why UPDATE.SIG does not make the file official; NULL if it does. asciiBuffer
+// holds the signature, whose values the check overwrites.
+static const char *signature_problem(const uint8_t file_hash[32]) {
+    UINT got = 0;
+    if (pf_open("UPDATE.SIG") != FR_OK) return "NO UPDATE.SIG ON THE CARD";
+    if (pf_read(asciiBuffer, BOOT_LMS_SIG_SIZE + 1u, &got) != FR_OK) return "CANNOT READ UPDATE.SIG";
+    if (got != BOOT_LMS_SIG_SIZE) return "BAD SIGNATURE FILE";
+    ui_progress(0, BOOT_LMS_CHAINS);
+    if (!boot_lms_verify(boot_lms_public_key, file_hash, asciiBuffer, ui_progress)) return "BAD SIGNATURE";
+    return NULL;
 }
 
 // A complete record: its checksum is right and it is as long as it claims
@@ -242,7 +289,9 @@ int main(void)
     bool forced = forced_update_requested();
     bool no_app = app_missing();
     if (!forced && !no_app && *UPDATE_FLAG_ADDR != MAGIC_WORD_UPDATE) {
-        // No update requested, jump straight to the application
+        // No update requested: the application starts, after a warning if it
+        // was not installed with a valid signature
+        if (!state_official()) warn_unofficial();
         JumpToApp();
     }
 
@@ -283,12 +332,24 @@ int main(void)
     uint8_t file_hash[32];
     boot_sha_final(file_hash);
 
+    // Is it official? Other firmware can be installed too, but the user is told,
+    // here and at every boot
+    ui_text(82, "VERIFYING SIGNATURE", UI_CYAN);
+    const char *problem = signature_problem(file_hash);
+
     // Confirmation before anything is erased (Rule 4), with the SHA-256 of
     // the file to compare with the published one
-    ui_text(11, "FILE OK", UI_GREEN);
+    if (problem == NULL) {
+        ui_text(11, "OFFICIAL FIRMWARE", UI_GREEN);
+        ui_text(20, "SIGNATURE VERIFIED", UI_GREEN);
+        ui_text(82, "ERASE APP AND WRITE?", UI_WHITE);
+    } else {
+        ui_text(11, "UNOFFICIAL FIRMWARE", UI_RED);
+        ui_text(20, problem, UI_RED);
+        ui_text(82, "INSTALL IT ANYWAY?", UI_RED);
+    }
     ui_text(30, "SHA-256 OF UPDATE.HEX", UI_WHITE);
     ui_hash(40, file_hash, UI_CYAN);
-    ui_text(82, "ERASE APP AND WRITE?", UI_WHITE);
     ui_grid(true, true);
     if (!wait_ok_back(true)) {
         ui_screen("FIRMWARE UPDATE");
@@ -302,8 +363,9 @@ int main(void)
     // =========================================================================
 
     // Pass 2: erase the app area and program it from the file
+    // The state goes first: from here until the end of the update nothing is official
     ui_text(82, "ERASING THE APP", UI_CYAN);
-    hexflash_status_t flash_status = hexflash_begin();
+    hexflash_status_t flash_status = nvm_erase_page(BOOT_STATE_PHYS) ? hexflash_begin() : HEXFLASH_ERR_NVM;
     if (flash_status != HEXFLASH_OK) fail_app_erased(flash_status, "FLASH ERASE FAILED");
 
     ui_text(82, "WRITING THE NEW APP", UI_CYAN);
@@ -325,6 +387,10 @@ int main(void)
     }
 
     ui_text(82, "", UI_WHITE);
+    // Recorded last, and only now: what was written is the file that was checked
+    if (!state_write(file_hash, problem == NULL)) {
+        finish(6, "UPDATE DONE", UI_GREEN, "NOT RECORDED: UNOFFICIAL", UI_YELLOW);
+    }
     finish(7, "UPDATE DONE", UI_GREEN, "OK STARTS THE NEW APP", UI_WHITE);
 
     return (EXIT_FAILURE);

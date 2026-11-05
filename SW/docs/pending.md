@@ -3,7 +3,7 @@
 The open work list, kept up to date with every change (Claude updates it when
 a task is done, decided or added). Last update: 2026-11-05.
 
-Memory today: flash 208.0 KB of 238 KB (85.3%, about 35.8 KB free); RAM
+Memory today: flash 208.9 KB of 238 KB (85.7%, about 34.9 KB free); RAM
 22.5 KB of 32 KB (about 11.5 KB of stack).
 
 ## 1. Before shipping v2.0
@@ -11,11 +11,12 @@ Memory today: flash 208.0 KB of 238 KB (85.3%, about 35.8 KB free); RAM
 | Task | Notes |
 |---|---|
 | Thorough device test pass | Everything since the vault: vault notes and descriptors, descriptor QR (Sparrow PDF), DERIVE (passwords, Nostr), transcript check, start screen, settings defaults, key repeat |
-| Firmware signature | The bootloader verifies `UPDATE.HEX` before flashing. Custom firmware: still installable, the bootloader shows "UNOFFICIAL FIRMWARE" (and its hash) on every boot (Trezor model) |
-| Bootloader write protection | Today a running app can rewrite the bootloader. The bootloader must lock `NVMPWP` / `NVMBWP` (`PWPULOCK` / `BWPULOCK`) before it jumps to the app. Production: `CP = ON`, JTAG off (already), programming pads covered |
-| Bootloader layout | 12 KB instead of 16: the app loses nothing (its vectors go to 0x9D003000, 4 KB aligned, its startup code after them). Signature check that fits in +4 KB: LMS (RFC 8554, hash based, only SHA-256, ~1-1.5 KB; a ~2 KB `.SIG` file; a fixed number of signatures, e.g. 1024 releases). ECDSA would need 4-6 KB |
+| Firmware signature: test on the device | The bootloader is built, not tried on a board: signed and unsigned update, bad signature, the warning at boot, time of "VERIFYING SIGNATURE". Needs the PICkit once: the 12 KB layout refuses old apps, and old bootloaders refuse new apps |
+| Firmware signature: real key | The bootloader has a TEST public key (`boot_lms.c`). Choose the signing words (12 or 24; 24 keeps the post-quantum margin), replace the key, start `SIGNATURES.md` with every index used |
+| Bootloader write protection | Today a running app can rewrite the bootloader. The bootloader must lock `NVMPWP` / `NVMBWP` (`PWPULOCK` / `BWPULOCK`) before it jumps to the app, up to 0x9D003000 so it covers its state page too: until then a running app can fake "official". Production: `CP = ON`, JTAG off (already), programming pads covered |
+| Firmware rollback | A signature stays valid forever, so an old signed firmware with a known bug can be installed. Decide whether the bootloader warns or refuses (would need a version inside the signed data) |
 | Bootloader updates without a PICkit | A signed bootloader package that the current bootloader verifies and writes itself from RAM; it can carry a new public key signed by the old one. Power loss during the write needs the PICkit |
-| FAT32 in the bootloader | With the new layout. Cards over 32 GB: today only a small FAT16 partition works |
+| FAT32 in the bootloader | Cards over 32 GB: today only a small FAT16 partition works. The bootloader has 136 B free in its code area, so it needs savings first |
 | Stack measurement | Stack watermark, before Taproot |
 | User documentation | Which card for what (seed card never in a PC, file card FAT16/32), updates, the camera icons (green safe / red not safe for a phone: the start screen legend was removed), SD seeds are not encrypted |
 | Version 2.0 final | Release notes, `cVersion` |

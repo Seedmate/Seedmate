@@ -9,7 +9,7 @@
     The display driver is the app's own TFT.c, compiled here (shared, not
     copied) and placed with this module in the boot flash area that the
     linker script reserves for the debug executive (.boot_ui, free in
-    production builds), so the 8 KB of main flash are not used for it.
+    production builds), so the main flash is not used for it.
  *******************************************************************************/
 
 #ifndef BOOT_UI_H
@@ -19,7 +19,7 @@
 #include <stdbool.h>
 
 // Bootloader version, shown on every screen. MAJOR changes with the flash
-// layout (where the app starts: an app built for another layout does not
+// layout once units are sold (where the app starts: an app built for another layout does not
 // run), MINOR with changes in what it does.
 #define BOOT_VERSION "1.0"
 

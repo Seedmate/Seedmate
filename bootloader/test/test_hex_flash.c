@@ -157,7 +157,7 @@ static void test_target(const char *app_hex) {
     // Data in the bootloader area (an old 64 KB device starts at 0x1D000000)
     make_rec(rec, 4, 0, seg_old, 2);        CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
     make_rec(rec, 0, 0x0000, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_ERR_TARGET);
-    make_rec(rec, 0, 0x1FFC, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_ERR_TARGET);
+    make_rec(rec, 0, 0x2FFC, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_ERR_TARGET);
     // Config words / boot flash
     make_rec(rec, 4, 0, seg_boot, 2);       CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
     make_rec(rec, 0, 0x17C0, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_ERR_TARGET);
@@ -171,13 +171,13 @@ static void test_target(const char *app_hex) {
     make_rec(rec, 4, 0, seg_set, 2);        CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
     make_rec(rec, 0, 0xF800, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_ERR_TARGET);
     make_rec(rec, 0, 0xF7FC, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
-    // In range but nothing at the reset vector 0x1D002000
+    // In range but nothing at the reset block 0x1D003800
     make_rec(rec, 4, 0, seg_app, 2);        CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
     make_rec(rec, 0, 0x4000, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
     make_rec(rec, 1, 0, NULL, 0);           CHECK(hexflash_check_record(rec) == HEXFLASH_ERR_TARGET);
     // With it, the same file is accepted (a new file starts with its address record)
     make_rec(rec, 4, 0, seg_app, 2);        CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
-    make_rec(rec, 0, 0x2000, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
+    make_rec(rec, 0, 0x3800, code, 4);      CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
     make_rec(rec, 1, 0, NULL, 0);           CHECK(hexflash_check_record(rec) == HEXFLASH_OK);
 }
 
