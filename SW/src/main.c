@@ -2143,6 +2143,7 @@ static bool derive_from_wallet = false;     // CHILD_CONFIG belongs to DERIVE, n
 static bool unload_from_menu = false;       // CONFIRM_UNLOAD came from the wallet menu (else from the words)
 static uint8_t derive_child[36];            // Entropy of the child seed
 static uint32_t derive_child_fp;            // Master fingerprint of the key it comes from
+static uint8_t transcript_tag[8];           // Seed whose transcript was verified or skipped (see transcript_pending)
 
 // Derives the child (BACK cancels the PBKDF2) and shows where it comes from
 static void derive_child_seed(void) {
@@ -3709,6 +3710,7 @@ void tc_fault_handler(const char *msg) {
 
 void transition_to_main(void) {
     black_screen();
+    memzero(transcript_tag, sizeof(transcript_tag));
     memzero(bip84_passphrase, sizeof(bip84_passphrase)); // The seed is unloaded
     memzero(&ms_wallet, sizeof(ms_wallet));
     ms_wallet_loaded = false;
@@ -8374,6 +8376,201 @@ static bool derive_menu_run(void) {
     }
 }
 
+// ============================================================================
+// VERIFY TRANSCRIPT: the user checks the paper copy of a new seed, word by
+// word, before it is loaded (and from SEED BACKUP at any time)
+// ============================================================================
+
+#define VERIFY_CHOICES  4
+#define VERIFY_SPREAD   12          // Wrong choices come from this many words around the right one
+#define VERIFY_LIST     0           // BACK, or a wrong word: back to the word list
+#define VERIFY_OK       1           // Every word matched
+#define VERIFY_SKIPPED  2           // SKIP AND LOAD (only before a load)
+
+// Short tag of the entropy on screen: the transcript of that seed was checked
+// (or skipped), so LOAD does not ask again. Wiped with the seed.
+static void transcript_tag_now(uint8_t tag[8]) {
+    uint8_t hash[32];
+    SHA256_CTX ctx;
+    sha256_init(&ctx);
+    sha256_update(&ctx, data_array_256b, 16 + size_pointer * 16);
+    sha256_final(&ctx, hash);
+    memcpy(tag, hash, 8);
+    memzero(hash, sizeof(hash));
+    memzero(&ctx, sizeof(ctx));
+}
+
+// True if LOAD must first ask for the transcript: a seed just created with
+// CREATE, not checked or skipped yet
+static bool transcript_pending(void) {
+    uint8_t tag[8];
+    if (main_pointer != cMAIN_create) return false;
+    transcript_tag_now(tag);
+    bool pending = memcmp(tag, transcript_tag, sizeof(tag)) != 0;
+    memzero(tag, sizeof(tag));
+    return pending;
+}
+
+static void transcript_mark_done(void) {
+    transcript_tag_now(transcript_tag);
+}
+
+// Index (0..2047) of word w of the seed: 11 bits of entropy + checksum
+static uint16_t seed_word_index(const BYTE *cbuf, int w) {
+    uint16_t v = 0;
+    for (int b = w * 11; b < w * 11 + 11; b++) v = (uint16_t)((v << 1) | ((cbuf[b / 8] >> (7 - (b % 8))) & 1u));
+    return v;
+}
+
+// Not a secret: only spreads the wrong choices and the order on screen
+static uint32_t verify_rand(uint32_t *state) {
+    *state = *state * 1103515245u + 12345u + (uint32_t)TMR1;
+    return *state >> 8;
+}
+
+// The choices for one word: the right one and VERIFY_CHOICES - 1 words close
+// to it in the alphabetical list (they share its first letters, so a word
+// copied wrongly is the one picked), in a random order. Returns where the
+// right one is.
+static int verify_choices(uint16_t right, uint16_t *choice, uint32_t *rnd) {
+    int at = (int)(verify_rand(rnd) % VERIFY_CHOICES);
+    for (int i = 0; i < VERIFY_CHOICES; i++) {
+        if (i == at) {
+            choice[i] = right;
+            continue;
+        }
+        bool fresh;
+        do {
+            int lo = (right < VERIFY_SPREAD) ? 0 : right - VERIFY_SPREAD;
+            int hi = (right > 2047 - VERIFY_SPREAD) ? 2047 : right + VERIFY_SPREAD;
+            choice[i] = (uint16_t)(lo + (int)(verify_rand(rnd) % (uint32_t)(hi - lo + 1)));
+            fresh = choice[i] != right;     // Also differs from the right one placed later
+            for (int j = 0; j < i && fresh; j++) fresh = choice[j] != choice[i];
+        } while (!fresh);
+    }
+    return at;
+}
+
+static void draw_verify_word(int word, int words, const uint16_t *choice, int sel, bool skip_row) {
+    char text[26];
+    char num[12];
+    strcpy(text, "WORD ");
+    fast_itoa((uint32_t)word + 1u, num);
+    strcat(text, num);
+    strcat(text, " OF ");
+    fast_itoa((uint32_t)words, num);
+    strcat(text, num);
+    strcat(text, "  ");
+    drawtext(1, 13, text, ST7735_CYAN, ST7735_BLACK, 1);
+    for (int i = 0; i < VERIFY_CHOICES; i++) {
+        char row[12];
+        const char *w = get_word(choice[i]);
+        memset(row, ' ', sizeof(row) - 1);
+        row[sizeof(row) - 1] = '\0';
+        memcpy(row, w, strlen(w));
+        drawtext(5, 28 + 11 * i, (sel == i) ? ">" : " ", ST7735_ORANGE, ST7735_BLACK, 1);
+        drawtext(17, 28 + 11 * i, row, (sel == i) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+    }
+    if (skip_row) {
+        drawtext(5, 82, (sel == VERIFY_CHOICES) ? ">" : " ", ST7735_ORANGE, ST7735_BLACK, 1);
+        drawtext(17, 82, "SKIP AND LOAD", ST7735_RED, ST7735_BLACK, 1);
+    }
+    rectan(GRID_X, 105, GRID_X + 90, 125, BLACK);  // Labels and arrows change with the cursor
+    grid_labels("BACK", NULL, (sel == VERIFY_CHOICES) ? "SKIP" : "PICK", NULL, NULL, NULL);
+    if (sel > 0) print_up_arrow(106, 114, ST7735_WHITE);       // Only where they move the cursor
+    if (sel < VERIFY_CHOICES - (skip_row ? 0 : 1)) print_down_arrow(106, 123, ST7735_WHITE);
+}
+
+// Every word in order, four choices each. before_load: a new seed about to be
+// loaded, so a red SKIP AND LOAD row is offered below the words. BACK cancels;
+// a wrong word says which one and returns to the list, so the whole paper copy
+// is checked again.
+static int transcript_verify(bool before_load) {
+    int words = 12 + 12 * size_pointer;
+    BYTE *cbuf = append_checksum(data_array_256b, 16 + size_pointer * 16);
+    uint32_t rnd = _CP0_GET_COUNT();
+    uint16_t choice[VERIFY_CHOICES];
+    int result = VERIFY_OK;
+    int rows = VERIFY_CHOICES + (before_load ? 1 : 0);
+
+    for (int w = 0; w < words && result == VERIFY_OK; w++) {
+        uint16_t right = seed_word_index(cbuf, w);
+        int at = verify_choices(right, choice, &rnd);
+        int sel = 0;
+        black_screen();
+        draw_title("VERIFY TRANSCRIPT", ST7735_LIGHTGREY);
+        draw_verify_word(w, words, choice, sel, before_load);
+        while (1) {
+            int bt = wait_any_key();
+            if ((bt == UP_BT && sel > 0) || (bt == DOWN_BT && sel < rows - 1)) {
+                sel += (bt == DOWN_BT) ? 1 : -1;    // No wrap: SKIP is reached only going down
+                draw_verify_word(w, words, choice, sel, before_load);
+            } else if (bt == BACK_BT) {
+                result = VERIFY_LIST;
+                break;
+            } else if (bt == OK_BT) {
+                if (sel == VERIFY_CHOICES) {
+                    result = VERIFY_SKIPPED;
+                } else if (sel != at) {
+                    char text[26];
+                    char num[12];
+                    strcpy(text, "WORD ");
+                    fast_itoa((uint32_t)w + 1u, num);
+                    strcat(text, num);
+                    strcat(text, " DOES NOT MATCH");
+                    black_screen();
+                    draw_title(text, ST7735_RED);
+                    drawtext(5, 25, "CHECK YOUR WHOLE PAPER", ST7735_WHITE, ST7735_BLACK, 1);
+                    drawtext(5, 35, "COPY AGAINST THE LIST", ST7735_WHITE, ST7735_BLACK, 1);
+                    drawtext(5, 45, "AND VERIFY IT AGAIN", ST7735_WHITE, ST7735_BLACK, 1);
+                    grid_labels(NULL, NULL, "LIST", NULL, NULL, NULL);
+                    while (wait_any_key() != OK_BT) { }
+                    result = VERIFY_LIST;
+                }
+                break;
+            }
+        }
+    }
+    memzero(choice, sizeof(choice));
+    rnd = 0;
+    if (result == VERIFY_OK) {
+        char text[26];
+        char num[12];
+        strcpy(text, "ALL ");
+        fast_itoa((uint32_t)words, num);
+        strcat(text, num);
+        strcat(text, " WORDS MATCH");
+        black_screen();
+        draw_title("TRANSCRIPT VERIFIED", ST7735_GREEN);
+        drawtext(5, 25, text, ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 35, "YOUR PAPER COPY IS GOOD", ST7735_WHITE, ST7735_BLACK, 1);
+        grid_labels(NULL, NULL, before_load ? "LOAD" : "OK", NULL, NULL, NULL);
+        while (wait_any_key() != OK_BT) { }
+    }
+    wait_keys_released();
+    return result;
+}
+
+// LOAD on the words screen: a seed just created asks for its transcript
+// first (SKIP AND LOAD is offered), then the wallet keys are derived
+static void show_seed_load(void) {
+    if (transcript_pending()) {
+        if (transcript_verify(true) == VERIFY_LIST) {
+            redraw_show_seed_with_offset();
+            return;
+        }
+        transcript_mark_done();             // Verified or skipped: LOAD does not ask again
+    }
+    if (!load_wallet_keys()) {              // Cancelled: back to the words
+        redraw_show_seed_with_offset();
+        return;
+    }
+    bip84_address_index = 0;
+    bip84_extended_key_page = 0;
+    black_screen();
+    print_bip84_menu();
+}
+
 // Total sectors of the card (starting it if needed), 0 if it cannot be read
 static uint32_t sd_card_sectors(void) {
     uint32_t sectors = 0;
@@ -10709,14 +10906,8 @@ int SSS_N = 9;
             case SHOW_SEED:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        if (!load_wallet_keys()) {          // Cancelled: back to the words
-                            redraw_show_seed_with_offset();
-                            break;
-                        }
-                        bip84_address_index = 0;
-                        bip84_extended_key_page = 0;
-                        black_screen();
-                        print_bip84_menu();
+                        show_seed_load();
+                        pulsed_bt = NONE;
                         break;
                     case BACK_BT:                   // Unload the seed, after confirmation
                         unload_from_menu = false;
@@ -10750,16 +10941,9 @@ int SSS_N = 9;
                     case LEFT_BT:
                         print_backup_menu();
                         break;
-                    case RIGHT_BT: // Compact QR
-                        if (!load_wallet_keys()) {          // Cancelled: back to the words
-                            redraw_show_seed_with_offset();
-                            break;
-                        }
-                        bip84_address_index = 0;
-                        bip84_extended_key_page = 0;
-                        black_screen();
-                        print_bip84_menu();
-
+                    case RIGHT_BT:                  // LOAD
+                        show_seed_load();
+                        pulsed_bt = NONE;
                         break;
                     default:
                         break;
@@ -11291,7 +11475,11 @@ int SSS_N = 9;
             case BACKUP_MENU:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        if (backup_pointer == cBACKUP_SD) {
+                        if (backup_pointer == cBACKUP_VERIFY) {
+                            if (transcript_verify(false) == VERIFY_OK) transcript_mark_done();
+                            print_backup_menu();
+                            pulsed_bt = NONE;
+                        } else if (backup_pointer == cBACKUP_SD) {
                             if (!sdwrite_enabled) {
                                 print_blocked("SD WRITE IS OFF", "TURN IT ON IN", "SETTINGS > SD WRITE");
                                 estado = BACKUP_BLOCKED;
