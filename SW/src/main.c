@@ -6640,7 +6640,11 @@ static void text_qr_edit(void) {
 
 static uint8_t eff_words = 6;               // Words of the password, 1..cEFF_MAX_WORDS
 static bool eff_numbers = false;            // A digit after each word
-static uint8_t eff_cursor = 0;              // Configuration field: 0 words, 1 numbers
+static bool eff_capital = false;            // The first letter of each word in capital
+static uint8_t eff_sep = 0;                 // Separator between words: index of eff_sep_char[]
+static uint8_t eff_cursor = 0;              // Configuration row: 0 words, 1 numbers, 2 capital, 3 separator
+static const char eff_sep_char[3] = {' ', '-', '_'};
+static const char *const eff_sep_name[3] = {"SPACE", "-    ", "_    "};   // Padded: covers the old value
 static uint16_t eff_index[cEFF_MAX_WORDS];
 static uint8_t eff_digit[cEFF_MAX_WORDS];
 static uint8_t eff_done;                    // Words completed
@@ -6716,42 +6720,52 @@ static void eff_word_text(int i, bool upper, char *out) {
     }
     if (eff_numbers) out[n++] = (char)('0' + eff_digit[i]);
     out[n] = '\0';
+    if (!upper && eff_capital && out[0] >= 'a' && out[0] <= 'z') out[0] = (char)(out[0] - 32);
 }
 
-// The words completed, wrapped at word boundaries from y
+// The words completed, wrapped at word boundaries from y, each followed by
+// the separator (a space is the gap between them)
 static void eff_draw_words(int y, bool upper) {
-    char w[8];
+    char w[9];
     int x = 5;
     for (int i = 0; i < eff_done; i++) {
         eff_word_text(i, upper, w);
+        if (eff_sep != 0 && i + 1 < eff_done) {
+            size_t n = strlen(w);
+            w[n] = eff_sep_char[eff_sep];
+            w[n + 1] = '\0';
+        }
         int width = 6 * (int)strlen(w);
         if (x + width > 155) {
             x = 5;
             y += 10;
         }
         drawtext(x, y, w, ST7735_WHITE, ST7735_BLACK, 1);
-        x += width + 6;
+        x += width + ((eff_sep == 0) ? 6 : 0);
     }
     memzero(w, sizeof(w));
 }
 
 // Configuration screen. full: the whole screen (on entry); otherwise only the
-// values and the timer note are drawn again, over the old ones (no flicker)
+// values are drawn again, over the old ones (no flicker)
 static void print_eff_config(bool full) {
     char num[12];
     if (full) {
         black_screen();
         draw_title((char *)menu_tools[cTOOLS_EFF], ST7735_LIGHTGREY);
-        drawtext(1, 13, "WORDS:", ST7735_WHITE, ST7735_BLACK, 1);
-        drawtext(80, 13, "NUMBERS:", ST7735_WHITE, ST7735_BLACK, 1);
-        drawtext(1, 50, "4 DICE PER WORD", ST7735_CYAN, ST7735_BLACK, 1);
+        drawtext(1, 14, "WORDS:", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(1, 26, "NUMBERS:", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(1, 38, "1ST LETTER CAPITAL:", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(1, 50, "SEPARATOR:", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(1, 64, "4 DICE PER WORD", ST7735_CYAN, ST7735_BLACK, 1);
         grid_bip85();
     }
     fast_itoa(eff_words, num);
     strcat(num, " ");                       // Covers the second digit of 10..12
-    drawtext(10, 30, num, (eff_cursor == 0) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(100, 30, eff_numbers ? "YES" : "NO ", (eff_cursor == 1) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(1, 60, eff_numbers ? "NUMBERS FROM THE TIMER" : "                      ", ST7735_CYAN, ST7735_BLACK, 1);
+    drawtext(122, 14, num, (eff_cursor == 0) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(122, 26, eff_numbers ? "YES" : "NO ", (eff_cursor == 1) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(122, 38, eff_capital ? "YES" : "NO ", (eff_cursor == 2) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(122, 50, (char *)eff_sep_name[eff_sep], (eff_cursor == 3) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
 
     // Entropy of the result, rounded down: log2(1296) = 10.34 bits per word,
     // plus log2(10) = 3.32 per digit. Padded to cover the previous value.
@@ -6801,25 +6815,29 @@ static void print_eff_roll(uint8_t parts) {
     }
 }
 
-// The password exactly as it must be typed: lower case, one space between words
+// The password exactly as it must be typed, with the separator named on top
 static void print_eff_result(void) {
+    char text[18];
     black_screen();
     draw_title((char *)menu_tools[cTOOLS_EFF], ST7735_LIGHTGREY);
-    drawtext(1, 12, "LOWER CASE, SPACES BETWEEN", ST7735_CYAN, ST7735_BLACK, 1);
+    strcpy(text, "SEPARATOR: ");
+    strcat(text, eff_sep_name[eff_sep]);
+    drawtext(1, 12, text, ST7735_CYAN, ST7735_BLACK, 1);
     eff_draw_words(26, false);
 
     grid_confirm("QR");
     estado = EFF_RESULT;
 }
 
-// The text of the password, lower case with one space between words, in out
+// The text of the password, the words joined by the separator, in out
 // (at least cEFF_TEXT_MAX + 1 bytes)
 static void eff_build_result(char *out) {
     char w[8];
+    char sep[2] = {eff_sep_char[eff_sep], '\0'};
     out[0] = '\0';
     for (int i = 0; i < eff_done; i++) {
         eff_word_text(i, false, w);
-        if (i > 0) strcat(out, " ");
+        if (i > 0) strcat(out, sep);
         strcat(out, w);
     }
     memzero(w, sizeof(w));
@@ -6841,20 +6859,22 @@ static eff_step_t eff_key_press(int bt) {
                 break;
             case BACK_BT:
                 return EFF_LEFT;
-            case UP_BT:
+            case UP_BT:                     // Rows, circular
             case DOWN_BT:
-                if (eff_cursor == 1) {
-                    eff_numbers = !eff_numbers;
-                } else if (bt == UP_BT && eff_words < cEFF_MAX_WORDS) {
-                    eff_words++;
-                } else if (bt == DOWN_BT && eff_words > 1) {
-                    eff_words--;
-                }
+                eff_cursor = (uint8_t)((eff_cursor + ((bt == DOWN_BT) ? 1 : 3)) % 4);
                 print_eff_config(false);
                 break;
-            case LEFT_BT:
+            case LEFT_BT:                   // The value of the row: RIGHT next, LEFT back
             case RIGHT_BT:
-                eff_cursor = (bt == RIGHT_BT) ? 1 : 0;
+                if (eff_cursor == 0) {
+                    eff_words = (uint8_t)((eff_words + ((bt == RIGHT_BT) ? 0 : cEFF_MAX_WORDS - 2)) % cEFF_MAX_WORDS + 1);
+                } else if (eff_cursor == 1) {
+                    eff_numbers = !eff_numbers;
+                } else if (eff_cursor == 2) {
+                    eff_capital = !eff_capital;
+                } else {
+                    eff_sep = (uint8_t)((eff_sep + ((bt == RIGHT_BT) ? 1 : 2)) % 3);
+                }
                 print_eff_config(false);
                 break;
             default:
@@ -7397,7 +7417,6 @@ static void vault_draw_list(int sel, bool full) {
     static bool grid_on_new;
     char row[VAULT_TITLE_MAX + 2];
     char text[16];
-    char num[12];
     int top = (sel >= VAULT_ROWS) ? sel - VAULT_ROWS + 1 : 0;
     bool on_new = !vault_pick && sel == vault_count;
 
@@ -7412,13 +7431,6 @@ static void vault_draw_list(int sel, bool full) {
             strcat(text, (vault_count == 1) ? " ENTRY" : " ENTRIES");
         }
         drawtext(1, 107, text, ST7735_CYAN, ST7735_BLACK, 1);
-        if (vault_others > 0) {             // Records of other passphrases or seeds
-            strcpy(text, "+");
-            fast_itoa(vault_others, num);
-            strcat(text, num);
-            strcat(text, " OTHERS");
-            drawtext(1, 117, text, ST7735_CYAN, ST7735_BLACK, 1);
-        }
     }
     for (int i = 0; i < VAULT_ROWS; i++) {
         int k = top + i;
@@ -7433,6 +7445,7 @@ static void vault_draw_list(int sel, bool full) {
         drawtext(1, 13 + 10 * i, row, (k == sel) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
     }
     if (full || on_new != grid_on_new) {
+        rectan(GRID_X, 105, GRID_X + 90, 125, BLACK);  // Labels are drawn without a background
         if (vault_pick) grid_labels("BACK", NULL, "VIEW", NULL, NULL, NULL);
         else if (on_new) grid_labels("BACK", NULL, "NEW", NULL, NULL, NULL);
         else grid_labels("BACK", NULL, "LOAD", "DEL", NULL, "EDIT");
@@ -7710,6 +7723,7 @@ static vault_status_t vault_new_descriptor(uint16_t *keep) {
         drawtext(1, 13, "FROM QR", (sel == 0) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
         drawtext(1, 23, "CURRENT MS DESCRIPTOR", !have ? 0x8410 : (sel == 1) ? ST7735_ORANGE : ST7735_WHITE,
                  ST7735_BLACK, 1);
+        rectan(GRID_X, 105, GRID_X + 90, 125, BLACK);  // OK changes with the cursor
         grid_labels("BACK", NULL, (sel == 0) ? "SCAN" : "SAVE", NULL, NULL, NULL);
         if (have) {
             print_up_arrow(106, 114, ST7735_WHITE);

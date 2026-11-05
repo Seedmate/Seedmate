@@ -14,6 +14,7 @@
 #include "TFT.h"
 #include "fountain.h"
 #include "snake.h"
+#include "screens.h"                // Arrow bitmaps
 
 // Buttons, active low (same pins as main.c)
 #define KEY_BACK    PORTBbits.RB2
@@ -32,8 +33,8 @@
 
 #define TICKS_PER_MS    (CPU_CLOCK_FREQUENCY / 2000u)   // Core timer runs at SYSCLK / 2
 #define STEP_START_MS   220     // Time per move at the start...
-#define STEP_MIN_MS     80      // ...getting faster down to this
-#define STEP_FASTER_MS  6       // Faster by this per food eaten
+#define STEP_MIN_MS     90      // ...getting faster down to this (after 130 foods)
+#define STEP_FASTER_MS  1       // Faster by this per food eaten
 
 #define COLOR_BG        0x0000
 #define COLOR_SNAKE     0x07E0
@@ -119,13 +120,63 @@ static void wait_ok(void) {
     if (rng_state == 0) rng_state = 0x2545F491u;
 }
 
+#define ANY_KEY_DOWN() (KEY_OK == 0 || KEY_BACK == 0 || KEY_LEFT == 0 || \
+                        KEY_RIGHT == 0 || KEY_UP == 0 || KEY_DOWN == 0)
+
+// Waits for all keys up, then for any key (pressed and released)
+static void wait_any(void) {
+    while (ANY_KEY_DOWN()) SYS_Tasks();
+    delay_ms(30);
+    while (!ANY_KEY_DOWN()) {
+        SYS_Tasks();
+        rng_state += 1;                 // Time to the press varies the food
+    }
+    delay_ms(30);
+    while (ANY_KEY_DOWN()) SYS_Tasks();
+    if (rng_state == 0) rng_state = 0x2545F491u;
+}
+
+// A small snake for the title: its cells as (column, row) on a 7 px grid,
+// tail first, the head last, and the food in front of it
+#define ART_CELL    7
+#define ART_X       31
+#define ART_Y       26
+static const uint8_t art_body[][2] = {
+    {0, 2}, {1, 2}, {2, 2}, {2, 1}, {2, 0}, {3, 0}, {4, 0}, {5, 0}, {5, 1},
+    {5, 2}, {6, 2}, {7, 2}, {8, 2}, {8, 1}, {8, 0}, {9, 0}, {10, 0}
+};
+
+static void draw_title_snake(void) {
+    int n = (int)(sizeof(art_body) / sizeof(art_body[0]));
+    for (int i = 0; i < n; i++) {
+        int x = ART_X + art_body[i][0] * ART_CELL, y = ART_Y + art_body[i][1] * ART_CELL;
+        rectan(x, y, x + ART_CELL - 2, y + ART_CELL - 2, (i == n - 1) ? COLOR_HEAD : COLOR_SNAKE);
+    }
+    int hx = ART_X + 10 * ART_CELL, hy = ART_Y;
+    rectan(hx + 3, hy + 1, hx + 4, hy + 2, COLOR_BG);                  // Eye
+    rectan(hx + ART_CELL - 1, hy + 3, hx + ART_CELL + 2, hy + 3, COLOR_FOOD);   // Tongue
+    rectan(ART_X + 13 * ART_CELL, hy, ART_X + 13 * ART_CELL + ART_CELL - 2, hy + ART_CELL - 2, COLOR_FOOD);
+}
+
+// The game's keys: UP, PAUSE (OK), LEFT, DOWN, RIGHT in the place of the buttons
+static void draw_title_keys(void) {
+    const int x0 = 29, y0 = 66, w = 34, h = 10;
+    for (int r = 0; r <= 2; r++) drawFastHLine(x0, y0 + r * h, 3 * w + 1, COLOR_LINE);
+    for (int c = 0; c <= 3; c++) drawFastVLine(x0 + c * w, y0, 2 * h + 1, COLOR_LINE);
+    print_up_arrow(x0 + w + 14, y0 + 9, COLOR_TEXT);
+    drawtext(x0 + 2 * w + 2, y0 + 2, "PAUSE", COLOR_TEXT, COLOR_BG, 1);
+    print_left_arrow(x0 + 14, y0 + h + 9, COLOR_TEXT);
+    print_down_arrow(x0 + w + 14, y0 + h + 9, COLOR_TEXT);
+    print_rigth_arrow(x0 + 2 * w + 14, y0 + h + 9, COLOR_TEXT);
+}
+
 static void title_screen(void) {
     rectan(0, 0, 159, 127, COLOR_BG);
-    drawtext(35, 30, "SNAKE", COLOR_SNAKE, COLOR_BG, 3);
-    drawtext(26, 75, "ARROWS: MOVE", COLOR_TEXT, COLOR_BG, 1);
-    drawtext(26, 87, "OK: PAUSE", COLOR_TEXT, COLOR_BG, 1);
-    drawtext(26, 110, "PRESS OK TO PLAY", COLOR_TEXT, COLOR_BG, 1);
-    wait_ok();
+    draw_title_snake();
+    drawtext(29, 56, "INSTRUCTIONS", COLOR_TEXT, COLOR_BG, 1);
+    draw_title_keys();
+    drawtext(8, 108, "PRESS ANY BUTTON TO PLAY", COLOR_TEXT, COLOR_BG, 1);
+    wait_any();
 }
 
 static void new_game(void) {
@@ -146,7 +197,7 @@ static void new_game(void) {
     place_food();
 }
 
-// Plays one game; returns when the snake hits a wall or itself
+// Plays one game; returns when the snake hits itself (the edges wrap around)
 static void play(void) {
     uint8_t dir = DIR_RIGHT, next_dir = DIR_RIGHT;
     uint32_t step_ms = STEP_START_MS;
@@ -183,7 +234,10 @@ static void play(void) {
         else if (dir == DIR_DOWN) y++;
         else if (dir == DIR_LEFT) x--;
         else x++;
-        if (x < 0 || x >= COLS || y < 0 || y >= ROWS) return;      // Wall
+        if (x < 0) x = COLS - 1;                                    // Out of one side,
+        else if (x >= COLS) x = 0;                                  // in by the other
+        if (y < 0) y = ROWS - 1;
+        else if (y >= ROWS) y = 0;
         uint16_t n = (uint16_t)(y * COLS + x);
 
         bool eats = (n == food);
@@ -207,7 +261,7 @@ static void play(void) {
             score++;
             if (score > best) best = score;
             draw_score();
-            if (step_ms > STEP_MIN_MS + STEP_FASTER_MS) step_ms -= STEP_FASTER_MS;
+            if (step_ms >= STEP_MIN_MS + STEP_FASTER_MS) step_ms -= STEP_FASTER_MS;
             place_food();
         }
     }
