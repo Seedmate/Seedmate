@@ -1,7 +1,7 @@
 # Seedmate firmware - pending work
 
 The open work list, kept up to date with every change (Claude updates it when
-a task is done, decided or added). Last update: 2026-11-05.
+a task is done, decided or added). Last update: 2026-11-06.
 
 Memory today: flash 208.9 KB of 238 KB (85.7%, about 34.9 KB free); RAM
 22.5 KB of 32 KB (about 11.5 KB of stack).
@@ -31,9 +31,10 @@ Memory today: flash 208.9 KB of 238 KB (85.7%, about 34.9 KB free); RAM
 | Taproot keypath (BIP86) | 5-7 KB | Schnorr BIP340, BIP341 sighash, bech32m; measure the stack first |
 | Legacy P2PKH (BIP44) | 2-3 KB | Least used |
 | Testnet / signet | 1-2 KB | A session setting (not permanent), yellow "TESTNET" label on the wallet, signing and address screens |
-| Signed PSBT back to the SD card | +6-8 KB | Not decided. Proposal: full FatFs (ChaN) in the app, FAT16/32 read and write, no exFAT (Microsoft patent and license risk); always a new file (`NAME-SIGNED.PSB`) after a confirmation; the bootloader keeps Petit FatFs |
+| Signed PSBT back to the SD card | +6-8 KB | Decided on 2026-11-06: it will be done. How is still a proposal: full FatFs (ChaN) in the app, FAT16/32 read and write, no exFAT (Microsoft patent and license risk); always a new file (`NAME-SIGNED.PSB`) after a confirmation; the bootloader keeps Petit FatFs |
 | BBQr reading | 1-3 KB | Sparrow / Coldcard "B$" frames; the Z encoding needs raw inflate (shared with KEF v21) |
 | Nostr event signing | ~2-3 KB | Shares Taproot's Schnorr; under SIGN |
+| SCAN ADDRESS in multisig | Not measured | Today single sig only: the multisig menu has IMPORT DESCRIPTOR instead of ADDRESSES. With a descriptor loaded, check a scanned address against the receive and change scripts of the wallet (`psbt_public_ckd()`, `desc_witness_script()`, as the change check when signing) |
 
 ## 3. Other features
 

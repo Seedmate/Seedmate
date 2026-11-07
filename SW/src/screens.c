@@ -292,9 +292,14 @@ void grid_dices(){
 void grid_coins(){              // Heads tails
     print_cursor_grid();
     drawtext(67,117, "HEAD", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(97,117, "TAIL", ST7735_WHITE, ST7735_WHITE, 1);
-    // Added DEL button logic to grid representation for coins
-    drawtext(70,107, "DEL", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(127,117, "TAIL", ST7735_WHITE, ST7735_WHITE, 1);
+    grid_coins_back_label(false);   // The screen starts with nothing entered
+}
+
+// What BACK does on the coins screen: deletes the last coin, or leaves when none is left
+void grid_coins_back_label(bool can_delete) {
+    rectan(64, 106, 92, 114, ST7735_BLACK);
+    drawtext(can_delete ? 70 : 67, 107, can_delete ? "DEL" : "BACK", ST7735_WHITE, ST7735_WHITE, 1);
 }
 
 void grid_OK_only(){
@@ -464,6 +469,16 @@ void grid_labels(const char *back, const char *up, const char *ok,
     }
 }
 
+// Rows of options: UP / DOWN the row, LEFT and RIGHT named by what they do on it.
+// Only those two cells are cleared when called again.
+void grid_rows_keys(const char *left, const char *right) {
+    rectan(64, 116, 92, 124, ST7735_BLACK);
+    rectan(124, 116, 152, 124, ST7735_BLACK);
+    grid_labels("BACK", NULL, "OK", left, NULL, right);
+    print_up_arrow(106, 114, ST7735_WHITE);
+    print_down_arrow(106, 123, ST7735_WHITE);
+}
+
 // BACK as the only action (cancel a running operation, leave an error)
 void grid_back_only(void) {
     print_cursor_grid();
@@ -499,7 +514,8 @@ void print_update_fw_warning(void) {
     black_screen();
     draw_title("SYSTEM UPDATE", ST7735_LIGHTGREY);
     drawtext(10, 45, "1. INSERT SD CARD", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(10, 60, "   WITH UPDATE.HEX FILE", ST7735_WHITE, ST7735_BLACK, 1);    
+    drawtext(10, 60, "   WITH UPDATE.HEX AND", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(10, 75, "   UPDATE.SIG FILES", ST7735_WHITE, ST7735_BLACK, 1);
     grid_confirm("UPDT");
 }
 
@@ -674,9 +690,16 @@ void print_diceroll_screen(int sel, int sel2){
         } else {
             draw_title(text_dices, ST7735_LIGHTGREY);
             grid_dices();
+            draw_dice_back_hint(false);     // The screen starts with no rolls
         }
         drawtext(45,15, text_bits, ST7735_WHITE, ST7735_BLACK, 1);
         draw_shared_entropy_building();
+}
+
+// Holding BACK cannot be shown in the grid, where BACK is a die face: a note at its left
+void draw_dice_back_hint(bool can_delete) {
+    drawtext(1, 107, "HOLD BACK", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 117, can_delete ? "TO DELETE" : "TO LEAVE ", ST7735_WHITE, ST7735_BLACK, 1);
 }
 
 void print_TMR_screen(int size_TMR){

@@ -1055,6 +1055,10 @@ static void draw_keyboard_boxes(void) {
 }
 
 // --- Helper: Delta Renderer for a Single Key ---
+// The next editor is QR FROM TEXT: the title only names the screen, it cannot be
+// edited, and the save key generates the QR
+static bool editor_title_fixed;
+
 static void draw_keyboard_key(int idx, int active_layer, bool is_selected, bool allow_newlines) {
     uint16_t color = is_selected ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t bg = ST7735_BLACK;
@@ -1082,7 +1086,7 @@ static void draw_keyboard_key(int idx, int active_layer, bool is_selected, bool 
     } else if (idx == KBD_CANCEL) {
         drawtext(KBD_SIDE_LEFT + 6, KBD_TOP + 2, "CANCEL", color, bg, 1);
     } else if (idx == KBD_SAVE) {
-        drawtext(KBD_SIDE_LEFT + 6, KBD_TOP + KBD_CELL_H + 2, " SAVE ", color, bg, 1);
+        drawtext(KBD_SIDE_LEFT + 6, KBD_TOP + KBD_CELL_H + 2, editor_title_fixed ? "GEN QR" : " SAVE ", color, bg, 1);
 
     } else if (idx == KBD_QR) {
         drawtext(KBD_SPLIT_1 + 2, KBD_TOP + 2 * KBD_CELL_H + 2, "QR", color, bg, 1);
@@ -1128,6 +1132,11 @@ static void draw_keyboard_key(int idx, int active_layer, bool is_selected, bool 
 
 // --- Helper: Draw Title Line (Delta Optimized - No Flicker) ---
 static void draw_editor_title_full(char* title, int len, int t_cursor, bool is_editing, bool allow_newlines) {
+    if (editor_title_fixed) {
+        draw_title(title, ST7735_LIGHTGREY);
+        drawFastHLine(0, 12, 160, 0x8410);
+        return;
+    }
     int pos_x = 2; 
     // Note mode keeps the right end for the UP hint, passphrase mode for the counter
     int right = allow_newlines ? 135 : 112;
@@ -1467,7 +1476,7 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
                 else if (cursor_idx == 31) { // UP (Text Navigation)
                     if (!editing_title) {
                         // Jump to title if we are on the top line and in NOTE_MODE
-                        if (allow_newlines && cursor_y == EDITOR_TEXT_TOP && scroll_y == EDITOR_TEXT_TOP) {
+                        if (allow_newlines && !editor_title_fixed && cursor_y == EDITOR_TEXT_TOP && scroll_y == EDITOR_TEXT_TOP) {
                             editing_title = true;
                             title_changed = true; // Force title redraw
                             text_changed = true;  // Force redraw to hide body cursor
@@ -3885,6 +3894,77 @@ void transition_to_size(void) {
     black_screen();
     print_generic_menu(menu_size, cSIZE_n_opt, size_pointer);
     estado = SEL_SIZE;
+}
+
+// --- Coins and raw dice: one key enters one coin or roll. BACK is a die face on the
+// dice screen, so there a short press is the die and holding it deletes rolls. A
+// roll gives 1 or 2 bits: one history bit per roll says which, so whole rolls go. ---
+#define DICE_HOLD_MS        800u    // Held this long, BACK deletes instead of entering
+#define DICE_DELETE_NEXT_MS 300u    // Then one more roll each time this passes
+static uint8_t dice_two_bits[32];   // Bit n: roll n gave 2 bits. A roll gives at least 1 bit.
+static uint16_t dice_rolls;
+
+static void dice_history_clear(void) {
+    memzero(dice_two_bits, sizeof(dice_two_bits));
+    dice_rolls = 0;
+}
+
+// One coin or roll. The last one leaves the screen, for the checksum.
+static void entropy_key(const char *bits, size_t len) {
+    bool dice = (seed_pointer == cSEED_dice);
+    if (dice) {
+        if (len == 2) dice_two_bits[dice_rolls >> 3] |= (uint8_t)(1u << (dice_rolls & 7u));
+        dice_rolls++;
+    }
+    append_entropy_bits(bits, len);
+    refresh_entropy_screen();
+    if (estado != ROLL_DICE1) {
+        dice_history_clear();
+    } else if (dice) {
+        if (dice_rolls == 1) draw_dice_back_hint(true);
+    } else if (bit_count_dice == 1) {
+        grid_coins_back_label(true);
+    }
+}
+
+static void dice_delete_roll(void) {
+    dice_rolls--;
+    uint8_t mask = (uint8_t)(1u << (dice_rolls & 7u));
+    int bits = (dice_two_bits[dice_rolls >> 3] & mask) ? 2 : 1;
+    dice_two_bits[dice_rolls >> 3] &= (uint8_t)~mask;
+    while (bits-- > 0) {
+        bit_count_dice--;
+        set_bit(data_array_256b, bit_count_dice, 0);
+    }
+    last_input_len = 0;
+    refresh_entropy_screen();
+    if (dice_rolls == 0) draw_dice_back_hint(false);
+}
+
+// BACK on the dice screen, from the press to the release. Released early it is the
+// die that shows one. Held, it deletes rolls and stops at none, even if still held,
+// so only a new hold on the empty screen goes back to the size.
+static void dice_back_key(void) {
+    uint32_t start = _CP0_GET_COUNT();
+    uint32_t wait = DICE_HOLD_MS;
+    bool held = false, leave = (dice_rolls == 0);
+
+    while (BT1 == 0) {
+        SYS_Tasks();
+        if ((uint32_t)(_CP0_GET_COUNT() - start) < wait * (CPU_CLOCK_FREQUENCY / 2000u)) continue;
+        start = _CP0_GET_COUNT();
+        wait = DICE_DELETE_NEXT_MS;
+        held = true;
+        if (leave) {
+            dice_history_clear();
+            transition_to_size();
+            break;
+        }
+        if (dice_rolls > 0) dice_delete_roll();
+    }
+    while (BT1 == 0) SYS_Tasks();
+    delay_ms(30);
+    if (!held) entropy_key("01", 2);
 }
 
 
@@ -6610,7 +6690,10 @@ static void text_qr_edit(void) {
     char title[25] = "QR FROM TEXT";
 
     do {
-        if (!full_text_editor(title, sizeof(title), (char *)buffer, cTEXTQR_MAX + 1, NOTE_MODE)) {
+        editor_title_fixed = true;
+        bool saved = full_text_editor(title, sizeof(title), (char *)buffer, cTEXTQR_MAX + 1, NOTE_MODE);
+        editor_title_fixed = false;
+        if (!saved) {
             memzero(buffer, sizeof(buffer));
             black_screen();
             print_generic_menu(menu_tools, cTOOLS_n_opt, tools_pointer);
@@ -6645,6 +6728,7 @@ static uint8_t eff_sep = 0;                 // Separator between words: index of
 static uint8_t eff_cursor = 0;              // Configuration row: 0 words, 1 numbers, 2 capital, 3 separator
 static const char eff_sep_char[3] = {' ', '-', '_'};
 static const char *const eff_sep_name[3] = {"SPACE", "-    ", "_    "};   // Padded: covers the old value
+static const char *const eff_sep_key[3] = {"SPC", "-", "_"};                // The same, in a grid cell
 static uint16_t eff_index[cEFF_MAX_WORDS];
 static uint8_t eff_digit[cEFF_MAX_WORDS];
 static uint8_t eff_done;                    // Words completed
@@ -6758,8 +6842,11 @@ static void print_eff_config(bool full) {
         drawtext(1, 38, "1ST LETTER CAPITAL:", ST7735_WHITE, ST7735_BLACK, 1);
         drawtext(1, 50, "SEPARATOR:", ST7735_WHITE, ST7735_BLACK, 1);
         drawtext(1, 64, "4 DICE PER WORD", ST7735_CYAN, ST7735_BLACK, 1);
-        grid_bip85();
     }
+    // LEFT and RIGHT say what they do on this row; the separator keys name the one they load
+    if (eff_cursor == 0) grid_rows_keys("-", "+");
+    else if (eff_cursor == 3) grid_rows_keys(eff_sep_key[(eff_sep + 2u) % 3u], eff_sep_key[(eff_sep + 1u) % 3u]);
+    else grid_rows_keys("NO", "YES");
     fast_itoa(eff_words, num);
     strcat(num, " ");                       // Covers the second digit of 10..12
     drawtext(122, 14, num, (eff_cursor == 0) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
@@ -6869,9 +6956,9 @@ static eff_step_t eff_key_press(int bt) {
                 if (eff_cursor == 0) {
                     eff_words = (uint8_t)((eff_words + ((bt == RIGHT_BT) ? 0 : cEFF_MAX_WORDS - 2)) % cEFF_MAX_WORDS + 1);
                 } else if (eff_cursor == 1) {
-                    eff_numbers = !eff_numbers;
+                    eff_numbers = (bt == RIGHT_BT);
                 } else if (eff_cursor == 2) {
-                    eff_capital = !eff_capital;
+                    eff_capital = (bt == RIGHT_BT);
                 } else {
                     eff_sep = (uint8_t)((eff_sep + ((bt == RIGHT_BT) ? 1 : 2)) % 3);
                 }
@@ -9831,6 +9918,7 @@ int SSS_N = 9;
                             print_diceroll_screen(size_pointer, seed_pointer);
                             estado = ROLL_DICE1;
                             bit_count_dice = 0;
+                            dice_history_clear();
                         } else if (seed_pointer==cSEED_word){// Word pick
                             black_screen();
                             estado = WRITE_WORD;
@@ -10603,43 +10691,35 @@ int SSS_N = 9;
             case ROLL_DICE1:  /////  ROLL DICE or COIN /////////////
                 switch (pulsed_bt) {
                     case OK_BT:
-                        if (seed_pointer == cSEED_dice) {
-                            append_entropy_bits("11", 2);
-                            refresh_entropy_screen();
-                        }
+                        if (seed_pointer == cSEED_dice) entropy_key("11", 2);
                         break;
                     case BACK_BT:
                         if (seed_pointer == cSEED_dice) {
-                            append_entropy_bits("01", 2);
-                            refresh_entropy_screen();
+                            dice_back_key();
                         } else if (seed_pointer == cSEED_coin) {
                             if (bit_count_dice > 0) {
                                 bit_count_dice--;
                                 set_bit(data_array_256b, bit_count_dice, 0);
                                 last_input_len = 0; // Clear purple highlight on delete
                                 refresh_entropy_screen();
+                                if (bit_count_dice == 0) grid_coins_back_label(false);
+                            } else {
+                                transition_to_size();   // Nothing entered: back to the size
                             }
                         }
                         break;
                     case UP_BT:
-                        if (seed_pointer == cSEED_dice) {
-                            append_entropy_bits("10", 2);
-                            refresh_entropy_screen();
-                        }
+                        if (seed_pointer == cSEED_dice) entropy_key("10", 2);
                         break;
                     case DOWN_BT:
-                        append_entropy_bits("1", 1);
-                        refresh_entropy_screen();
+                        if (seed_pointer == cSEED_dice) entropy_key("1", 1);
                         break;
                     case LEFT_BT:
-                        append_entropy_bits("0", 1);
-                        refresh_entropy_screen();
+                        entropy_key("0", 1);
                         break;
                     case RIGHT_BT:
-                        if (seed_pointer == cSEED_dice) {
-                            append_entropy_bits("00", 2);
-                            refresh_entropy_screen();
-                        }
+                        if (seed_pointer == cSEED_dice) entropy_key("00", 2);
+                        else entropy_key("1", 1);   // Coin: tail
                         break;
                     default:
                         break;
