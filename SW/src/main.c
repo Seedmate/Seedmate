@@ -264,6 +264,21 @@ uint32_t bip84_account_parent_fingerprint = 0;
 // Multisig (P2WSH, m/48'/0'/0'/2') account, derived only when the BIP84 menu
 // is switched to multisig mode
 static bool bip84_multisig_mode = false;
+
+// Script type of the wallet, chosen in CONFIG for the session. Only NATIVE SEGWIT
+// works today: the others show where they will go and say "NOT AVAILABLE YET".
+#define SCRIPT_LEGACY   0       // m/44', 1... addresses
+#define SCRIPT_NESTED   1       // m/49', 3... (multisig P2SH-P2WSH, m/48'/0'/n'/1')
+#define SCRIPT_NATIVE   2       // m/84', bc1q... (multisig P2WSH, m/48'/0'/n'/2')
+#define SCRIPT_TAPROOT  3       // m/86', bc1p...
+static uint8_t bip84_script = SCRIPT_NATIVE;
+static const char *const script_name[4] = {"LEGACY", "NESTED SEGWIT", "NATIVE SEGWIT", "TAPROOT"};
+static const char *const script_key[4] = {"LEG", "NEST", "NATV", "TAPR"};      // In a grid cell
+static const char *const script_prefix[4] = {"1...", "3...", "BC1Q...", "BC1P..."};
+
+static bool script_ready(void) {
+    return bip84_script == SCRIPT_NATIVE;
+}
 static bool ms_account_cached = false;
 static HDNode ms_account_node;          // m/48'/0'/0'/2'
 static HDNode ms_receive_node_cache;    // .../0
@@ -287,13 +302,14 @@ static uint32_t ms_wallet_account;
 static uint8_t ms_wallet_loads;         // Goes up with every wallet loaded (FROM VAULT leaves its list)
 
 // Menu position -> cBIP84_* option for each mode
+#define cBIP84_MAX_OPTIONS ((cBIP84_n_opt > cBIP84_MULTI_n_opt) ? cBIP84_n_opt : cBIP84_MULTI_n_opt)
 static const uint8_t bip84_single_options[cBIP84_n_opt] = {
-    cBIP84_SIGN, cBIP84_DERIVE, cBIP84_VAULT, cBIP84_XPUB, cBIP84_ADDRESSES,
-    cBIP84_PASSPHRASE, cBIP84_ACCOUNT, cBIP84_MODE, cBIP84_UNLOAD
+    cBIP84_SIGN, cBIP84_PASSPHRASE, cBIP84_DERIVE, cBIP84_VAULT, cBIP84_XPUB,
+    cBIP84_ADDRESSES, cBIP84_CONFIG, cBIP84_UNLOAD
 };
 static const uint8_t bip84_multi_options[cBIP84_MULTI_n_opt] = {
-    cBIP84_SIGN, cBIP84_DERIVE, cBIP84_VAULT, cBIP84_XPUB, cBIP84_DESCRIPTOR,
-    cBIP84_PASSPHRASE, cBIP84_ACCOUNT, cBIP84_MODE, cBIP84_UNLOAD
+    cBIP84_SIGN, cBIP84_PASSPHRASE, cBIP84_DERIVE, cBIP84_VAULT, cBIP84_XPUB,
+    cBIP84_DESCRIPTOR, cBIP84_CONFIG, cBIP84_UNLOAD
 };
 
 static int bip84_option(void) {
@@ -399,6 +415,7 @@ void extract_11bit_groups(BYTE *data, size_t size);
 // Prototypes for smart keyboard prediction
 static void get_valid_next_letters(const char *prefix, bool *valid_letters);
 void print_keyboard_with_validation(int index, bool word_found, const char *current_word);
+static int word_number = 1;     // Tracks the word being entered
 
 int find_word_index(const char *word);
 
@@ -417,6 +434,23 @@ int card_view_page = 0;
 // ============================================================================
 // BIP85 Derivation Engine
 // ============================================================================
+// Long operations blink the activity LED besides the bar on screen (Rule 4), so
+// the device is seen working even when the screen is not looked at. Called from
+// the progress callbacks; led_done() at the end. Keys turn it off too.
+#define LED_BUSY_MS 150u
+static void led_busy(void) {
+    static uint32_t last;
+    if ((uint32_t)(_CP0_GET_COUNT() - last) >= LED_BUSY_MS * (CPU_CLOCK_FREQUENCY / 2000u)) {
+        last = _CP0_GET_COUNT();
+        LED = !LED;
+    }
+}
+
+static void led_done(void) {
+    LED = 0;
+}
+
+// ============================================================================
 // HMAC-SHA512 and PBKDF2 live in kdf.c. This callback keeps the MCU tasks
 // running during the 2048 BIP39 iterations and fills the green progress bar
 // (x = 10..150, y = 93..96) drawn by key_progress_phase().
@@ -425,6 +459,7 @@ static bool pbkdf2_progress_bar(uint32_t done, uint32_t total) {
     uint32_t fill = (140u * done) / total;
 
     SYS_Tasks();
+    if (done >= total) led_done(); else led_busy();
     if (fill < drawn) drawn = 0;        // A new run started
     if (fill >= drawn + 7) {            // Repaint in 7 px steps, as before
         rectan(10 + drawn, 93, 10 + fill, 96, ST7735_GREEN);
@@ -1785,6 +1820,7 @@ static void key_progress_phase(const char *label, uint8_t total_steps) {
 static void key_progress_step(void) {
     if (key_steps_total == 0) return;
     key_steps_done++;
+    if (key_steps_done >= key_steps_total) led_done(); else led_busy();
     rectan(10, 93, 10 + (140u * key_steps_done) / key_steps_total, 96, ST7735_GREEN);
 }
 
@@ -2050,45 +2086,6 @@ static void set_account_index(uint32_t index) {
     if (ms_account_cached) derive_multisig_from_coin();
 }
 
-// Number entry for the account index, with the resulting path shown.
-// UP/DOWN +-1, LEFT/RIGHT +-10, OK applies, BACK cancels. Returns true on OK.
-static bool edit_account_index(uint32_t *value) {
-    uint32_t v = *value;
-    char text[32];
-    char num[12];
-
-    black_screen();
-    draw_title("ACCOUNT INDEX", ST7735_LIGHTGREY);
-    grid_labels("BACK", "+1", "OK", "-10", "-1", "+10");
-    while (1) {
-        // Only the number and the path are redrawn: no flicker
-        fast_itoa(v, num);
-        rectan(0, 30, 159, 53, ST7735_BLACK);
-        drawtext((160 - 18 * (int)strlen(num)) / 2, 30, num, ST7735_ORANGE, ST7735_BLACK, 3);
-        strcpy(text, bip84_multisig_mode ? "m/48'/0'/" : "m/84'/0'/");
-        strcat(text, num);
-        strcat(text, bip84_multisig_mode ? "'/2'   " : "'   ");     // Clears a longer previous path
-        drawtext(5, 65, text, ST7735_CYAN, ST7735_BLACK, 1);
-
-        // Wait for all keys up, then for one press
-        while (BT_OK == 0 || BT1 == 0 || BT2 == 0 || BT4 == 0 || BT5 == 0 || BT6 == 0) SYS_Tasks();
-        delay_ms(30);
-        while (BT_OK == 1 && BT1 == 1 && BT2 == 1 && BT4 == 1 && BT5 == 1 && BT6 == 1) SYS_Tasks();
-        delay_ms(30);
-
-        if (BT1 == 0 || BT_OK == 0) {
-            bool apply = (BT_OK == 0);
-            while (BT_OK == 0 || BT1 == 0) SYS_Tasks();     // Keep the key away from the menu
-            if (apply) *value = v;
-            return apply;
-        }
-        if (BT5 == 0 && v < BIP84_ACCOUNT_MAX) v++;
-        if (BT4 == 0 && v > 0) v--;
-        if (BT6 == 0) v = (v + 10 > BIP84_ACCOUNT_MAX) ? BIP84_ACCOUNT_MAX : v + 10;
-        if (BT2 == 0) v = (v >= 10) ? v - 10 : 0;
-    }
-}
-
 // Shows the account public key as a static ur:crypto-account QR code
 // (BCR-2020-015) for wallets such as Sparrow: master fingerprint, origin
 // path, chain code and parent fingerprint, as wpkh() for the BIP84 account
@@ -2252,7 +2249,26 @@ static void draw_child_words(void) {
 
 static void print_bip84_menu(void)
 {
-    print_titled_menu("WALLET", bip84_multisig_mode ? menu_bip84_multi : menu_bip84, bip84_option_count(), bip84_menu_pointer);
+    // With a passphrase loaded a new one replaces it: the title and the entry say so
+    bool has_passphrase = (bip84_passphrase[0] != '\0');
+    const char *const *entries = bip84_multisig_mode ? menu_bip84_multi : menu_bip84;
+    const uint8_t *ids = bip84_multisig_mode ? bip84_multi_options : bip84_single_options;
+    const char *options[cBIP84_MAX_OPTIONS];
+    for (int i = 0; i < bip84_option_count(); i++) {
+        options[i] = entries[i];
+        if (has_passphrase && ids[i] == cBIP84_PASSPHRASE) options[i] = "CHANGE PASSPHRASE";
+        if (ids[i] == cBIP84_XPUB) {        // The extended key formats of the script type
+            options[i] = (bip84_script == SCRIPT_NATIVE) ? "XPUB/ZPUB" :
+                         (bip84_script == SCRIPT_NESTED) ? "XPUB/YPUB" : "XPUB";
+        }
+    }
+    print_titled_menu(has_passphrase ? "WALLET (PASSPHRASE)" : "WALLET", options, bip84_option_count(), bip84_menu_pointer);
+    // The kind of wallet, always in sight: other script types give other addresses
+    char kind[28];
+    strcpy(kind, bip84_multisig_mode ? "MULTI SIG, " : "SINGLE SIG, ");
+    strcat(kind, script_name[bip84_script]);
+    rectan(0, 94, 159, 102, ST7735_BLACK);
+    drawtext(1, 94, kind, ST7735_CYAN, ST7735_BLACK, 1);
     // --- ADDED: Display master fingerprint at the bottom left ---
     // Convert the 32-bit fingerprint into an 8-character hex string
     // Fingerprint and, below it, the account at the bottom left: both fit in
@@ -3016,6 +3032,8 @@ void print_keyboard_with_validation(int index, bool word_found, const char *curr
     bool valid_letters[26];
     get_valid_next_letters(current_word, valid_letters);
     print_keyboard(index, word_found, valid_letters);
+    // Nothing left to delete: BACK leaves the word entry
+    grid_del_back_label(word_number > 1 || current_word[0] != '\0');
 }
 
 
@@ -3769,6 +3787,7 @@ void transition_to_main(void) {
     bip84_account_cached = false;
     ms_account_cached = false;
     bip84_multisig_mode = false;
+    bip84_script = SCRIPT_NATIVE;
     bip84_account_index = 0;
     memzero(&bip84_coin_node, sizeof(bip84_coin_node));
     memzero(&bip84_account_node, sizeof(bip84_account_node));
@@ -3923,7 +3942,7 @@ static void entropy_key(const char *bits, size_t len) {
     } else if (dice) {
         if (dice_rolls == 1) draw_dice_back_hint(true);
     } else if (bit_count_dice == 1) {
-        grid_coins_back_label(true);
+        grid_del_back_label(true);
     }
 }
 
@@ -4282,28 +4301,79 @@ static uint32_t read_cbor_int(const uint8_t *buf, uint32_t *idx) {
 
 // Writes the address of an output script, or a short description when the
 // script has no address form.
-static void psbt_view_address(const uint8_t *script, uint32_t len, char *out) {
+// Returns false for the description.
+static bool psbt_view_address(const uint8_t *script, uint32_t len, char *out) {
     psbt_script_type_t type = psbt_script_type(script, len);
     uint8_t payload[21];
 
-    if (psbt_segwit_address(script, len, "bc", out, PSBT_ADDRESS_MAX_LEN)) return;
+    if (psbt_segwit_address(script, len, "bc", out, PSBT_ADDRESS_MAX_LEN)) return true;
 
     if (type == PSBT_SCRIPT_P2PKH || type == PSBT_SCRIPT_P2SH) {
         payload[0] = (type == PSBT_SCRIPT_P2PKH) ? 0x00 : 0x05;   // Mainnet versions
         memcpy(&payload[1], (type == PSBT_SCRIPT_P2PKH) ? &script[3] : &script[2], 20);
-        if (base58_encode_check(payload, sizeof(payload), out, PSBT_ADDRESS_MAX_LEN) > 0) return;
+        if (base58_encode_check(payload, sizeof(payload), out, PSBT_ADDRESS_MAX_LEN) > 0) return true;
     }
     strcpy(out, (type == PSBT_SCRIPT_OP_RETURN) ? "OP_RETURN DATA" : "NON-STANDARD SCRIPT");
+    return false;
+}
+
+// Amounts use one unit each: under 100 000 sats in SAT ("48 000 SAT"),
+// otherwise BTC with the 8 decimals grouped ("0.01 500 000 BTC"), so the
+// magnitude shows at a glance. The unit is always written next to the number.
+#define PSBT_SAT_LIMIT      100000u
+#define PSBT_AMOUNT_STR_LEN 32
+
+static void psbt_format_amount(uint64_t sats, char *out) {
+    char digits[PSBT_BTC_STR_LEN];
+    char *o = out;
+
+    if (sats < PSBT_SAT_LIMIT) {
+        fast_itoa((uint32_t)sats, digits);
+        size_t n = strlen(digits);
+        for (size_t i = 0; i < n; i++) {
+            if (i > 0 && (n - i) % 3 == 0) *o++ = ' ';
+            *o++ = digits[i];
+        }
+        strcpy(o, " SAT");
+        return;
+    }
+    psbt_format_btc(sats, digits);                  // "B.BBBBBBBB"
+    const char *d = strchr(digits, '.');
+    size_t whole = (size_t)(d - digits) + 1;        // Integer part and the dot
+    memcpy(o, digits, whole);
+    o += whole;
+    for (int i = 1; i <= 8; i++) {                  // 2, 3 and 3 decimals
+        *o++ = d[i];
+        if (i == 2 || i == 5) *o++ = ' ';
+    }
+    strcpy(o, " BTC");
+}
+
+// Short form for the flow diagram, at most 12 characters: BTC without the
+// trailing zeros (2 decimals kept), cut with "~" when longer ("~0.03498 BTC")
+static void psbt_format_amount_short(uint64_t sats, char *out) {
+    char btc[PSBT_BTC_STR_LEN];
+    if (sats < PSBT_SAT_LIMIT) {
+        psbt_format_amount(sats, out);              // "99 999 SAT" at most
+        return;
+    }
+    psbt_format_btc(sats, btc);
+    size_t dot = (size_t)(strchr(btc, '.') - btc);
+    size_t n = strlen(btc);
+    while (n > dot + 3 && btc[n - 1] == '0') n--;
+    if (n > 8) {
+        n = (dot >= 7) ? dot : 7;
+        *out++ = '~';
+    }
+    memcpy(out, btc, n);
+    strcpy(&out[n], " BTC");
 }
 
 static void psbt_view_amount_line(int y, const char *label, bool known, uint64_t sats, uint16_t color) {
-    char line[PSBT_BTC_STR_LEN + 12];
+    char line[PSBT_AMOUNT_STR_LEN + 12];
     strcpy(line, label);
     if (known) {
-        char btc[PSBT_BTC_STR_LEN];
-        psbt_format_btc(sats, btc);
-        strcat(line, btc);
-        strcat(line, " BTC");
+        psbt_format_amount(sats, &line[strlen(line)]);
     } else {
         strcat(line, "UNKNOWN");
     }
@@ -4478,20 +4548,71 @@ static psbt_owner_t psbt_check_owner(const psbt_t *psbt, bool is_input, uint32_t
     return any ? PSBT_OWNER_OTHER : PSBT_OWNER_NO_INFO;
 }
 
-// Ownership line at y and, when there is one, the derivation path below it
-static void psbt_view_owner(int y, psbt_owner_t owner, const psbt_keypath_t *kp, bool is_output) {
-    char text[PSBT_PATH_STR_LEN];
+// Owners found by psbt_plan_signing(), which checks every input and output
+// before the review is shown: the pages read them here instead of deriving
+// the keys again. Inputs and outputs past the table are checked when shown.
+#define PSBT_OWNER_CACHE 64
+static struct {
+    bool valid;
+    uint8_t in[PSBT_OWNER_CACHE];       // psbt_owner_t
+    uint8_t out[PSBT_OWNER_CACHE];
+    uint32_t mine_inputs;               // Ours and signed or to sign
+} psbt_checked;
 
+// The derivation psbt_check_owner() reports: the first with our fingerprint,
+// else the first one (no key derivation)
+static bool psbt_shown_keypath(const psbt_t *psbt, bool is_input, uint32_t index, psbt_keypath_t *shown) {
+    psbt_keypath_t kp;
+    bool any = false;
+    for (uint32_t n = 0;
+         is_input ? psbt_input_keypath(psbt, index, n, &kp) : psbt_output_keypath(psbt, index, n, &kp);
+         n++) {
+        if (!any || psbt_fp_is_mine(kp.fingerprint)) *shown = kp;
+        any = true;
+        if (psbt_fp_is_mine(kp.fingerprint)) break;
+    }
+    return any;
+}
+
+static psbt_owner_t psbt_owner_of(const psbt_t *psbt, bool is_input, uint32_t index, psbt_keypath_t *kp) {
+    if (psbt_checked.valid && index < PSBT_OWNER_CACHE) {
+        psbt_shown_keypath(psbt, is_input, index, kp);
+        return (psbt_owner_t)(is_input ? psbt_checked.in[index] : psbt_checked.out[index]);
+    }
+    if (is_input) {
+        psbt_input_t in;
+        if (!psbt_get_input(psbt, index, &in)) return PSBT_OWNER_MISMATCH;
+        return psbt_check_owner(psbt, true, index, in.script, in.script_len,
+                                in.witness_script, in.witness_script_len, kp);
+    }
+    psbt_output_t out;
+    if (!psbt_get_output(psbt, index, &out)) return PSBT_OWNER_MISMATCH;
+    return psbt_check_owner(psbt, false, index, out.script, out.script_len,
+                            out.witness_script, out.witness_script_len, kp);
+}
+
+// Verified ours: the output comes back to the wallet
+static bool psbt_owner_verified(psbt_owner_t owner) {
+    return owner == PSBT_OWNER_VERIFIED || owner == PSBT_OWNER_VERIFIED_MULTI;
+}
+
+// Change chain (1) of a verified output's path
+static bool psbt_is_change_path(psbt_owner_t owner, const psbt_keypath_t *kp) {
+    return psbt_path_element(kp, owner == PSBT_OWNER_VERIFIED ? 3 : 4) == 1;
+}
+
+// Ownership line at y and, when there is one, the derivation path below it
+// Text of the ownership line and its color
+static uint16_t psbt_owner_text(psbt_owner_t owner, const psbt_keypath_t *kp, bool is_output, char *text) {
     switch (owner) {
         case PSBT_OWNER_NO_INFO:
-            drawtext(5, y, is_output ? "EXTERNAL" : "NO KEY INFO", ST7735_WHITE, ST7735_BLACK, 1);
-            return;
+            strcpy(text, is_output ? "EXTERNAL ADDRESS" : "NO KEY INFO");
+            return ST7735_WHITE;
         case PSBT_OWNER_OTHER:
             strcpy(text, psbt_inspect_only ? "FP " : "OTHER FP ");
             psbt_format_fingerprint(kp->fingerprint, &text[psbt_inspect_only ? 3 : 9]);
             if (psbt_inspect_only) strcat(text, " NOT CHECKED");
-            drawtext(5, y, text, ST7735_YELLOW, ST7735_BLACK, 1);
-            break;
+            return ST7735_YELLOW;
         case PSBT_OWNER_FP_ONLY: {
             uint32_t account;
             bool single = psbt_bip84_path(kp, &account);
@@ -4503,35 +4624,34 @@ static void psbt_view_owner(int y, psbt_owner_t owner, const psbt_keypath_t *kp,
             } else {
                 strcpy(text, "MY FP, PATH NOT CHECKED");
             }
-            drawtext(5, y, text, ST7735_YELLOW, ST7735_BLACK, 1);
-            break;
+            return ST7735_YELLOW;
         }
         case PSBT_OWNER_VERIFIED:
-            if (!is_output) {
-                strcpy(text, "MINE (VERIFIED)");
-            } else {
-                strcpy(text, (psbt_path_element(kp, 3) == 1) ? "CHANGE (VERIFIED)" : "MINE, RECEIVE (VERIFIED)");
-            }
-            drawtext(5, y, text, ST7735_GREEN, ST7735_BLACK, 1);
-            break;
         case PSBT_OWNER_VERIFIED_MULTI:
             if (!is_output) {
-                strcpy(text, "MINE, MULTISIG (VERIFIED)");
+                strcpy(text, owner == PSBT_OWNER_VERIFIED ? "MINE (VERIFIED)" : "MINE, MULTISIG (VERIFIED)");
             } else {
-                strcpy(text, (psbt_path_element(kp, 4) == 1) ? "MULTISIG CHANGE VERIFIED" : "MULTISIG RECEIVE VERIFIED");
+                strcpy(text, psbt_is_change_path(owner, kp) ? "BACK TO YOU, VERIFIED" : "YOUR ADDRESS, VERIFIED");
             }
-            drawtext(5, y, text, ST7735_GREEN, ST7735_BLACK, 1);
-            break;
+            return ST7735_GREEN;
         case PSBT_OWNER_MULTISIG_CHANGE:
-            drawtext(5, y, "MULTISIG, NOT VERIFIED", ST7735_YELLOW, ST7735_BLACK, 1);
-            break;
+            strcpy(text, "MULTISIG, NOT VERIFIED");
+            return ST7735_YELLOW;
         case PSBT_OWNER_NOT_IN_WALLET:
-            drawtext(5, y, "NOT IN LOADED WALLET", is_output ? ST7735_YELLOW : ST7735_RED, ST7735_BLACK, 1);
-            break;
+            strcpy(text, "NOT IN LOADED WALLET");
+            return is_output ? ST7735_YELLOW : ST7735_RED;
         default:
-            drawtext(5, y, "KEY MISMATCH! NOT YOURS", ST7735_RED, ST7735_BLACK, 1);
-            break;
+            strcpy(text, "KEY MISMATCH! NOT YOURS");
+            return ST7735_RED;
     }
+}
+
+static void psbt_view_owner(int y, psbt_owner_t owner, const psbt_keypath_t *kp, bool is_output) {
+    char text[PSBT_PATH_STR_LEN];
+
+    uint16_t color = psbt_owner_text(owner, kp, is_output, text);
+    drawtext(5, y, text, color, ST7735_BLACK, 1);
+    if (owner == PSBT_OWNER_NO_INFO) return;
     psbt_format_path(kp, text);
     draw_bip84_wrapped_text(text, 5, y + 10, PSBT_VIEW_LINE_CHARS, 2);
 }
@@ -4579,8 +4699,312 @@ static void psbt_view_multisig(int y, const psbt_t *psbt, bool is_input, uint32_
     }
 }
 
-// Page 0: totals, fee, our fingerprint, locktime/RBF and warnings
-static void psbt_view_summary(const psbt_t *psbt) {
+static void draw_grouped(const char *s, int y);
+static int psbt_wait_key(void);
+static void psbt_count_label(const char *kind, uint32_t index, uint32_t count, char *out);
+
+// What an output is: 0 sent out, 1 change, 2 one of our receive addresses
+static const char *const psbt_kind_title[3] = {"SEND ", "CHANGE ", "TO YOU "};
+
+static uint32_t psbt_output_kind(psbt_owner_t owner, const psbt_keypath_t *kp) {
+    if (!psbt_owner_verified(owner)) return 0;
+    return psbt_is_change_path(owner, kp) ? 1 : 2;
+}
+
+// Outputs the user must see before SIGN appears: everything that is not
+// verified as ours. Returns the first one from 'from' on (output_count: none).
+static uint32_t psbt_next_destination(const psbt_t *psbt, uint32_t from) {
+    psbt_keypath_t kp;
+    for (uint32_t o = from; o < psbt->output_count; o++) {
+        if (!psbt_owner_verified(psbt_owner_of(psbt, false, o, &kp))) return o;
+    }
+    return psbt->output_count;
+}
+
+static uint32_t psbt_varint_size(uint32_t n) {
+    return (n < 0xFD) ? 1 : (n <= 0xFFFF) ? 3 : 5;
+}
+
+// Estimated virtual size of the signed transaction: the unsigned one plus the
+// scriptSig or witness each input will carry (72 byte signatures with sighash)
+static uint32_t psbt_estimate_vsize(const psbt_t *psbt) {
+    psbt_input_t in;
+    psbt_output_t out;
+    uint32_t base = 8 + psbt_varint_size(psbt->input_count) + psbt_varint_size(psbt->output_count);
+    uint32_t witness = 0;
+    bool segwit = false;
+
+    for (uint32_t i = 0; i < psbt->input_count; i++) {
+        if (!psbt_get_input(psbt, i, &in)) return 0;
+        base += 41;                                 // Outpoint, empty scriptSig, sequence
+        psbt_script_type_t type = psbt_script_type(in.script, in.script_len);
+        bool wsh = type == PSBT_SCRIPT_P2WSH;
+        if (type == PSBT_SCRIPT_P2PKH) {
+            base += 107;                            // Signature and public key
+            continue;
+        }
+        if (type == PSBT_SCRIPT_P2SH) {
+            wsh = in.witness_script != NULL;
+            base += wsh ? 35 : 23;                  // Push of the nested witness program
+        }
+        segwit = true;
+        uint8_t m, n;
+        if (type == PSBT_SCRIPT_P2TR) {
+            witness += 66;                          // Key path: one Schnorr signature
+        } else if (wsh && psbt_multisig_info(in.witness_script, in.witness_script_len, &m, &n)) {
+            witness += 2 + 73u * m + psbt_varint_size(in.witness_script_len) + in.witness_script_len;
+        } else {
+            witness += 108;                         // P2WPKH: signature and public key
+        }
+    }
+    for (uint32_t o = 0; o < psbt->output_count; o++) {
+        if (!psbt_get_output(psbt, o, &out)) return 0;
+        base += 8 + psbt_varint_size(out.script_len) + out.script_len;
+    }
+    return (base * 4 + witness + (segwit ? 2 : 0) + 3) / 4;
+}
+
+// "~9.6 SAT/VB" for the fee, or false when it cannot be estimated
+static bool psbt_fee_rate_text(const psbt_t *psbt, uint64_t fee, char *out) {
+    char num[12];
+    uint32_t vsize = psbt_estimate_vsize(psbt);
+    if (vsize == 0 || fee > 400000000u) return false;
+    uint32_t rate10 = ((uint32_t)fee * 10u + vsize / 2) / vsize;
+    strcpy(out, "~");
+    fast_itoa(rate10 / 10, num);
+    strcat(out, num);
+    strcat(out, ".");
+    fast_itoa(rate10 % 10, num);
+    strcat(out, num);
+    strcat(out, " SAT/VB");
+    return true;
+}
+
+// ----------------------------------------------------------------------------
+// Flow diagram: inputs on the left, outputs and fee on the right, each block
+// as tall as its share of the amount, joined through a bar in the middle
+// ----------------------------------------------------------------------------
+#define FLOW_Y0       20            // Between the title and the grid (centered on the device)
+#define FLOW_H        57
+#define FLOW_IN_X     4
+#define FLOW_MID_X    42
+#define FLOW_OUT_X    78
+#define FLOW_TEXT_X   87
+#define FLOW_BLOCKS   5             // Per side; the rest share one block
+#define FLOW_BAND     0x4208        // Bands: decoration, darker than the 0x8410 outlines
+#define FLOW_MID      0x8410
+
+typedef struct {
+    uint64_t sats;
+    uint16_t color;
+} flow_block_t;
+
+// Amounts scaled down until their total fits 24 bits, so the pixel math needs
+// no 64-bit division. Returns the scaled total (equal shares when it is 0).
+static uint32_t flow_scale(const flow_block_t *b, uint32_t n, uint32_t *w) {
+    uint64_t total = 0;
+    uint32_t shift = 0, sum = 0;
+    for (uint32_t i = 0; i < n; i++) total += b[i].sats;
+    while (total >= (1u << 24)) {
+        total >>= 1;
+        shift++;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        uint64_t v = b[i].sats;
+        for (uint32_t k = 0; k < shift; k++) v >>= 1;
+        w[i] = (uint32_t)v;
+        sum += w[i];
+    }
+    if (sum == 0) {
+        for (uint32_t i = 0; i < n; i++) w[i] = 1;
+        sum = n;
+    }
+    return sum;
+}
+
+// Blocks stacked with 'gap' pixels between them, 3 pixels tall at least
+static void flow_stack(const uint32_t *w, uint32_t sum, uint32_t n, int gap, uint8_t *top, uint8_t *bot) {
+    int h[FLOW_BLOCKS];
+    int avail = FLOW_H - gap * (int)(n - 1), used = 0;
+    uint32_t big = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        h[i] = (int)((w[i] * (uint32_t)avail) / sum);
+        if (h[i] < 3) h[i] = 3;
+        used += h[i];
+        if (h[i] > h[big]) big = i;
+    }
+    h[big] += avail - used;                         // Rounding goes to the biggest block
+    int y = FLOW_Y0;
+    for (uint32_t i = 0; i < n; i++) {
+        top[i] = (uint8_t)y;
+        bot[i] = (uint8_t)(y + h[i]);
+        y += h[i] + gap;
+    }
+}
+
+// The same shares on the middle bar, without gaps
+static void flow_slices(const uint32_t *w, uint32_t sum, uint32_t n, uint8_t *top, uint8_t *bot) {
+    uint32_t acc = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        top[i] = (uint8_t)(FLOW_Y0 + acc * FLOW_H / sum);
+        acc += w[i];
+        bot[i] = (uint8_t)(FLOW_Y0 + acc * FLOW_H / sum);
+    }
+}
+
+// Band from the span ta..ba at xa to tb..bb at xb, one column at a time
+static void flow_band(int xa, int ta, int ba, int xb, int tb, int bb) {
+    for (int x = xa; x < xb; x++) {
+        int t = ta + (tb - ta) * (x - xa) / (xb - xa);
+        int b = ba + (bb - ba) * (x - xa) / (xb - xa);
+        if (b > t) rectan(x, t, x, b - 1, FLOW_BAND);
+    }
+}
+
+// One side of the diagram: blocks at x, bands to the middle bar
+static void flow_side(const flow_block_t *b, uint32_t n, bool left, uint8_t *top, uint8_t *bot) {
+    uint32_t w[FLOW_BLOCKS];
+    uint8_t mtop[FLOW_BLOCKS], mbot[FLOW_BLOCKS];
+    uint32_t sum = flow_scale(b, n, w);
+    int x = left ? FLOW_IN_X : FLOW_OUT_X;
+
+    flow_stack(w, sum, n, left ? 2 : 3, top, bot);
+    flow_slices(w, sum, n, mtop, mbot);
+    for (uint32_t i = 0; i < n; i++) {
+        if (left) flow_band(x + 6, top[i], bot[i], FLOW_MID_X, mtop[i], mbot[i]);
+        else flow_band(FLOW_MID_X + 4, mtop[i], mbot[i], x, top[i], bot[i]);
+        rectan(x, top[i], x + 5, bot[i] - 1, b[i].color);
+    }
+}
+
+// Color of an input block: verified ours green, someone else's white, ours
+// but not checked or another wallet yellow, a mismatch red
+static uint16_t flow_input_color(psbt_owner_t owner) {
+    if (!psbt_checked.valid) return ST7735_YELLOW;          // REVIEW PSBT: no seed
+    if (psbt_owner_verified(owner)) return ST7735_GREEN;
+    if (owner == PSBT_OWNER_OTHER || owner == PSBT_OWNER_NO_INFO) return ST7735_WHITE;
+    if (owner == PSBT_OWNER_MISMATCH) return ST7735_RED;
+    return ST7735_YELLOW;
+}
+
+static void psbt_view_flow(const psbt_t *psbt) {
+    flow_block_t ins[FLOW_BLOCKS], outs[FLOW_BLOCKS];
+    char label[FLOW_BLOCKS][10];
+    char amount[FLOW_BLOCKS][14];
+    uint8_t top[FLOW_BLOCKS], bot[FLOW_BLOCKS];
+    char text[16];
+    char num[12];
+    psbt_input_t in;
+    psbt_output_t out;
+    psbt_keypath_t kp;
+    bool amounts_known = true;
+    uint32_t n_in = 0, n_out = 0;
+
+    draw_title("TRANSACTION", ST7735_LIGHTGREY);
+
+    // Inputs: one block each; past the 4th they share one when there are more than 5
+    uint32_t single = (psbt->input_count <= FLOW_BLOCKS) ? psbt->input_count : FLOW_BLOCKS - 1;
+    for (uint32_t i = 0; i < psbt->input_count; i++) {
+        uint16_t color = flow_input_color(psbt_owner_of(psbt, true, i, &kp));
+        uint32_t k = (i < single) ? i : single;
+        if (k == n_in) {
+            ins[k].sats = 0;
+            ins[k].color = color;
+            n_in++;
+        } else if (ins[k].color != color) {
+            ins[k].color = ST7735_YELLOW;           // A shared block of mixed inputs
+        }
+        flow_block_t *b = &ins[k];
+        if (psbt_get_input(psbt, i, &in) && in.has_amount) b->sats += in.amount;
+        else amounts_known = false;
+    }
+    if (!amounts_known) {                           // Equal shares: the sizes would be wrong
+        for (uint32_t i = 0; i < n_in; i++) ins[i].sats = 1;
+    }
+
+    // Outputs: past the 3rd they share one block when there are more than 4,
+    // then the fee
+    single = (psbt->output_count <= FLOW_BLOCKS - 1) ? psbt->output_count : FLOW_BLOCKS - 2;
+    for (uint32_t o = 0; o < psbt->output_count; o++) {
+        uint32_t k = (o < single) ? o : single;
+        if (k == n_out) {
+            outs[k].sats = 0;
+            outs[k].color = ST7735_WHITE;
+            n_out++;
+            if (o < single) {
+                psbt_owner_t owner = psbt_owner_of(psbt, false, o, &kp);
+                if (!psbt_checked.valid) {
+                    strcpy(label[k], "OUT ");
+                    fast_itoa(o + 1, &label[k][4]);
+                } else if (psbt_owner_verified(owner)) {
+                    strcpy(label[k], psbt_is_change_path(owner, &kp) ? "CHANGE" : "TO YOU");
+                    outs[k].color = ST7735_GREEN;
+                } else {
+                    strcpy(label[k], (owner == PSBT_OWNER_MULTISIG_CHANGE) ? "MULTISIG" : "SEND");
+                    if (owner != PSBT_OWNER_OTHER && owner != PSBT_OWNER_NO_INFO) outs[k].color = ST7735_YELLOW;
+                }
+            } else {
+                strcpy(label[k], "+");
+                fast_itoa(psbt->output_count - single, &label[k][1]);
+                strcat(label[k], " MORE");
+            }
+        }
+        if (psbt_get_output(psbt, o, &out)) outs[k].sats += out.amount;
+    }
+    for (uint32_t k = 0; k < n_out; k++) psbt_format_amount_short(outs[k].sats, amount[k]);
+    uint64_t fee;
+    if (psbt_get_fee(psbt, &fee)) {
+        outs[n_out].sats = fee;
+        outs[n_out].color = ST7735_YELLOW;
+        strcpy(label[n_out], "FEE");
+        psbt_format_amount_short(fee, amount[n_out]);
+        n_out++;
+    }
+
+    if (n_in > 0) flow_side(ins, n_in, true, top, bot);
+    if (n_out > 0) {
+        flow_side(outs, n_out, false, top, bot);
+        // Labels next to their blocks, two lines each, kept between title and grid
+        int need = (int)n_out * 18 - 1;
+        int prev = FLOW_Y0 + FLOW_H / 2 - need / 2;
+        if (prev > 104 - need) prev = 104 - need;
+        if (prev < 13) prev = 13;
+        prev--;
+        for (uint32_t k = 0; k < n_out; k++) {
+            int y = (top[k] + bot[k]) / 2 - 9;
+            if (y < prev + 1) y = prev + 1;
+            if (y > 104 - 17 - (int)(n_out - 1 - k) * 18) y = 104 - 17 - (int)(n_out - 1 - k) * 18;
+            drawtext(FLOW_TEXT_X, y, label[k], outs[k].color, ST7735_BLACK, 1);
+            drawtext(FLOW_TEXT_X, y + 9, amount[k], outs[k].color, ST7735_BLACK, 1);
+            prev = y + 17;
+        }
+    }
+    rectan(FLOW_MID_X, FLOW_Y0, FLOW_MID_X + 3, FLOW_Y0 + FLOW_H - 1, FLOW_MID);
+
+    // Left of the grid: how many inputs and whose they are
+    if (!psbt_checked.valid) {
+        drawtext(1, 106, "NO SEED", ST7735_YELLOW, ST7735_BLACK, 1);
+        drawtext(1, 117, "UNCHECKED", ST7735_YELLOW, ST7735_BLACK, 1);
+        return;
+    }
+    fast_itoa(psbt->input_count, text);
+    strcat(text, (psbt->input_count == 1) ? " INPUT" : " INPUTS");
+    drawtext(1, 106, text, ST7735_WHITE, ST7735_BLACK, 1);
+    if (psbt_checked.mine_inputs == psbt->input_count) {
+        drawtext(1, 117, "ALL MINE", ST7735_GREEN, ST7735_BLACK, 1);
+    } else {
+        strcpy(text, "MINE ");
+        fast_itoa(psbt_checked.mine_inputs, num);
+        strcat(text, num);
+        strcat(text, "/");
+        fast_itoa(psbt->input_count, num);
+        strcat(text, num);
+        drawtext(1, 117, text, ST7735_YELLOW, ST7735_BLACK, 1);
+    }
+}
+
+// Last page: counts, totals, our fingerprint, locktime/RBF and warnings
+static void psbt_view_details(const psbt_t *psbt) {
     char line[32];
     char num[12];
     uint64_t sum_in, sum_out, fee;
@@ -4602,7 +5026,7 @@ static void psbt_view_summary(const psbt_t *psbt) {
         }
     }
 
-    draw_title("TRANSACTION SUMMARY", ST7735_LIGHTGREY);
+    draw_title("DETAILS", ST7735_LIGHTGREY);
 
     strcpy(line, "INPUTS: ");
     fast_itoa(psbt->input_count, num);
@@ -4610,26 +5034,26 @@ static void psbt_view_summary(const psbt_t *psbt) {
     strcat(line, "  OUTPUTS: ");
     fast_itoa(psbt->output_count, num);
     strcat(line, num);
-    drawtext(5, 17, line, ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 15, line, ST7735_WHITE, ST7735_BLACK, 1);
 
-    psbt_view_amount_line(29, "IN:  ", totals_ok, sum_in, ST7735_WHITE);
-    psbt_view_amount_line(39, "OUT: ", true, sum_out, ST7735_WHITE);
-    psbt_view_amount_line(49, "FEE: ", fee_ok, fee, fee_ok ? ST7735_YELLOW : ST7735_RED);
+    psbt_view_amount_line(25, "IN:  ", totals_ok, sum_in, ST7735_WHITE);
+    psbt_view_amount_line(35, "OUT: ", true, sum_out, ST7735_WHITE);
+    psbt_view_amount_line(45, "FEE: ", fee_ok, fee, fee_ok ? ST7735_YELLOW : ST7735_RED);
 
     // Inputs carrying our master fingerprint (REVIEW PSBT: no seed, nothing checked)
     if (psbt_inspect_only) {
-        drawtext(5, 61, "NO SEED: KEYS NOT CHECKED", ST7735_YELLOW, ST7735_BLACK, 1);
+        drawtext(5, 55, "NO SEED: KEYS NOT CHECKED", ST7735_YELLOW, ST7735_BLACK, 1);
     } else {
-    strcpy(line, "MY FP ");
-    psbt_format_fingerprint(bip84_master_fingerprint, &line[6]);
-    strcat(line, " IN ");
-    fast_itoa(my_inputs, num);
-    strcat(line, num);
-    strcat(line, "/");
-    fast_itoa(psbt->input_count, num);
-    strcat(line, num);
-    drawtext(5, 61, line, (my_inputs == psbt->input_count) ? ST7735_GREEN :
-                          (my_inputs > 0) ? ST7735_YELLOW : ST7735_RED, ST7735_BLACK, 1);
+        strcpy(line, "MY FP ");
+        psbt_format_fingerprint(bip84_master_fingerprint, &line[6]);
+        strcat(line, " IN ");
+        fast_itoa(my_inputs, num);
+        strcat(line, num);
+        strcat(line, "/");
+        fast_itoa(psbt->input_count, num);
+        strcat(line, num);
+        drawtext(5, 55, line, (my_inputs == psbt->input_count) ? ST7735_GREEN :
+                              (my_inputs > 0) ? ST7735_YELLOW : ST7735_RED, ST7735_BLACK, 1);
     }
 
     // Locktime: block height or UNIX time, and replace-by-fee signaling
@@ -4641,7 +5065,7 @@ static void psbt_view_summary(const psbt_t *psbt) {
         strcat(line, num);
     }
     if (psbt_signals_rbf(psbt)) strcat(line, " RBF");
-    drawtext(5, 71, line, ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 65, line, ST7735_WHITE, ST7735_BLACK, 1);
 
     // Global xpubs (multisig coordinators include all of them)
     uint32_t xpubs = 0;
@@ -4655,17 +5079,17 @@ static void psbt_view_summary(const psbt_t *psbt) {
         fast_itoa(xpubs, num);
         strcat(line, num);
         if (!psbt_inspect_only) strcat(line, my_xpub ? " (MINE IN)" : " (NOT MINE)");
-        drawtext(5, 81, line, (my_xpub || psbt_inspect_only) ? ST7735_WHITE : ST7735_YELLOW, ST7735_BLACK, 1);
+        drawtext(5, 75, line, (my_xpub || psbt_inspect_only) ? ST7735_WHITE : ST7735_YELLOW, ST7735_BLACK, 1);
     }
 
     if (odd_sighash > 0) {
-        drawtext(5, 93, "WARNING: SIGHASH NOT ALL", ST7735_RED, ST7735_BLACK, 1);
+        drawtext(5, 85, "WARNING: SIGHASH NOT ALL", ST7735_RED, ST7735_BLACK, 1);
     }
     if (signed_inputs > 0) {
         strcpy(line, "ALREADY SIGNED: ");
         fast_itoa(signed_inputs, num);
         strcat(line, num);
-        drawtext(5, 103, line, ST7735_CYAN, ST7735_BLACK, 1);
+        drawtext(5, 95, line, ST7735_CYAN, ST7735_BLACK, 1);
     }
 }
 
@@ -4673,15 +5097,9 @@ static void psbt_view_input(const psbt_t *psbt, uint32_t index) {
     psbt_input_t in;
     psbt_keypath_t kp;
     char line[32];
-    char num[12];
     char text[PSBT_ADDRESS_MAX_LEN];
 
-    strcpy(line, "INPUT ");
-    fast_itoa(index + 1, num);
-    strcat(line, num);
-    strcat(line, "/");
-    fast_itoa(psbt->input_count, num);
-    strcat(line, num);
+    psbt_count_label("INPUT ", index, psbt->input_count, line);
     if (!psbt_get_input(psbt, index, &in)) {
         draw_title(line, ST7735_LIGHTGREY);
         drawtext(5, 22, "READ ERROR", ST7735_RED, ST7735_BLACK, 1);
@@ -4700,25 +5118,20 @@ static void psbt_view_input(const psbt_t *psbt, uint32_t index) {
     fast_itoa(in.prev_vout, &line[20]);
     drawtext(5, 15, line, ST7735_CYAN, ST7735_BLACK, 1);
 
-    psbt_view_amount_line(25, "AMT: ", in.has_amount, in.amount, ST7735_WHITE);
+    psbt_view_amount_line(25, "AMOUNT: ", in.has_amount, in.amount, ST7735_WHITE);
     if (in.has_amount) {
         drawtext(5, 35, in.amount_from_witness ? "UTXO: WITNESS ONLY" : "UTXO: FULL PREV TX",
                  ST7735_CYAN, ST7735_BLACK, 1);
     }
 
-    if (ms_wallet_active()) drawtext(5, 45, "CHECKING COSIGNERS...", ST7735_CYAN, ST7735_BLACK, 1);
-    psbt_owner_t owner = psbt_check_owner(psbt, true, index, in.script, in.script_len,
-                                          in.witness_script, in.witness_script_len, &kp);
-    rectan(0, 45, 159, 53, ST7735_BLACK);
-    psbt_view_owner(45, owner, &kp, false);
+    psbt_view_owner(45, psbt_owner_of(psbt, true, index, &kp), &kp, false);
 
     // Signing state and sighash, e.g. "SIGS:1 SIGHASH:ALL" (fits one line)
     if (in.finalized) {
         strcpy(line, "FINAL");
     } else {
         strcpy(line, "SIGS:");
-        fast_itoa(in.partial_sig_count > 99 ? 99 : in.partial_sig_count, num);
-        strcat(line, num);
+        fast_itoa(in.partial_sig_count > 99 ? 99 : in.partial_sig_count, &line[5]);
     }
     bool odd_sighash = in.has_sighash && in.sighash != PSBT_SIGHASH_ALL;
     strcat(line, " SIGHASH:");
@@ -4729,44 +5142,128 @@ static void psbt_view_input(const psbt_t *psbt, uint32_t index) {
                        in.redeem_script, in.redeem_script_len);
 }
 
+// One output: what it is (title), the amount, whose it is and the whole
+// address in groups of 4, then its path or what is known about it
 static void psbt_view_output(const psbt_t *psbt, uint32_t index) {
     psbt_output_t out;
-    psbt_keypath_t kp;
+    psbt_keypath_t kp, other;
     char line[32];
-    char num[12];
+    char text[PSBT_PATH_STR_LEN];
     char addr[PSBT_ADDRESS_MAX_LEN];
 
-    strcpy(line, "OUTPUT ");
-    fast_itoa(index + 1, num);
-    strcat(line, num);
-    strcat(line, "/");
-    fast_itoa(psbt->output_count, num);
-    strcat(line, num);
     if (!psbt_get_output(psbt, index, &out)) {
+        psbt_count_label("OUTPUT ", index, psbt->output_count, line);
         draw_title(line, ST7735_LIGHTGREY);
         drawtext(5, 22, "READ ERROR", ST7735_RED, ST7735_BLACK, 1);
         return;
     }
-    draw_title_pair(line, ST7735_LIGHTGREY, psbt_script_type_name(psbt_script_type(out.script, out.script_len)),
-                    ST7735_CYAN);
+    psbt_owner_t owner = psbt_owner_of(psbt, false, index, &kp);
 
-    psbt_view_amount_line(15, "AMT: ", true, out.amount, ST7735_WHITE);
+    // Title: SEND / CHANGE / TO YOU, counted among the outputs of the same kind
+    // (REVIEW PSBT, or too many outputs to count quickly: OUTPUT n OF m)
+    if (psbt_checked.valid && psbt->output_count <= PSBT_OWNER_CACHE) {
+        uint32_t kind = psbt_output_kind(owner, &kp), pos = 0, count = 0;
+        for (uint32_t o = 0; o < psbt->output_count; o++) {
+            psbt_shown_keypath(psbt, false, o, &other);
+            if (psbt_output_kind((psbt_owner_t)psbt_checked.out[o], &other) != kind) continue;
+            if (o < index) pos++;
+            count++;
+        }
+        psbt_count_label(psbt_kind_title[kind], pos, count, line);
+    } else {
+        psbt_count_label("OUTPUT ", index, psbt->output_count, line);
+    }
+    draw_title(line, ST7735_LIGHTGREY);
 
-    psbt_view_address(out.script, out.script_len, addr);
-    draw_bip84_wrapped_text(addr, 5, 27, PSBT_VIEW_LINE_CHARS, 3);
+    psbt_view_amount_line(17, "AMOUNT: ", true, out.amount, ST7735_WHITE);
 
-    if (ms_wallet_active()) drawtext(5, 55, "CHECKING COSIGNERS...", ST7735_CYAN, ST7735_BLACK, 1);
-    psbt_owner_t owner = psbt_check_owner(psbt, false, index, out.script, out.script_len,
-                                          out.witness_script, out.witness_script_len, &kp);
-    rectan(0, 55, 159, 63, ST7735_BLACK);
-    psbt_view_owner(55, owner, &kp, true);
+    bool plain = owner == PSBT_OWNER_OTHER || owner == PSBT_OWNER_NO_INFO;
+    if (plain) {
+        drawtext(5, 32, "TO:", ST7735_WHITE, ST7735_BLACK, 1);
+    } else {
+        uint16_t color = psbt_owner_text(owner, &kp, true, text);
+        drawtext(5, 32, text, color, ST7735_BLACK, 1);
+    }
 
-    psbt_view_multisig(83, psbt, false, index, out.witness_script, out.witness_script_len,
-                       out.redeem_script, out.redeem_script_len);
+    int y = 42;
+    if (psbt_view_address(out.script, out.script_len, addr)) {
+        draw_grouped(addr, y);                      // 5 groups of 4 per line
+        y += 10 * (int)((strlen(addr) + 19) / 20);
+    } else {
+        drawtext(5, y, addr, ST7735_WHITE, ST7735_BLACK, 1);
+        y += 10;
+    }
+    y += 4;
+
+    if (plain) {
+        uint16_t color = psbt_owner_text(owner, &kp, true, text);
+        drawtext(5, y, text, color, ST7735_BLACK, 1);
+    } else {
+        psbt_format_path(&kp, text);                // Cyan, on two lines if long
+        if (strlen(text) > PSBT_VIEW_LINE_CHARS - 1) {
+            memcpy(line, text, PSBT_VIEW_LINE_CHARS - 1);
+            line[PSBT_VIEW_LINE_CHARS - 1] = '\0';
+            drawtext(5, y, line, ST7735_CYAN, ST7735_BLACK, 1);
+            drawtext(5, y + 9, &text[PSBT_VIEW_LINE_CHARS - 1], ST7735_CYAN, ST7735_BLACK, 1);
+        } else {
+            drawtext(5, y, text, ST7735_CYAN, ST7735_BLACK, 1);
+        }
+    }
 }
 
-// Parses a PSBT and lets the user page through summary, inputs and outputs:
-// UP/DOWN change page, OK goes on to signing (returns true), BACK cancels.
+// Pages of a parsed PSBT: the flow, each output, each input, the details.
+// UP/DOWN change page, BACK leaves (false). When signing, OK goes to the next
+// destination not seen yet and, once all were shown, signs (returns true).
+// REVIEW PSBT: OK is the next page, nothing is signed.
+static bool psbt_viewer(const psbt_t *psbt) {
+    char text[16];
+    char num[12];
+    bool can_sign = !psbt_inspect_only;
+    uint32_t outs = psbt->output_count, ins = psbt->input_count;
+    uint32_t page_count = 2 + outs + ins;
+    uint32_t page = 0;
+    uint32_t next_dest = can_sign ? psbt_next_destination(psbt, 0) : outs;
+
+    while (1) {
+        black_screen();
+        if (page == 0) {
+            psbt_view_flow(psbt);
+        } else if (page <= outs) {
+            psbt_view_output(psbt, page - 1);
+            if (page - 1 == next_dest) next_dest = psbt_next_destination(psbt, page);
+        } else if (page <= outs + ins) {
+            psbt_view_input(psbt, page - 1 - outs);
+        } else {
+            psbt_view_details(psbt);
+        }
+        if (page > 0) {
+            strcpy(text, "PAGE ");
+            fast_itoa(page + 1, num);
+            strcat(text, num);
+            strcat(text, "/");
+            fast_itoa(page_count, num);
+            strcat(text, num);
+            drawtext(1, 117, text, ST7735_CYAN, ST7735_BLACK, 1);
+        }
+        grid_pager((can_sign && next_dest >= outs) ? "SIGN" : "NEXT");
+
+        int key = psbt_wait_key();
+        if (key == BACK_BT || (key == OK_BT && can_sign && next_dest >= outs)) {
+            while (BT1 == 0 || BT_OK == 0) SYS_Tasks();     // Do not let the key reach the next screen
+            return key == OK_BT;
+        }
+        if (key == OK_BT) {
+            page = can_sign ? 1 + next_dest : (page + 1) % page_count;
+        } else if (key == DOWN_BT) {
+            page = (page + 1) % page_count;
+        } else if (key == UP_BT) {
+            page = (page == 0) ? page_count - 1 : page - 1;
+        }
+    }
+}
+
+// Parses a PSBT and pages through it (see psbt_viewer); shows the reason if
+// it does not parse. Returns true to sign.
 static bool show_psbt_details(const uint8_t *data, uint32_t len) {
     psbt_t psbt;
     psbt_status_t status = psbt_parse(data, len, &psbt);
@@ -4782,43 +5279,7 @@ static bool show_psbt_details(const uint8_t *data, uint32_t len) {
         while (BT1 == 1) SYS_Tasks();
         return false;
     }
-
-    uint32_t page_count = 1 + psbt.input_count + psbt.output_count;
-    uint32_t page = 0;
-
-    while (1) {
-        black_screen();
-        if (page == 0) {
-            psbt_view_summary(&psbt);
-        } else if (page <= psbt.input_count) {
-            psbt_view_input(&psbt, page - 1);
-        } else {
-            psbt_view_output(&psbt, page - 1 - psbt.input_count);
-        }
-        if (psbt_inspect_only) {            // Review only: browse and leave, no signing
-            grid_labels("BACK", NULL, NULL, NULL, NULL, NULL);
-            print_up_arrow(106, 114, ST7735_WHITE);
-            print_down_arrow(106, 123, ST7735_WHITE);
-        } else {
-            grid_pager("SIGN");
-        }
-
-        while (BT_OK == 0 || BT1 == 0 || BT5 == 0 || BT4 == 0) SYS_Tasks();   // Wait for release
-        delay_ms(30);
-        while (BT_OK == 1 && BT1 == 1 && BT5 == 1 && BT4 == 1) SYS_Tasks();   // Wait for a press
-        delay_ms(30);
-
-        if (BT1 == 0 || (BT_OK == 0 && !psbt_inspect_only)) {
-            bool sign = (BT_OK == 0);
-            while (BT1 == 0 || BT_OK == 0) SYS_Tasks();
-            return sign;
-        }
-        if (BT4 == 0) {
-            page = (page + 1) % page_count;
-        } else if (BT5 == 0) {
-            page = (page == 0) ? page_count - 1 : page - 1;
-        }
-    }
+    return psbt_viewer(&psbt);
 }
 
 // ============================================================================
@@ -4828,10 +5289,14 @@ static bool show_psbt_details(const uint8_t *data, uint32_t len) {
 #define PSBT_SD_LIST_ROWS 9
 
 static void psbt_review_and_sign(uint8_t *buf, uint32_t len, uint32_t capacity);
-static const char *const psbt_sd_exts[] = {"PSB", "TXT"};
+static const char *const psbt_sd_exts[] = {"PSBT", "PSB", "TXT"};    // .PSB: an 8.3 alias
+// File the PSBT came from ("" from a QR): it names the signed file
+static char psbt_source_name[SD_FILES_NAME_LEN];
+static bool sd_marker_valid(const uint8_t *b);
 
 // Waits until no key is held, then for OK, BACK, UP or DOWN
 static int psbt_wait_key(void) {
+    led_done();                     // Waiting for the user: nothing running
     while (BT_OK == 0 || BT1 == 0 || BT5 == 0 || BT4 == 0) SYS_Tasks();
     delay_ms(30);
     while (BT_OK == 1 && BT1 == 1 && BT5 == 1 && BT4 == 1) SYS_Tasks();
@@ -4915,9 +5380,16 @@ static void sd_pick_row(uint32_t index, uint32_t first, bool selected,
     char line[32];
     char num[12];
     if (!sd_files_find(index, exts, ext_count, name, size)) return;
-    strcpy(line, name);
-    strcat(line, " ");
     fast_itoa(*size, num);
+    size_t room = 25 - 1 - strlen(num) - 1;         // Name, space, size, "B" in 25 characters
+    size_t n = strlen(name);
+    if (n > room) {                                 // Cut, with ".." to show it
+        memcpy(line, name, room - 2);
+        memcpy(&line[room - 2], "..", 3);
+    } else {
+        strcpy(line, name);
+    }
+    strcat(line, " ");
     strcat(line, num);
     strcat(line, "B");
     drawtext(5, 17 + (int)(index - first) * 10, line, selected ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
@@ -4936,7 +5408,7 @@ static bool sd_pick_file(const char *title, const char *none_title, const char *
     black_screen();
     draw_title("READING SD CARD...", ST7735_CYAN);
     if (!sd_files_mount()) {
-        psbt_sd_message("SD CARD ERROR", "NO CARD OR NOT FAT16");
+        psbt_sd_message("SD CARD ERROR", "NO CARD OR NOT FAT16/32");
         return false;
     }
     while (count < 99 && sd_files_find(count, exts, ext_count, name, size)) count++;
@@ -4989,8 +5461,8 @@ static void load_psbt_from_sd(void) {
     char err[24];
     uint32_t size, sel = 0;
 
-    while (sd_pick_file("SELECT PSBT FILE", "NO PSBT FILES", "NEED .PSB OR .TXT FILE",
-                        psbt_sd_exts, 2, &sel, name, &size)) {
+    while (sd_pick_file("SELECT PSBT FILE", "NO PSBT FILES", "NEED .PSBT OR .TXT FILE",
+                        psbt_sd_exts, 3, &sel, name, &size)) {
         black_screen();
         draw_title("LOADING PSBT...", ST7735_CYAN);
         uint32_t buf_size;
@@ -4999,6 +5471,7 @@ static void load_psbt_from_sd(void) {
         if (len == 0) {
             psbt_sd_message("LOAD ERROR", err);
         } else {
+            strcpy(psbt_source_name, name);
             psbt_review_and_sign(buf, len, buf_size);
         }
     }
@@ -5304,6 +5777,7 @@ static void psbt_progress_step(const char *what, const char *detail, const char 
         }
     }
     progress_line(62, step);
+    if (done >= total) led_done(); else led_busy();
     uint32_t fill = (total > 0) ? (140u * done) / total : 0;
     if (fill > 0) rectan(10, 121, 10 + fill, 124, ST7735_GREEN);
 }
@@ -5326,6 +5800,7 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
     psbt_keypath_t kp;
 
     memset(plan, 0, sizeof(*plan));
+    psbt_checked.valid = false;
     if (!bip84_account_cached) {
         plan->refuse = "SEED NOT LOADED";
         return;
@@ -5341,6 +5816,7 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
 
     uint32_t checks = psbt->input_count + psbt->output_count;
     char label[24];
+    bool other_type = false;                    // An input of a script type we do not sign
 
     for (uint32_t i = 0; i < psbt->input_count; i++) {
         psbt_count_label("INPUT ", i, psbt->input_count, label);
@@ -5358,6 +5834,7 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
 
         psbt_owner_t owner = psbt_check_owner(psbt, true, i, in.script, in.script_len,
                                               in.witness_script, in.witness_script_len, &kp);
+        if (i < PSBT_OWNER_CACHE) psbt_checked.in[i] = (uint8_t)owner;
         if (owner == PSBT_OWNER_MISMATCH) {
             plan->refuse = "INPUT KEY MISMATCH";
             return;
@@ -5370,6 +5847,11 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
         bool single_path = psbt_bip84_path(&kp, &account);
         bool multi_path = !single_path && psbt_multisig_path(&kp, &account);
         bool mine = owner == PSBT_OWNER_VERIFIED || owner == PSBT_OWNER_VERIFIED_MULTI;
+        psbt_script_type_t type = psbt_script_type(in.script, in.script_len);
+        if ((owner == PSBT_OWNER_FP_ONLY && !single_path && !multi_path) ||
+            (type != PSBT_SCRIPT_P2WPKH && type != PSBT_SCRIPT_P2WSH)) {
+            other_type = true;                  // Taproot, nested, legacy (m/86', 49', 44')
+        }
         if (owner != PSBT_OWNER_FP_ONLY && !mine) {
             plan->foreign++;
         } else if (!single_path && !multi_path) {
@@ -5400,7 +5882,7 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
             strcat(plan->refuse_text, num);
             plan->refuse = plan->refuse_text;
         } else {
-            plan->refuse = "NOTHING TO SIGN";
+            plan->refuse = other_type ? "TYPE NOT SUPPORTED" : "NOTHING TO SIGN";
         }
         return;
     }
@@ -5415,6 +5897,7 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
         }
         psbt_owner_t owner = psbt_check_owner(psbt, false, o, out.script, out.script_len,
                                               out.witness_script, out.witness_script_len, &kp);
+        if (o < PSBT_OWNER_CACHE) psbt_checked.out[o] = (uint8_t)owner;
         if (owner == PSBT_OWNER_MISMATCH) {
             plan->refuse = "CHANGE KEY MISMATCH";
             return;
@@ -5432,19 +5915,110 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
             plan->send += out.amount;
         }
     }
+    psbt_checked.mine_inputs = plan->signable + plan->already_signed;
+    psbt_checked.valid = true;                  // The review now shows these results
 }
 
 // Shows what leaves the wallet and asks for OK. Returns true to sign.
+// Lines 9 px apart from y 14; the last one (y 97) ends above the grid. The
+// warnings that matter come first; the plain information only if there is room.
+#define CONFIRM_LAST_Y 97
+
 static bool psbt_confirm_signing(const psbt_t *psbt, const psbt_sign_plan_t *plan) {
-    char line[32];
+    char line[40];
+    char rate[16];
     char num[12];
-    int y = 61;                     // Warnings 9 px apart: the last one ends above the grid
+    char addr[PSBT_ADDRESS_MAX_LEN];
+    psbt_output_t out;
+    psbt_keypath_t kp;
+    uint32_t dests = 0, first = 0;
+    uint64_t rest = 0;
+    int y = 14;
+
+    for (uint32_t o = 0; o < psbt->output_count; o++) {
+        if (psbt_owner_verified(psbt_owner_of(psbt, false, o, &kp))) continue;
+        if (dests == 0) first = o;
+        dests++;
+    }
 
     black_screen();
     draw_title("SIGN TRANSACTION?", ST7735_LIGHTGREY);
-    psbt_view_amount_line(19, "SEND:   ", true, plan->send, ST7735_WHITE);
-    psbt_view_amount_line(29, "CHANGE: ", true, plan->change, ST7735_CYAN);
-    psbt_view_amount_line(39, "FEE:    ", true, plan->fee, ST7735_YELLOW);
+
+    if (dests == 0) {
+        drawtext(5, y, "ALL GOES BACK TO YOU", ST7735_WHITE, ST7735_BLACK, 1);
+        y += 9;
+    } else if (dests == 1 && psbt_get_output(psbt, first, &out)) {
+        // One destination: the amount and the whole address, as on its page
+        strcpy(line, "SEND ");
+        psbt_format_amount(out.amount, &line[5]);
+        strcat(line, " TO");
+        drawtext(5, y, line, ST7735_WHITE, ST7735_BLACK, 1);
+        y += 9;
+        bool is_addr = psbt_view_address(out.script, out.script_len, addr);
+        size_t n = strlen(addr);
+        if (is_addr && n <= 60) {                   // Groups of 4, up to 3 lines
+            for (size_t i = 0; i < n; i += 20) {
+                size_t k = 0;
+                for (size_t j = i; j < n && j < i + 20; j++) {
+                    if (j > i && (j - i) % 4 == 0) line[k++] = ' ';
+                    line[k++] = addr[j];
+                }
+                line[k] = '\0';
+                drawtext(5, y, line, ST7735_WHITE, ST7735_BLACK, 1);
+                y += 9;
+            }
+        } else {                                    // 62 characters: 3 plain lines
+            draw_bip84_wrapped_text(addr, 5, y, PSBT_VIEW_LINE_CHARS - 1, 3);
+            y += 9 * (int)((n + PSBT_VIEW_LINE_CHARS - 2) / (PSBT_VIEW_LINE_CHARS - 1));
+        }
+    } else {
+        // Several: one amount per line (their addresses were on their pages)
+        strcpy(line, "SEND TO ");
+        fast_itoa(dests, num);
+        strcat(line, num);
+        strcat(line, " ADDRESSES:");
+        drawtext(5, y, line, ST7735_WHITE, ST7735_BLACK, 1);
+        y += 9;
+        uint32_t listed = 0, room = (dests <= 3) ? dests : 2;
+        for (uint32_t o = 0; o < psbt->output_count; o++) {
+            if (psbt_owner_verified(psbt_owner_of(psbt, false, o, &kp))) continue;
+            if (!psbt_get_output(psbt, o, &out)) continue;
+            if (listed < room) {
+                psbt_format_amount(out.amount, line);
+                drawtext(11, y, line, ST7735_WHITE, ST7735_BLACK, 1);
+                y += 9;
+            } else {
+                rest += out.amount;
+            }
+            listed++;
+        }
+        if (dests > room) {
+            strcpy(line, "+");
+            fast_itoa(dests - room, num);
+            strcat(line, num);
+            strcat(line, " MORE ");
+            psbt_format_amount(rest, &line[strlen(line)]);
+            drawtext(5, y, line, ST7735_WHITE, ST7735_BLACK, 1);
+            y += 9;
+        }
+    }
+    y += 2;
+
+    // Fee, and its rate on the same line when it fits
+    strcpy(line, "FEE ");
+    psbt_format_amount(plan->fee, &line[4]);
+    bool has_rate = psbt_fee_rate_text(psbt, plan->fee, rate);
+    if (has_rate && strlen(line) + 1 + strlen(rate) <= PSBT_VIEW_LINE_CHARS - 1) {
+        strcat(line, " ");
+        strcat(line, rate);
+        has_rate = false;
+    }
+    drawtext(5, y, line, ST7735_YELLOW, ST7735_BLACK, 1);
+    y += 9;
+    if (has_rate) {
+        drawtext(5, y, rate, ST7735_YELLOW, ST7735_BLACK, 1);
+        y += 9;
+    }
 
     strcpy(line, "SIGN ");
     fast_itoa(plan->signable, num);
@@ -5453,27 +6027,39 @@ static bool psbt_confirm_signing(const psbt_t *psbt, const psbt_sign_plan_t *pla
     fast_itoa(psbt->input_count, num);
     strcat(line, num);
     strcat(line, " INPUTS");
-    drawtext(5, 51, line, ST7735_GREEN, ST7735_BLACK, 1);
+    drawtext(5, y, line, ST7735_GREEN, ST7735_BLACK, 1);
+    y += 9;
 
-    if (plan->already_signed > 0) {
-        strcpy(line, "ALREADY SIGNED: ");
-        fast_itoa(plan->already_signed, num);
-        strcat(line, num);
-        drawtext(5, y, line, ST7735_CYAN, ST7735_BLACK, 1);
-        y += 9;
-    }
+    // Warnings first, always shown
     if (plan->amounts_unverified) {
         drawtext(5, y, "AMOUNTS NOT VERIFIED", ST7735_YELLOW, ST7735_BLACK, 1);
+        y += 9;
+    }
+    if (plan->change_unverified) {
+        drawtext(5, y, "CHANGE NOT VERIFIED", ST7735_YELLOW, ST7735_BLACK, 1);
         y += 9;
     }
     if (plan->high_change_index) {
         drawtext(5, y, "HIGH CHANGE INDEX", ST7735_YELLOW, ST7735_BLACK, 1);
         y += 9;
     }
-    if (plan->change_unverified) {
-        drawtext(5, y, "CHANGE NOT VERIFIED", ST7735_YELLOW, ST7735_BLACK, 1);
-        drawtext(5, y + 9, "IMPORT DESCRIPTOR FIRST", ST7735_YELLOW, ST7735_BLACK, 1);
-    } else if (bip84_multisig_mode && ms_wallet_active()) {
+    // Then what helps, while there is room
+    if (plan->change_unverified && y <= CONFIRM_LAST_Y) {
+        drawtext(5, y, "IMPORT DESCRIPTOR FIRST", ST7735_YELLOW, ST7735_BLACK, 1);
+        y += 9;
+    }
+    if (plan->already_signed > 0 && y <= CONFIRM_LAST_Y) {
+        strcpy(line, "ALREADY SIGNED: ");
+        fast_itoa(plan->already_signed, num);
+        strcat(line, num);
+        drawtext(5, y, line, ST7735_CYAN, ST7735_BLACK, 1);
+        y += 9;
+    }
+    if (!plan->change_unverified && plan->change > 0 && y <= CONFIRM_LAST_Y) {
+        drawtext(5, y, "CHANGE VERIFIED", ST7735_GREEN, ST7735_BLACK, 1);
+        y += 9;
+    }
+    if (!plan->change_unverified && bip84_multisig_mode && ms_wallet_active() && y <= CONFIRM_LAST_Y) {
         strcpy(line, "WALLET ");
         fast_itoa(ms_wallet.threshold, num);
         strcat(line, num);
@@ -5593,21 +6179,127 @@ static uint32_t psbt_sign_inputs(uint8_t *buf, uint32_t len, uint32_t capacity, 
     return len;
 }
 
+// ============================================================================
+// Signed PSBT out: animated QR or a new file on a FAT card
+// ============================================================================
+
+static void psbt_save_progress(bool verifying, uint32_t done, uint32_t total) {
+    psbt_progress_step(NULL, NULL, verifying ? "VERIFYING THE FILE" : "WRITING SD CARD", done, total);
+}
+
+// Writes the signed PSBT as a new file, after a confirmation with its name and
+// size, and reads it back. Never on a seed card, never over another file.
+static void psbt_save_to_sd(const uint8_t *psbt, uint32_t len) {
+    char name[SD_FILES_NAME_LEN];
+    char text[28];
+    char num[12];
+
+    black_screen();
+    draw_title("SAVE TO SD CARD", ST7735_LIGHTGREY);
+    drawtext(5, 25, "READING SD CARD...", ST7735_CYAN, ST7735_BLACK, 1);
+    if (!sd_init()) {
+        psbt_sd_message("SD CARD ERROR", "NO CARD");
+        return;
+    }
+    // A card initialized for seeds has no file system: files never go there
+    if (sd_read_block(cSD_MARKER_SECTOR, buffer) && sd_marker_valid(buffer)) {
+        memzero(buffer, sizeof(buffer));
+        psbt_sd_message("THIS IS A SEED CARD", "USE ANOTHER CARD");
+        return;
+    }
+    memzero(buffer, sizeof(buffer));
+    if (!sd_files_mount()) {
+        psbt_sd_message("SD CARD ERROR", "NO FAT16/32 ON THE CARD");
+        return;
+    }
+    if (!sd_files_new_name(psbt_source_name, name)) {
+        sd_files_unmount();
+        psbt_sd_message("SD CARD ERROR", "NO FREE FILE NAME");
+        return;
+    }
+
+    // What will happen, before anything is written (Rule 4)
+    black_screen();
+    draw_title("SAVE TO SD CARD", ST7735_LIGHTGREY);
+    drawtext(5, 16, "NEW FILE:", ST7735_WHITE, ST7735_BLACK, 1);
+    draw_bip84_wrapped_text(name, 5, 28, 25, 3);
+    fast_itoa(len, num);
+    strcpy(text, num);
+    strcat(text, " BYTES, SIGNED PSBT");
+    drawtext(5, 62, text, ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 80, "WRITE IT TO THE CARD?", ST7735_WHITE, ST7735_BLACK, 1);
+    grid_confirm("SAVE");
+    if (psbt_wait_key() != OK_BT) {
+        sd_files_unmount();
+        return;
+    }
+
+    psbt_progress_begin("SAVE TO SD CARD");
+    progress_line(25, name);
+    sd_save_t r = sd_files_save(name, psbt, len, psbt_save_progress);
+    sd_files_unmount();
+    if (r != SD_SAVE_OK) {
+        psbt_sd_message((r == SD_SAVE_VERIFY_ERROR) ? "VERIFY FAILED" : "WRITE FAILED",
+                        (r == SD_SAVE_FULL) ? "THE CARD IS FULL" :
+                        (r == SD_SAVE_EXISTS) ? "THE NAME IS TAKEN" :
+                        (r == SD_SAVE_VERIFY_ERROR) ? "FILE REMOVED, TRY AGAIN" : "CARD WRITE ERROR");
+        return;
+    }
+    black_screen();
+    draw_title("SAVED TO SD CARD", ST7735_GREEN);
+    draw_bip84_wrapped_text(name, 5, 20, 25, 3);
+    drawtext(5, 56, "WRITTEN AND VERIFIED", ST7735_GREEN, ST7735_BLACK, 1);
+    grid_OK_only();
+    while (psbt_wait_key() != OK_BT) { }
+}
+
+// After signing: QR or SD, as many times as wanted; BACK leaves
+static void psbt_export_menu(const uint8_t *psbt, uint32_t len, uint32_t signed_count) {
+    static const char *const options[2] = {"SHOW QR", "SAVE TO SD CARD"};
+    char title[24];
+    char num[12];
+    int sel = 0;
+    bool full = true;
+
+    strcpy(title, "SIGNED ");
+    fast_itoa(signed_count, num);
+    strcat(title, num);
+    strcat(title, signed_count == 1 ? " INPUT" : " INPUTS");
+    while (1) {
+        if (full) {
+            black_screen();
+            draw_title(title, ST7735_GREEN);
+            grid_menu2();
+            full = false;
+        }
+        for (int i = 0; i < 2; i++) {
+            drawtext(1, 13 + i * 10, (char *)options[i], (i == sel) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+        }
+        int key = psbt_wait_key();
+        if (key == BACK_BT) return;
+        if (key == UP_BT || key == DOWN_BT) {
+            sel ^= 1;
+        } else {
+            if (sel == 0) show_ur_animated_qr(psbt, len);
+            else psbt_save_to_sd(psbt, len);
+            full = true;
+        }
+    }
+}
+
 // Shows a PSBT, then offers to sign it with the loaded seed and returns the
-// signed PSBT as an animated QR. buf has room for 'capacity' bytes.
+// signed PSBT as an animated QR or a file. buf has room for 'capacity' bytes.
 static void psbt_review_and_sign(uint8_t *buf, uint32_t len, uint32_t capacity) {
     psbt_t psbt;
     psbt_sign_plan_t plan;
     uint32_t signed_count;
     char text[32];
-    char num[12];
 
-    if (psbt_inspect_only) {                                // REVIEW PSBT: show it, never sign
-        (void)show_psbt_details(buf, len);
+    psbt_checked.valid = false;                             // Nothing checked yet
+    if (psbt_inspect_only || psbt_parse(buf, len, &psbt) != PSBT_OK) {
+        (void)show_psbt_details(buf, len);                  // REVIEW PSBT, or the parse error
         return;
     }
-    if (!show_psbt_details(buf, len)) return;               // Cancelled, or the viewer showed the error
-    if (psbt_parse(buf, len, &psbt) != PSBT_OK) return;
 
     // Drop the CBOR wrapper of QR input so the PSBT can be edited in place
     if (psbt.buf != buf) {
@@ -5616,6 +6308,7 @@ static void psbt_review_and_sign(uint8_t *buf, uint32_t len, uint32_t capacity) 
         if (psbt_parse(buf, len, &psbt) != PSBT_OK) return;
     }
 
+    // Every input and output is checked first, so the review shows the results
     psbt_progress_begin("CHECKING PSBT");
     psbt_plan_signing(&psbt, &plan);
     if (plan.refuse != NULL) {
@@ -5623,6 +6316,7 @@ static void psbt_review_and_sign(uint8_t *buf, uint32_t len, uint32_t capacity) 
         psbt_sd_message("CANNOT SIGN", text);
         return;
     }
+    if (!psbt_viewer(&psbt)) return;                        // BACK: nothing signed
     if (!psbt_confirm_signing(&psbt, &plan)) return;
 
     const char *why;
@@ -5634,17 +6328,7 @@ static void psbt_review_and_sign(uint8_t *buf, uint32_t len, uint32_t capacity) 
         return;
     }
 
-    black_screen();
-    strcpy(text, "SIGNED ");
-    fast_itoa(signed_count, num);
-    strcat(text, num);
-    strcat(text, signed_count == 1 ? " INPUT" : " INPUTS");
-    draw_title(text, ST7735_GREEN);
-    drawtext(5, 25, "SCAN THE NEXT QR", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(5, 35, "WITH YOUR WALLET", ST7735_WHITE, ST7735_BLACK, 1);
-    grid_labels(NULL, NULL, "QR", NULL, NULL, NULL);     // Either key shows the QR
-    psbt_wait_key();
-    show_ur_animated_qr(buf, len);
+    psbt_export_menu(buf, len, signed_count);
 }
 
 // Scanner timing, measured with the MIPS core timer (counts at SYSCLK / 2)
@@ -6209,6 +6893,7 @@ void scan_ur_animated_qr(void) {
     } else {
         uint32_t capacity;
         (void)fountain_scratch_buffer(&capacity);   // Same buffer; the message starts at its base
+        psbt_source_name[0] = '\0';
         psbt_review_and_sign(msg, len, capacity);
     }
 }
@@ -6769,6 +7454,7 @@ static int wait_any_key(void) {
         }
     }
     repeating = false;
+    led_done();                     // Waiting for the user: nothing running
     while (BT_OK == 0 || BT1 == 0 || BT2 == 0 || BT4 == 0 || BT5 == 0 || BT6 == 0) SYS_Tasks();
     delay_ms(30);
     while (1) {
@@ -6782,6 +7468,161 @@ static int wait_any_key(void) {
         last_t = _CP0_GET_COUNT();
         return bt;
     }
+}
+
+// ============================================================================
+// WALLET > CONFIG: account, single / multisig and script type
+// ============================================================================
+// One row each: UP / DOWN the row, LEFT / RIGHT the value (no wrap at the ends),
+// SAVE applies the changes (deriving what they need, with progress), BACK leaves
+// them. Multisig is segwit only; a loaded descriptor sets its script type.
+
+#define CONFIG_ROWS 3
+
+static uint8_t config_script_min(bool multi) {
+    return multi ? SCRIPT_NESTED : SCRIPT_LEGACY;
+}
+
+static uint8_t config_script_max(bool multi) {
+    return multi ? SCRIPT_NATIVE : SCRIPT_TAPROOT;
+}
+
+// Derivation path of the account, "m/84'/0'/0'"
+static void config_path(char *out, uint8_t script, bool multi, uint32_t account) {
+    static const char *const purpose[4] = {"m/44'", "m/49'", "m/84'", "m/86'"};
+    char num[12];
+    strcpy(out, multi ? "m/48'" : purpose[script]);
+    strcat(out, "/0'/");
+    fast_itoa(account, num);
+    strcat(out, num);
+    strcat(out, multi ? ((script == SCRIPT_NESTED) ? "'/1'" : "'/2'") : "'");
+}
+
+static void config_draw(bool full, uint8_t row, uint32_t account, bool multi, uint8_t script) {
+    char text[28];
+    bool locked = multi && ms_wallet_loaded;        // The descriptor sets the script
+    if (full) {
+        black_screen();
+        draw_title("WALLET CONFIG", ST7735_LIGHTGREY);
+        drawtext(1, 14, "ACCOUNT:", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(1, 26, "MODE:", ST7735_WHITE, ST7735_BLACK, 1);
+    }
+    drawtext(1, 38, "SCRIPT:", locked ? 0x8410 : ST7735_WHITE, ST7735_BLACK, 1);
+    fast_itoa(account, text);
+    strcat(text, "  ");
+    drawtext(50, 14, text, (row == 0) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(50, 26, multi ? "MULTI SIG " : "SINGLE SIG", (row == 1) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+    strcpy(text, script_name[script]);
+    while (strlen(text) < 13) strcat(text, " ");
+    drawtext(50, 38, text, locked ? 0x8410 : (row == 2) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+
+    // What the choice means
+    rectan(0, 52, 159, 90, ST7735_BLACK);
+    config_path(text, script, multi, account);
+    drawtext(1, 54, text, ST7735_CYAN, ST7735_BLACK, 1);
+    strcpy(text, script_prefix[script]);
+    if (script == SCRIPT_NATIVE) strcat(text, " RECOMMENDED");
+    drawtext(1, 64, text, ST7735_CYAN, ST7735_BLACK, 1);
+    if (locked) {
+        drawtext(1, 78, "SET BY THE DESCRIPTOR", ST7735_CYAN, ST7735_BLACK, 1);
+    } else if (script != SCRIPT_NATIVE) {
+        drawtext(1, 78, "NOT AVAILABLE YET", ST7735_YELLOW, ST7735_BLACK, 1);
+    }
+
+    const char *left = NULL, *right = NULL;
+    if (row == 0) {
+        if (account > 0) left = "-";
+        if (account < BIP84_ACCOUNT_MAX) right = "+";
+    } else if (row == 1) {
+        if (multi) left = "SING";
+        else right = "MULT";
+    } else if (!locked) {
+        if (script > config_script_min(multi)) left = script_key[script - 1];
+        if (script < config_script_max(multi)) right = script_key[script + 1];
+    }
+    grid_rows_keys(left, right, "SAVE");
+}
+
+// LEFT / RIGHT on a row. Returns false when the value cannot move that way.
+static bool config_step(uint8_t row, bool right, uint32_t *account, bool *multi, uint8_t *script) {
+    if (row == 0) {
+        if (right ? (*account >= BIP84_ACCOUNT_MAX) : (*account == 0)) return false;
+        *account = right ? *account + 1 : *account - 1;
+    } else if (row == 1) {
+        if (*multi == right) return false;
+        *multi = right;
+        if (*script < config_script_min(*multi)) *script = config_script_min(*multi);
+        if (*script > config_script_max(*multi)) *script = config_script_max(*multi);
+    } else {
+        if (*multi && ms_wallet_loaded) return false;
+        if (right ? (*script >= config_script_max(*multi)) : (*script <= config_script_min(*multi))) return false;
+        *script = right ? *script + 1 : *script - 1;
+    }
+    return true;
+}
+
+static void config_run(void) {
+    uint32_t account = bip84_account_index;
+    bool multi = bip84_multisig_mode;
+    uint8_t script = bip84_script;
+    uint8_t row = 0;
+
+    config_draw(true, row, account, multi, script);
+    while (1) {
+        int bt = wait_any_key();
+        if (bt == BACK_BT) {                    // Nothing changes
+            while (BT1 == 0) SYS_Tasks();
+            return;
+        }
+        if (bt == OK_BT) {
+            while (BT_OK == 0) SYS_Tasks();
+            break;
+        }
+        if (bt == UP_BT || bt == DOWN_BT) {
+            row = (uint8_t)((row + ((bt == DOWN_BT) ? 1 : CONFIG_ROWS - 1)) % CONFIG_ROWS);
+        } else if (bt == LEFT_BT || bt == RIGHT_BT) {
+            bool right = (bt == RIGHT_BT);
+            if (config_step(row, right, &account, &multi, &script) && row == 0) {
+                // The account repeats while held, like the numbers elsewhere
+                uint32_t t = _CP0_GET_COUNT(), wait = KEY_REPEAT_FIRST_MS;
+                while ((right ? BT6 : BT2) == 0) {
+                    SYS_Tasks();
+                    if ((uint32_t)(_CP0_GET_COUNT() - t) < wait * (CPU_CLOCK_FREQUENCY / 2000u)) continue;
+                    t = _CP0_GET_COUNT();
+                    wait = KEY_REPEAT_NEXT_MS;
+                    if (!config_step(row, right, &account, &multi, &script)) break;
+                    config_draw(false, row, account, multi, script);
+                }
+            }
+        }
+        config_draw(false, row, account, multi, script);
+    }
+
+    // SAVE: the account first, so a multisig account is derived for the new index
+    if (account != bip84_account_index) set_account_index(account);
+    if (multi != bip84_multisig_mode) {
+        bip84_multisig_mode = multi;
+        if (multi && !ms_account_cached) {
+            black_screen();
+            if (!precompute_multisig_account()) bip84_multisig_mode = false;    // Cancelled
+        }
+    }
+    if (script != bip84_script) {
+        bip84_script = script;
+        bip84_address_index = 0;
+    }
+}
+
+// What needs the keys of a script type that is not there yet says so
+static void script_not_ready(void) {
+    black_screen();
+    draw_title(script_name[bip84_script], ST7735_LIGHTGREY);
+    drawtext(1, 30, "NOT AVAILABLE YET", ST7735_RED, ST7735_BLACK, 1);
+    drawtext(1, 50, "CHOOSE NATIVE SEGWIT", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 60, "IN WALLET > CONFIG", ST7735_WHITE, ST7735_BLACK, 1);
+    grid_back_only();
+    while (wait_any_key() != BACK_BT) { }
+    while (BT1 == 0) SYS_Tasks();
 }
 
 // Digit 0..9 from the timer: its first nibble below 10
@@ -6844,9 +7685,9 @@ static void print_eff_config(bool full) {
         drawtext(1, 64, "4 DICE PER WORD", ST7735_CYAN, ST7735_BLACK, 1);
     }
     // LEFT and RIGHT say what they do on this row; the separator keys name the one they load
-    if (eff_cursor == 0) grid_rows_keys("-", "+");
-    else if (eff_cursor == 3) grid_rows_keys(eff_sep_key[(eff_sep + 2u) % 3u], eff_sep_key[(eff_sep + 1u) % 3u]);
-    else grid_rows_keys("NO", "YES");
+    if (eff_cursor == 0) grid_rows_keys("-", "+", "OK");
+    else if (eff_cursor == 3) grid_rows_keys(eff_sep_key[(eff_sep + 2u) % 3u], eff_sep_key[(eff_sep + 1u) % 3u], "OK");
+    else grid_rows_keys("NO", "YES", "OK");
     fast_itoa(eff_words, num);
     strcat(num, " ");                       // Covers the second digit of 10..12
     drawtext(122, 14, num, (eff_cursor == 0) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
@@ -7430,6 +8271,7 @@ static void vault_progress(uint16_t done, uint16_t total) {
     fast_itoa(total, num);
     strcat(text, num);
     progress_line(80, text);
+    if (done + 1u >= total) led_done(); else led_busy();
     if (done == 0) rectan(9, 92, 151, 97, WHITE);
     rectan(10, 93, 10 + (140u * (done + 1u)) / total, 96, ST7735_GREEN);
 }
@@ -9102,7 +9944,6 @@ int SSS_N = 9;
 
     word[0] = '\0';
 
-    int word_number = 1; // Tracks the word being entered
     char word_number_text[12];
 
     const size_t LEN = 32;
@@ -10090,6 +10931,10 @@ int SSS_N = 9;
                     case BACK_BT:
                         if (main_pointer==cMAIN_OBFUS || main_pointer==cMAIN_XOR || main_pointer==cMAIN_LOAD || main_pointer==cMAIN_SSS || main_pointer==cMAIN_BIP85 || main_pointer==cMAIN_MNEM2CARD || (main_pointer == cMAIN_create && seed_pointer == cSEED_triple)){
                             transition_to_input(selinput_pointer);
+                        }else if (main_pointer==cMAIN_ERASESD) { // Back to the SD CARD menu
+                            black_screen();
+                            print_generic_menu(menu_erase, cERASE_n_opt, erase_pointer);
+                            estado = SEL_ERASE_MODE;
                         }else {
                             transition_to_main();
                         }
@@ -10702,7 +11547,7 @@ int SSS_N = 9;
                                 set_bit(data_array_256b, bit_count_dice, 0);
                                 last_input_len = 0; // Clear purple highlight on delete
                                 refresh_entropy_screen();
-                                if (bit_count_dice == 0) grid_coins_back_label(false);
+                                if (bit_count_dice == 0) grid_del_back_label(false);
                             } else {
                                 transition_to_size();   // Nothing entered: back to the size
                             }
@@ -11009,6 +11854,22 @@ int SSS_N = 9;
                             capturing_xor_word = false; 
                             transition_to_obfus();
                             break;
+                        } else if ((strlen(word) == 0) & (word_number == 1)) {
+                            // Nothing left to delete: back where the word entry was opened from
+                            memzero(data_array_256b, sizeof(data_array_256b));
+                            found_bool = false;
+                            lt_idx = 0;
+                            if ((main_pointer == cMAIN_SSS) & (sss_pointer == cMERGE)) {
+                                black_screen();
+                                print_sel_share_screen(selected_share_id);
+                                estado = SEL_SHARE;
+                            } else if ((main_pointer == cMAIN_XOR && xor_merge_words_available > 0) ||
+                                       (main_pointer == cMAIN_create && seed_pointer == cSEED_triple)) {
+                                transition_to_input(selinput_pointer);
+                            } else {
+                                transition_to_size();
+                            }
+                            break;
                         } else if ((strlen(word) == 0) & (word_number > 1)) { // Go back one word
                             const char *saved_word;
                             word_number-=1;
@@ -11148,35 +12009,24 @@ int SSS_N = 9;
             case SHOW_SEED_MENU:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        if (bip84_option() == cBIP84_PASSPHRASE) {
+                        if (!script_ready() && (bip84_option() == cBIP84_XPUB || bip84_option() == cBIP84_ADDRESSES ||
+                                                bip84_option() == cBIP84_DESCRIPTOR)) {
+                            script_not_ready();
+                            black_screen();
+                            print_bip84_menu();
+                            pulsed_bt = NONE;
+                        } else if (bip84_option() == cBIP84_PASSPHRASE) {
                             print_passphrase_menu();
                         } else if(bip84_option() == cBIP84_SIGN) {
                             sign_menu_descriptor = false;
                             psbt_inspect_only = false;
                             black_screen();
                             print_sign_menu();
-                        } else if (bip84_option() == cBIP84_MODE) {
-                            // Single -> multi derives m/48'/0'/0'/2' the first time
-                            // (progress bar); multi -> single only redraws
+                        } else if (bip84_option() == cBIP84_CONFIG) {
+                            config_run();
                             black_screen();
-                            bip84_multisig_mode = !bip84_multisig_mode;
-                            if (bip84_multisig_mode && !ms_account_cached) {
-                                if (!precompute_multisig_account()) {
-                                    bip84_multisig_mode = false;    // Cancelled: stay in single sig
-                                }
-                                black_screen();
-                            }
-                            bip84_menu_pointer = bip84_option_count() - 2;   // Stay on MODE (UNLOAD SEED is last)
                             print_bip84_menu();
                             pulsed_bt = NONE;   // Ignore keys pressed during the derivation
-                        } else if (bip84_option() == cBIP84_ACCOUNT) {
-                            uint32_t index = bip84_account_index;
-                            if (edit_account_index(&index) && index != bip84_account_index) {
-                                set_account_index(index);   // Progress bar while deriving
-                            }
-                            black_screen();
-                            print_bip84_menu();
-                            pulsed_bt = NONE;
                         } else if (bip84_option() == cBIP84_DESCRIPTOR) {
                             // Cosigner xpubs, so multisig change can be verified:
                             // the same FROM QR / FROM SD menu as SIGN

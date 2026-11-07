@@ -6,6 +6,8 @@ Writes:
   MSCOLD.TXT            - the same wallet as a Coldcard multisig setup file
   MSWALLET.PSB          - 2-of-3 PSBT whose input and change belong to that wallet
   MSATTACK.PSB          - the same, but the "change" has a foreign key instead of B
+  abandon multisig.psbt - 3 inputs, 2 destinations and change of that wallet, with
+                          the previous transactions (for the review screens)
 
 Also writes the same wallet as UR crypto-output CBOR (BCR-2020-010), with
 the v1 and v2 tag numbers, built by a generic CBOR encoder written from RFC
@@ -17,6 +19,7 @@ g = runpy.run_path('sign_abandon.py')
 H, seed_a, master_key, ckd_priv = g['H'], g['seed'], g['master_key'], g['ckd_priv']
 point_mul, ser_pub, hash160, sha256 = g['point_mul'], g['ser_pub'], g['hash160'], g['sha256']
 b58check, varint, kv, keypath = g['b58check'], g['varint'], g['kv'], g['keypath']
+dsha = g['dsha']
 
 # --- BIP380 checksum (reference code from the BIP) ----------------------------
 INPUT_CHARSET = "0123456789()[],'/*abcdefgh@:$%{}IJKLMNOPQRSTUVWXYZ&+-.;<=>?!^_|~ijklmnopqrstuvwxyzABCDEFGH`#\"\\ "
@@ -142,6 +145,38 @@ def ms_psbt(change_cosigners):
         out += kv(b'\x02' + co.child(CHANGE, INDEX)[1], keypath(real.fp, *MS, CHANGE, INDEX))
     return b'psbt\xff' + kv(b'\x00', tx) + b'\x00' + inp + b'\x00' + b'\x00' + out + b'\x00'
 
+def ms_review_psbt():
+    """Three inputs of the wallet (receive 0 and 1, change 0), each with its
+    previous transaction, two destinations (one over and one under 100 000
+    sats) and change 1/3: for the review screens (flow, pages, fee rate)."""
+    spends = [((0, 0), 800000), ((0, 1), 650000), ((1, 0), 120000)]
+    sends = [(EXTERNAL, 1500000), (p2wsh(b'seedmate review destination'), 48000)]
+    change_amount = 1570000 - 1500000 - 48000 - 2100           # Fee 2 100 sats
+    ws_change = multisig_script(2, [co.child(CHANGE, INDEX)[1] for co in cosigners], True)
+    ins, maps = b'', b''
+    for n, ((ch, ix), amount) in enumerate(spends):
+        ws = multisig_script(2, [co.child(ch, ix)[1] for co in cosigners], True)
+        spk = p2wsh(ws)
+        prev = (struct.pack('<I', 2) + b'\x01' + sha256(b'ms review funding %d' % n) + struct.pack('<I', 1) +
+                b'\x00' + struct.pack('<I', 0xffffffff) + b'\x02' +
+                struct.pack('<Q', 31337 + n) + varint(len(EXTERNAL)) + EXTERNAL +
+                struct.pack('<Q', amount) + varint(34) + spk + struct.pack('<I', 0))
+        ins += dsha(prev) + struct.pack('<I', 1) + b'\x00' + struct.pack('<I', 0xfffffffd)
+        m = kv(b'\x00', prev) + kv(b'\x01', struct.pack('<Q', amount) + varint(34) + spk) + kv(b'\x05', ws)
+        for co in cosigners:
+            m += kv(b'\x06' + co.child(ch, ix)[1], keypath(co.fp, *MS, ch, ix))
+        maps += m + b'\x00'
+    outs = sends + [(p2wsh(ws_change), change_amount)]
+    tx = (struct.pack('<I', 2) + varint(len(spends)) + ins + varint(len(outs)) +
+          b''.join(struct.pack('<Q', a) + varint(len(s)) + s for s, a in outs) + struct.pack('<I', 0))
+    out_maps = b'\x00\x00'
+    out_maps += kv(b'\x00', ws_change)
+    for co in cosigners:
+        out_maps += kv(b'\x02' + co.child(CHANGE, INDEX)[1], keypath(co.fp, *MS, CHANGE, INDEX))
+    out_maps += b'\x00'
+    return b'psbt\xff' + kv(b'\x00', tx) + b'\x00' + maps + out_maps
+
+open('abandon multisig.psbt', 'wb').write(ms_review_psbt())
 open('MSWALLET.PSB', 'wb').write(ms_psbt([A, B, C]))
 open('MSATTACK.PSB', 'wb').write(ms_psbt([A, X, C]))
 open('MSDESC.TXT', 'w', newline='\n').write(desc_text)

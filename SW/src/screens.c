@@ -57,9 +57,9 @@ const char* const menu_sss[]      = {"SPLIT", "MERGE"};
 const char* const menu_resource[] = {"TUTORIAL", "BACKUP TOOL", "DICE TESTER", "PRINT WORDLIST", "BINARY WORDLIST", "SECURITY"};
 const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB","1 WORD XOR","BYTE SWAP","HOW TO"};
 const char* const menu_erase[]    = {"ERASE SECTOR", "INITIALIZE CARD", "WIPE ALL CARD"};
-const char* const menu_bip84[] = {"SIGN", "DERIVE", "VAULT", "XPUB/ZPUB", "ADDRESSES", "ADD PASSPHRASE", "ACCOUNT", "MODE: SINGLE SIG", "UNLOAD SEED"};
+const char* const menu_bip84[] = {"SIGN", "ADD PASSPHRASE", "DERIVE", "VAULT", "XPUB/ZPUB", "ADDRESSES", "CONFIG", "UNLOAD SEED"};
 const char* const menu_addresses[] = {"RECEIVE ADDRESS", "CHANGE ADDRESS", "SCAN ADDRESS"};
-const char* const menu_bip84_multi[] = {"SIGN", "DERIVE", "VAULT", "XPUB/ZPUB", "IMPORT DESCRIPTOR", "ADD PASSPHRASE", "ACCOUNT", "MODE: MULTI SIG", "UNLOAD SEED"};
+const char* const menu_bip84_multi[] = {"SIGN", "ADD PASSPHRASE", "DERIVE", "VAULT", "XPUB/ZPUB", "IMPORT DESCRIPTOR", "CONFIG", "UNLOAD SEED"};
 const char* const menu_sign[]     = {"FROM QR", "FROM SD"};
 const char* const menu_import[]   = {"FROM QR", "FROM SD", "FROM VAULT"};
 const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD", "FROM QR"};
@@ -293,11 +293,11 @@ void grid_coins(){              // Heads tails
     print_cursor_grid();
     drawtext(67,117, "HEAD", ST7735_WHITE, ST7735_WHITE, 1);
     drawtext(127,117, "TAIL", ST7735_WHITE, ST7735_WHITE, 1);
-    grid_coins_back_label(false);   // The screen starts with nothing entered
+    grid_del_back_label(false);     // The screen starts with nothing entered
 }
 
-// What BACK does on the coins screen: deletes the last coin, or leaves when none is left
-void grid_coins_back_label(bool can_delete) {
+// What BACK does on an entry screen: deletes the last input, or leaves when none is left
+void grid_del_back_label(bool can_delete) {
     rectan(64, 106, 92, 114, ST7735_BLACK);
     drawtext(can_delete ? 70 : 67, 107, can_delete ? "DEL" : "BACK", ST7735_WHITE, ST7735_WHITE, 1);
 }
@@ -345,7 +345,7 @@ static const char *menu_title(const char* const *options) {
     if (options == menu_obfus)        return menu_main[cMAIN_OBFUS];
     if (options == menu_erase)        return menu_main[cMAIN_ERASESD];
     if (options == menu_resource)     return menu_main[cMAIN_QR];
-    if (options == menu_addresses)    return menu_bip84[4];
+    if (options == menu_addresses)    return menu_bip84[5];
     if (options == menu_input)        return "LOAD SEED FROM";
     if (options == menu_size)         return "SEED SIZE";
     if (options == menu_dice)         return "DICE MODE";
@@ -469,12 +469,13 @@ void grid_labels(const char *back, const char *up, const char *ok,
     }
 }
 
-// Rows of options: UP / DOWN the row, LEFT and RIGHT named by what they do on it.
-// Only those two cells are cleared when called again.
-void grid_rows_keys(const char *left, const char *right) {
+// Rows of options: UP / DOWN the row, LEFT and RIGHT named by what they do on it
+// (NULL: nothing there). Only those cells and OK are cleared when called again.
+void grid_rows_keys(const char *left, const char *right, const char *ok) {
     rectan(64, 116, 92, 124, ST7735_BLACK);
     rectan(124, 116, 152, 124, ST7735_BLACK);
-    grid_labels("BACK", NULL, "OK", left, NULL, right);
+    rectan(124, 106, 152, 114, ST7735_BLACK);
+    grid_labels("BACK", NULL, ok, left, NULL, right);
     print_up_arrow(106, 114, ST7735_WHITE);
     print_down_arrow(106, 123, ST7735_WHITE);
 }

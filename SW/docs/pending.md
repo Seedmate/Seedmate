@@ -1,15 +1,17 @@
 # Seedmate firmware - pending work
 
 The open work list, kept up to date with every change (Claude updates it when
-a task is done, decided or added). Last update: 2026-11-06.
+a task is done, decided or added). Last update: 2026-11-07.
 
-Memory today: flash 208.9 KB of 238 KB (85.7%, about 34.9 KB free); RAM
-22.5 KB of 32 KB (about 11.5 KB of stack).
+Memory today: flash 229.0 KB of 238 KB (94.0%, about 14.4 KB free); RAM
+23.4 KB of 32 KB (about 11.5 KB of stack).
 
 ## 1. Before shipping v2.0
 
 | Task | Notes |
 |---|---|
+| Signed PSBT to SD: rest of the device test | Signing and writing checked on 2026-11-07: six PSBTs signed on the device (1 to 12 inputs, account 1) verified on the PC by an independent signer (every signature, low R and low S, SIGHASH_ALL, the right keys, the rest of each file unchanged); the same PSBT signed twice gives the same file. Names: the 8.3 alias of a long name is unpredictable ("abandon sweep.psbt" became ABE9BE~1, so ABE9BE-S.PSB), so long names were turned on (LFN, +3.7 KB): "abandon sweep.psbt" now gives "abandon sweep-signed.psbt"; try that on the device. Still to try: loading them in Sparrow, a FAT32 card, a full card, a seed card (must refuse). Test PSBTs for the abandon seed as Sparrow saves them: `test/psbt/sparrow/` (`gen_sparrow.py`, checked with `check_sparrow.c`). FatFs checked on 2026-11-07: `ff.c`, `ff.h`, `diskio.h` are byte-identical to the official ff16.zip of elm-chan.org |
+| PSBT review: device test | New on 2026-11-07, built, not tried on the board: checks first (progress bar), then the flow diagram (inputs, outputs and fee as blocks in proportion), one page per output (SEND / CHANGE / TO YOU n OF m, amount, whole address in groups of 4, path), inputs, DETAILS; OK is NEXT until every destination was shown, then SIGN; new confirmation with the address, the fee in sats and ~sat/vB. Amounts: under 100 000 sats in SAT, otherwise BTC with grouped decimals. Try: the Sparrow test PSBTs (1, 3 and 12 inputs), multisig with and without descriptor (`test/psbt/abandon multisig.psbt`: 3 inputs, a send over and one under 100 000 sats, change, with `MSDESC.TXT`), REVIEW PSBT. Cost +5.6 KB flash: candidate for savings (the diagram code, the per-kind count) |
 | Thorough device test pass | Everything since the vault: vault notes and descriptors, descriptor QR (Sparrow PDF), DERIVE (passwords, Nostr), transcript check, start screen, settings defaults, key repeat |
 | Firmware signature: test on the device | The bootloader is built, not tried on a board: signed and unsigned update, bad signature, the warning at boot, time of "VERIFYING SIGNATURE". Needs the PICkit once: the 12 KB layout refuses old apps, and old bootloaders refuse new apps |
 | Firmware signature: real key | The bootloader has a TEST public key (`boot_lms.c`). Choose the signing words (12 or 24; 24 keeps the post-quantum margin), replace the key, start `SIGNATURES.md` with every index used |
@@ -18,7 +20,7 @@ Memory today: flash 208.9 KB of 238 KB (85.7%, about 34.9 KB free); RAM
 | Bootloader updates without a PICkit | A signed bootloader package that the current bootloader verifies and writes itself from RAM; it can carry a new public key signed by the old one. Power loss during the write needs the PICkit |
 | FAT32 in the bootloader | Cards over 32 GB: today only a small FAT16 partition works. The bootloader has 136 B free in its code area, so it needs savings first |
 | Stack measurement | Stack watermark, before Taproot |
-| User documentation | Which card for what (seed card never in a PC, file card FAT16/32), updates, the camera icons (green safe / red not safe for a phone: the start screen legend was removed), SD seeds are not encrypted |
+| User documentation | Which card for what: keep the seed card apart from the card for updates and PSBTs, so it never goes into a PC (the device refuses to write files on a seed card, but a PC would offer to format it); the file card FAT16 (the bootloader needs FAT16, PSBTs also work on FAT32), updates, the camera icons (green safe / red not safe for a phone: the start screen legend was removed), SD seeds are not encrypted |
 | Version 2.0 final | Release notes, `cVersion` |
 | Reproducible build | Check that two builds give the same `.hex`, document XC32 / MPLAB versions and the expected hash, publish it per release (WalletScrutiny verification). Do not use XC32 PRO `-Os`: verifiers would need the PRO license |
 
@@ -26,12 +28,11 @@ Memory today: flash 208.9 KB of 238 KB (85.7%, about 34.9 KB free); RAM
 
 | Task | Flash | Notes |
 |---|---|---|
-| Nested segwit P2SH-P2WPKH (BIP49, ypub, "3" addresses) | 2-3 KB | Same BIP143 sighash |
+| Nested segwit P2SH-P2WPKH (BIP49, ypub, "3" addresses) | 2-3 KB | Same BIP143 sighash. The menu is ready: WALLET > CONFIG > SCRIPT has placeholders for nested, taproot and legacy ("NOT AVAILABLE YET"). SIGN should then sign any supported type with a yellow note when it differs from CONFIG, and still check the change |
 | Nested multisig P2SH-P2WSH (BIP48 1') | ~1 KB | With the one above |
 | Taproot keypath (BIP86) | 5-7 KB | Schnorr BIP340, BIP341 sighash, bech32m; measure the stack first |
 | Legacy P2PKH (BIP44) | 2-3 KB | Least used |
 | Testnet / signet | 1-2 KB | A session setting (not permanent), yellow "TESTNET" label on the wallet, signing and address screens |
-| Signed PSBT back to the SD card | +6-8 KB | Decided on 2026-11-06: it will be done. How is still a proposal: full FatFs (ChaN) in the app, FAT16/32 read and write, no exFAT (Microsoft patent and license risk); always a new file (`NAME-SIGNED.PSB`) after a confirmation; the bootloader keeps Petit FatFs |
 | BBQr reading | 1-3 KB | Sparrow / Coldcard "B$" frames; the Z encoding needs raw inflate (shared with KEF v21) |
 | Nostr event signing | ~2-3 KB | Shares Taproot's Schnorr; under SIGN |
 | SCAN ADDRESS in multisig | Not measured | Today single sig only: the multisig menu has IMPORT DESCRIPTOR instead of ADDRESSES. With a descriptor loaded, check a scanned address against the receive and change scripts of the wallet (`psbt_public_ckd()`, `desc_witness_script()`, as the change check when signing) |

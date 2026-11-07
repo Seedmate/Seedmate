@@ -48,6 +48,9 @@
       <itemPath>../src/screens.h</itemPath>
       <itemPath>../src/psbt.h</itemPath>
       <itemPath>../src/sd_files.h</itemPath>
+      <itemPath>../src/fatfs/ff.h</itemPath>
+      <itemPath>../src/fatfs/ffconf.h</itemPath>
+      <itemPath>../src/fatfs/diskio.h</itemPath>
       <itemPath>../src/ur_encode.h</itemPath>
       <itemPath>../src/psbt_sign.h</itemPath>
       <itemPath>../src/descriptor.h</itemPath>
@@ -154,7 +157,8 @@
       <itemPath>../src/screens.c</itemPath>
       <itemPath>../src/psbt.c</itemPath>
       <itemPath>../src/sd_files.c</itemPath>
-      <itemPath>../src/pff_app.c</itemPath>
+      <itemPath>../src/fatfs/ff.c</itemPath>
+      <itemPath>../src/fatfs/ffunicode.c</itemPath>
       <itemPath>../src/ur_encode.c</itemPath>
       <itemPath>../src/psbt_sign.c</itemPath>
       <itemPath>../src/descriptor.c</itemPath>

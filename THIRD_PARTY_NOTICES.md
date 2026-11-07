@@ -159,9 +159,9 @@ THE SOFTWARE.
 
 ## 6. Petit FatFs
 
-- **Files:** `bootloader/src/pff.c`, `pff.h`, `pffconf.h`, `diskio.h` (the firmware compiles the same `pff.c` through `SW/src/pff_app.c`; it is not copied)
+- **Files:** `bootloader/src/pff.c`, `pff.h`, `pffconf.h`, `diskio.h`
 - **Upstream:** http://elm-chan.org/fsw/ff/00index_p.html (R0.03a)
-- **Used for:** reading `UPDATE.HEX` in the bootloader; listing and reading PSBT files from the SD card in the firmware
+- **Used for:** reading `UPDATE.HEX` in the bootloader (the firmware uses FatFs, section 6a)
 - **Local changes:** `pffconf.h` configuration (FAT16, directory functions enabled)
 - **License:** BSD-style 1-clause license
 - **Copyright:** (C) 2019, ChaN, all right reserved.
@@ -170,6 +170,31 @@ THE SOFTWARE.
 Petit FatFs module is an open source software. Redistribution and use of
 Petit FatFs in source and binary forms, with or without modification, are
 permitted provided that the following condition is met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this condition and the following disclaimer.
+
+This software is provided by the copyright holder and contributors "AS IS"
+and any warranties related to this software are DISCLAIMED.
+The copyright owner or contributors be NOT LIABLE for any damages caused
+by use of this software.
+```
+
+---
+
+## 6a. FatFs
+
+- **Files:** `SW/src/fatfs/ff.c`, `ff.h`, `diskio.h`, `ffunicode.c` (unmodified, byte-identical to the official `ff16.zip`), `ffconf.h` (Seedmate configuration)
+- **Upstream:** https://elm-chan.org/fsw/ff/ (R0.16, July 2025)
+- **Used for:** reading PSBT and descriptor files from the SD card and writing signed PSBTs (FAT12/16/32, long names, no exFAT)
+- **Local changes:** none in the module; `ffconf.h` is our own configuration
+- **License:** BSD-style 1-clause license
+- **Copyright:** (C) 2025, ChaN, all right reserved.
+
+```
+FatFs module is an open source software. Redistribution and use of FatFs in
+source and binary forms, with or without modification, are permitted provided
+that the following condition is met:
 
 1. Redistributions of source code must retain the above copyright notice,
    this condition and the following disclaimer.
