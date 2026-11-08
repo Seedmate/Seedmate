@@ -1,0 +1,125 @@
+# name	expect	owned outputs (-1 unknown)	reject code	category	trap (from psbt_suite_util.py of ShieldSigner, MIT)
+NORMAL-1_p2wpkh	parses	1		normal	Standard 1-in/2-out native segwit at m/84h/0h/0h. Must sign cleanly.
+NORMAL-2_wrapped	parses	1		normal	Standard wrapped segwit (P2SH-P2WPKH) at m/49h/0h/0h. Must sign cleanly. Its outputs carry a bogus redeem_script, which must not break parsing.
+NORMAL-3_legacy	parses	1		normal	Standard legacy P2PKH at m/44h/0h/0h. Must sign cleanly.
+NORMAL-4_multi_input	parses	1		normal	3-in/2-out native segwit. Must sign cleanly, all three inputs.
+TX-01	reject_parser	-1	UNREACHABLE_CHANGE_PATH	binding	Extra non-hardened level spliced into the change path (m/84h/0h/0h/127/1/0). path[-2]==1 so a naive check labels it change, but the depth is 6 and the funds fall outside the wallet's 5-level scanner.
+TX-06.depth6	reject_parser	-1	UNREACHABLE_CHANGE_PATH	binding	Six-level change path. Same trap as TX-01: depth must be pinned.
+TX-06.branch127	reject_parser	-1	UNREACHABLE_CHANGE_PATH	binding	Change branch 127 instead of {0,1}. Not reachable by any standard scanner.
+TX-18	reject_parser	-1	UNREACHABLE_CHANGE_PATH	binding	Non-hardened account slot (m/84h/0h/0h/0/1/0/0) — cross-account splice.
+TX-17	reject_parser	-1	CHANGE_INDEX_TOO_FAR	binding	Change index 99,999, against inputs at index 0. The path is structurally valid, so this is a threshold rather than an impossibility — which is why the Change Gap Limit is adjustable.
+TX-03.bare	parses	1		binding	Segwit input with witness_utxo only, no non_witness_utxo. Legal under BIP-143 and accepted by every signer; kept as the control for fee_inflate.
+TX-03.fee_inflate	reject_parser	-1	NEGATIVE_FEE	binding	witness_utxo.amount lowered to 20,000 while outputs still total 199,000. Implied fee is negative — arithmetically impossible.
+TX-12	reject_parser	-1	TX_MODIFIABLE	binding	A spec-valid BIP-370 v2 psbt that leaves PSBT_GLOBAL_TX_MODIFIABLE = 0x03, so a coordinator may still add or remove inputs and outputs after we sign. The review screens would show one transaction while the signature authorises a different one -- refused as not final rather than merely warned about.
+TX-14.cross_net	reject_parser	-1	FORGED_INPUT_OWNERSHIP	binding	Mainnet transaction whose input derivation is relabelled to coin type 1h (testnet) while the change stays at 0h. The input key is really our 0h key, so the 1h claim is false -- refused as forged rather than by a network rule.
+TX-16.foreign_fingerprint	parses	1		binding	Output bip32_derivation with a foreign master fingerprint. A foreign fingerprint only means 'not claimed as ours': the output is shown as an external payment, and ownership of the real change is still decided by re-derivation.
+TX-16.global_xpub_injected	parses	1		binding	Injected PSBT_GLOBAL_XPUB claiming a foreign xpub is ours. Ownership must be decided by re-derivation from the seed, never by a PSBT-supplied xpub.
+TX-16.unknown_field	parses	1		binding	Unknown proprietary field ('OWNERSHIP_HINT: trust_me') offered as an ownership decision. Must be ignored.
+TX-09.attacker_internal_key	parses	0		binding	p2tr change with an attacker-supplied internal key. Must not be labelled change: the output key cannot be rebuilt from anything this seed derives.
+TX-09.hidden_taptree	parses	0		binding	p2tr change with an unverifiable taptree leaf. Must not be labelled change.
+TX-07	reject_parser	-1	UNSUPPORTED_SIGHASH	crypto	SIGHASH_SINGLE with no output at the input's index. Signing would commit to the SIGHASH_SINGLE bug value. All 100,000 sats go to fee.
+TX-08.SINGLE	reject_parser	-1	UNSUPPORTED_SIGHASH	crypto	SIGHASH_SINGLE.
+TX-08.SINGLE_ACP	reject_parser	-1	UNSUPPORTED_SIGHASH	crypto	SIGHASH_SINGLE|ANYONECANPAY.
+TX-08.NONE	reject_parser	-1	UNSUPPORTED_SIGHASH	crypto	SIGHASH_NONE — signs no outputs at all.
+TX-08.NONE_ACP	reject_parser	-1	UNSUPPORTED_SIGHASH	crypto	SIGHASH_NONE|ANYONECANPAY.
+TX-08.ANYONECANPAY	reject_parser	-1	UNSUPPORTED_SIGHASH	crypto	SIGHASH_ANYONECANPAY.
+TX-02	reject_parser	-1	NONZERO_OP_RETURN	coverage	Value-bearing OP_RETURN (50,000 sats) escapes a branch-chain parser's accounting. Outputs exceed inputs, so the implied fee is negative.
+XTRAS.OP_RETURN_BURN	reject_parser	-1	NONZERO_OP_RETURN	coverage	Same shape as TX-02: meaningful value sent to a value-bearing OP_RETURN.
+TX-10	parses	1		coverage	Destination copies the first program bytes of the change output, so both addresses share the HRP and leading characters and differ in the middle. A display-layer trap: only full-address rendering catches it.
+TX-15.mismatch	parses	1		coverage	Implied fee (1,000,000 on 10,000,000 in — 10%) is many multiples of what a coordinator would display. Fee must be recomputed on-device and flagged.
+TX-11.v0_bech32m	parses	1		catalogue	A wrong-variant (bech32m) address string for a v0 output planted in a non-standard global field. Display addresses must be re-derived from the scriptPubKey, never read from the psbt.
+TX-11.v1_bech32	parses	0		catalogue	The v1/taproot counterpart: a bech32 (not bech32m) address string planted in a non-standard global field.
+XTRAS.NEGATIVE_AMOUNT	reject_parser	-1	AMOUNT_OUT_OF_RANGE	extras	Output value 0xFFFFFFFFFFFFFFFF — far beyond MAX_MONEY. Must never reach the display as a real amount.
+XTRAS.NEGATIVE_FEE	reject_parser	-1	NEGATIVE_FEE	extras	sum(outputs) > sum(inputs) — mathematically impossible fee.
+XTRAS.MIXED_INPUT_TYPES	reject_parser	-1	MIXED_INPUTS	extras	One p2wpkh and one p2pkh input in the same transaction.
+XTRAS.WITNESS_UTXO_MISMATCH	reject_parser	-1	INVALID_WITNESS_UTXO	extras	witness_utxo declares a p2pkh scriptPubKey — a segwit input's witness_utxo must carry a witness program.
+XTRAS.MISMATCHED_WITNESS_SCRIPT	reject_parser	-1	EXTRANEOUS_WITNESS_SCRIPT	extras	A 200-byte witness_script attached to a p2wpkh input, hashing to nothing.
+XTRAS.HUGE_FEE	parses	1		extras	90% of the input value goes to the miner fee.
+XTRAS.DUST_OUTPUT	parses	1		extras	A 100-sat output, below the dust threshold (and 50% of the value to fee).
+XTRAS.LOCKTIME_FUTURE	parses	1		extras	nLocktime 2,000,000,000 — a unix timestamp in 2033.
+XTRAS.RBF_SIGNAL	parses	1		extras	nSequence 0xfdffffff — the transaction is replaceable.
+XTRAS.NETWORK_HRP_MISMATCH	reject_parser	-1	FORGED_INPUT_OWNERSHIP	extras	Two inputs claiming different networks: input 0 at coin type 0h, input 1 relabelled to 1h. scriptPubKeys carry no network, so the coin type is the only cross-network signal -- and input 1's key is really our 0h key, so the claim is false.
+XTRAS.TRUNCATED_PSBT	reject_embit	-1		parser	PSBT cut off mid-record.
+NORMAL-1_p2wpkh_V2	parses	1		normal	BIP-370 v2 twin of NORMAL-1: standard 1-in/2-out native segwit at m/84h/0h/0h, described by per-input/per-output fields. Must parse and sign cleanly.
+NORMAL-2_wrapped_V2	parses	1		normal	BIP-370 v2 twin of NORMAL-2: wrapped segwit (P2SH-P2WPKH) at m/49h/0h/0h. Must parse and sign cleanly.
+NORMAL-3_legacy_V2	parses	1		normal	BIP-370 v2 twin of NORMAL-3: legacy P2PKH at m/44h/0h/0h, carrying a full non_witness_utxo. Must parse and sign cleanly.
+NORMAL-4_multi_input_V2	parses	1		normal	BIP-370 v2 twin of NORMAL-4: 3-in/2-out native segwit. Must parse and sign cleanly, all three inputs.
+TX-03.fee_inflate_V2	reject_parser	-1	NEGATIVE_FEE	binding	BIP-370 v2 twin of TX-03.fee_inflate: witness_utxo amount lowered to 20,000 while outputs still total 199,000. Implied fee is negative -- impossible.
+XTRAS.NEGATIVE_FEE_V2	reject_parser	-1	NEGATIVE_FEE	extras	BIP-370 v2 twin of XTRAS.NEGATIVE_FEE: sum(outputs) > sum(inputs).
+XTRAS.OP_RETURN_BURN_V2	reject_parser	-1	NONZERO_OP_RETURN	coverage	BIP-370 v2 twin of XTRAS.OP_RETURN_BURN: meaningful value sent to a value-bearing OP_RETURN.
+XTRAS.HUGE_FEE_V2	parses	1		extras	BIP-370 v2 twin of XTRAS.HUGE_FEE: 90% of the input value goes to the miner fee.
+TX-19.relative_time_V2	parses	1		extras	BIP-370 v2 transaction with a BIP-68 relative timelock in nSequence. The sequence is also below the RBF ceiling, so both must be surfaced -- 'replaceable' alone understates a long lock.
+TX-19.height_far_V2	parses	1		extras	BIP-370 v2 transaction with a block-height nLockTime far in the future. With no block anchor it parses as an ordinary spend; dated against an anchor it is flagged LOCKTIME_FAR_FUTURE (see TestPSBTv2).
+XTRAS.MISSING_UTXO	reject_parser	-1	MISSING_UTXO	extras	The sole input carries neither witness_utxo nor non_witness_utxo: no amount, no script, nothing to sign against.
+XTRAS.MISSING_UTXO_V2	reject_parser	-1	MISSING_UTXO	extras	BIP-370 twin of XTRAS.MISSING_UTXO: a v2 input naming its prevout but carrying no utxo.
+XTRAS.V2_MISSING_PREVOUT	reject_parser	-1	MISSING_UTXO	extras	A v2 input with a witness_utxo but no previous_txid / output_index. BIP-370 requires the outpoint; without it there is no transaction to sign.
+XTRAS.UNSUPPORTED_PSBT_VERSION	reject_parser	-1	UNSUPPORTED_PSBT_VERSION	extras	A v0 psbt declaring PSBT_GLOBAL_VERSION 1, which BIP-370 reserves.
+XTRAS.UNSUPPORTED_PSBT_VERSION_V2	reject_parser	-1	UNSUPPORTED_PSBT_VERSION	extras	A structurally complete v2 psbt declaring version 3, which is undefined.
+XTRAS.ANYONE_CAN_SPEND_OUTPUT	reject_parser	-1	UNDISPLAYABLE_OUTPUT	extras	The spend output pays witness version 2: no address form, and anyone-can-spend until a soft fork defines it.
+XTRAS.ANYONE_CAN_SPEND_OUTPUT_V2	reject_parser	-1	UNDISPLAYABLE_OUTPUT	extras	BIP-370 twin of XTRAS.ANYONE_CAN_SPEND_OUTPUT.
+XTRAS.BARE_MULTISIG_OUTPUT	reject_parser	-1	UNDISPLAYABLE_OUTPUT	extras	The spend output is a bare 2-of-2 multisig script, which has no address and so cannot be reviewed.
+XTRAS.BARE_MULTISIG_OUTPUT_V2	reject_parser	-1	UNDISPLAYABLE_OUTPUT	extras	BIP-370 twin of XTRAS.BARE_MULTISIG_OUTPUT.
+XTRAS.WITNESS_NONWITNESS_MISMATCH	reject_parser	-1	UTXO_MISMATCH	extras	An input ships both utxo forms and they disagree (100,000 vs 200,000 sats, different scripts) -- the BIP-143 amount-binding attack.
+TX-19.timestamp_future	parses	1		extras	nLocktime 2,000,000,000 (~2033) with a non-final input: unconfirmable until then.
+TX-19.height_far	parses	1		extras	Block-height nLockTime ~4 years out. With no block anchor it parses as an ordinary spend, like its v2 twin.
+TX-19.height_near	parses	1		extras	Negative control: nLockTime at the chain tip (anti-fee-sniping). Normal; must not warn.
+TX-19.inert	parses	1		extras	Negative control: far-future nLockTime with every input final, so the locktime is not enforced. Must not warn.
+TX-19.relative_blocks	parses	1		extras	BIP-68 block-based relative timelock (0x0000ffff, ~15 months).
+TX-19.relative_time	parses	1		extras	BIP-68 time-based relative timelock (512-second units, ~24 days).
+TX-19.relative_rbf_masquerade	parses	1		extras	Same bytes as relative_blocks, presented as mere RBF. 'Replaceable' alone would hide a ~15-month hold.
+TX-20.cltv_time	parses	1		coverage	A P2SH output whose redeem script is CLTV-locked until ~2033. Consensus rejects any earlier spend of those funds; the address alone hides it.
+TX-20.cltv_height	parses	1		coverage	A P2WSH output whose witness script is CLTV-locked at a block height ~2 years out.
+TX-20.csv_relative	parses	1		coverage	A P2WSH output whose witness script is CSV-locked (144 blocks after it confirms). Unlike TX-19 the hold lives in the output's own script.
+TX-21.claims_us_pays_other	reject_parser	-1	FORGED_OUTPUT_OWNERSHIP	ownership	Change annotated with one of our genuine keys and paths, but the script pays a stranger. The key re-derives; the output is not locked to it.
+TX-21.claims_us_pays_other_V2	reject_parser	-1	FORGED_OUTPUT_OWNERSHIP	ownership	BIP-370 twin of TX-21.claims_us_pays_other.
+TX-21.pays_us_claims_other	reject_parser	-1	MISLABELED_OUTPUT_OWNERSHIP	ownership	Change pays our key but is annotated with a foreign fingerprint. The funds are ours, but the psbt misdescribes who owns its outputs, which is refused just like the opposite lie.
+TX-21.pays_us_claims_other_V2	reject_parser	-1	MISLABELED_OUTPUT_OWNERSHIP	ownership	BIP-370 twin of TX-21.pays_us_claims_other.
+TX-21.taproot_claims_other	reject_parser	-1	MISLABELED_OUTPUT_OWNERSHIP	ownership	P2TR change paying our internal key but claiming a foreign fingerprint.
+TX-22.surplus_paths	reject_parser	-1	SURPLUS_DERIVATIONS	ownership	A single-sig output naming two of our keys. Only one can be the key the script pays; the other is a decoy for a first-entry-only checker.
+TX-22.taproot_surplus_internal_key	reject_parser	-1	SURPLUS_DERIVATIONS	ownership	A P2TR output claiming two internal keys; a taproot output has one.
+TX-22.mixed_path_maps	reject_parser	-1	MIXED_DERIVATION_MAPS	ownership	An output scope naming us in both the ecdsa and taproot derivation maps.
+TX-22.mixed_path_maps_input	reject_parser	-1	MIXED_DERIVATION_MAPS	ownership	The input-side variant of TX-22.mixed_path_maps.
+TX-23.forged_output_claim	reject_parser	-1	FORGED_OUTPUT_OWNERSHIP	ownership	Change claims our fingerprint at a plausible change path, on a key we do not derive.
+TX-23.forged_output_claim_V2	reject_parser	-1	FORGED_OUTPUT_OWNERSHIP	ownership	BIP-370 twin of TX-23.forged_output_claim.
+TX-23.forged_taproot_claim	reject_parser	-1	FORGED_OUTPUT_OWNERSHIP	ownership	P2TR change claiming our fingerprint on an internal key we do not derive.
+TX-23.forged_input_claim	reject_parser	-1	FORGED_INPUT_OWNERSHIP	ownership	An extra input derivation naming our fingerprint on a foreign key, alongside the genuine one.
+TX-23.forged_input_claim_V2	reject_parser	-1	FORGED_INPUT_OWNERSHIP	ownership	BIP-370 twin of TX-23.forged_input_claim.
+TX-04	reject_embit	-1		multisig	Mixed input script types in a multisig flow, carrying an invalid pubkey.
+TX-13.duplicate	reject_embit	-1		multisig	Duplicated cosigner key: nominally 2-of-3, effectively 2-of-2.
+TX-13.substitute	reject_parser	-1	SEED_CANNOT_SIGN	multisig	One cosigner key swapped for an attacker's; ours is gone from the inputs.
+TX-13.threshold	parses	1		multisig	Change script reduced to 1-of-3. Only a registered descriptor can tell.
+TX-13.reorder	parses	1		multisig	Cosigner keys reordered, which breaks sortedmulti. Only a registered descriptor can tell.
+TX-05	parses	0		multisig	Multisig change built from attacker-only xpubs. Must not be labelled change.
+TX-21.honest_foreign_annotated_spend	parses	0		multisig	Negative control: an honest payment to a stranger's M-of-N, fully annotated with their keys. An external payment, not an attack.
+TX-21.ms_fp_relabeled	reject_parser	-1	MISLABELED_OUTPUT_OWNERSHIP	multisig	Genuine multisig change with our cosigner entry relabelled to a foreign fingerprint: our key, attributed to another wallet.
+TX-21.ms_repointed_keys	reject_parser	-1	FORGED_OUTPUT_OWNERSHIP	multisig	Change witness script swapped for a stranger's M-of-N while our derivation entry stays: the script no longer contains our key.
+TX-21.ms_repointed_spk	reject_parser	-1	FORGED_OUTPUT_OWNERSHIP	multisig	Change scriptPubKey repointed while the supplied witness script stays ours: the script no longer hashes to the output.
+TX-22.ms_decoy_first	reject_parser	-1	FORGED_OUTPUT_OWNERSHIP	multisig	Genuine multisig change with a decoy entry of ours listed first.
+TX-22.ms_decoy_last	reject_parser	-1	FORGED_OUTPUT_OWNERSHIP	multisig	The same decoy listed last, which a first-match check never reaches.
+XTRAS.PREV_TX_TXID_MISMATCH	reject_parser	-1	UTXO_MISMATCH	extras	Legacy input really spends 1,000,000 sats, but its previous tx was edited to claim 201,000: the screen would show a 1,000-sat fee for an 800,000-sat one. A legacy signature commits to no amount; only the previous tx's hash catches it.
+XTRAS.PREV_TX_TXID_MISMATCH_V2	reject_parser	-1	UTXO_MISMATCH	extras	BIP-370 twin of XTRAS.PREV_TX_TXID_MISMATCH.
+XTRAS.OP_RETURN_DIRECT_PUSH	parses	1		extras	Negative control: a zero-value OP_RETURN whose 40-byte payload is pushed directly, as Bitcoin Core writes it. Must be shown byte-for-byte.
+XTRAS.OP_RETURN_DIRECT_PUSH_V2	parses	1		extras	BIP-370 twin of XTRAS.OP_RETURN_DIRECT_PUSH.
+XTRAS.LEGACY_P2SH_WITNESS_ONLY	reject_parser	-1	INVALID_WITNESS_UTXO	multisig	Legacy P2SH multisig input described only by a witness_utxo: an amount a legacy signature never commits to, with no previous tx to prove it.
+TX-24.xpub_fingerprint_mismatch	reject_parser	-1	INCONSISTENT_FINGERPRINTS	multisig	One cosigner's global xpub relabelled to a foreign fingerprint while its derivation entries keep the real one: the psbt contradicts itself.
+TX-21.ms_foreign_quorum	parses	0		multisig	Change paid to a different 2-of-3 that still contains our key (one cosigner swapped for a stranger's). The global xpubs do not derive the stranger, so it is a payment.
+TX-21.ms_foreign_quorum_no_xpubs	parses	0		multisig	The same foreign 2-of-3 with the global xpubs withheld. Nothing ties its keys to the inputs' wallet, so it stays a payment -- even once a descriptor is loaded, since that descriptor does not own it.
+TX-21.ms_honest_change_no_xpubs	parses	0		multisig	Negative control: genuine multisig change from a coordinator that omits global xpubs. A payment until the descriptor identifies it as change.
+ENC-01.v2_keys_in_v0	reject_framing	-1	WRONG_VERSION_FIELD	encoding	A v0 psbt whose output 1 also carries v2 PSBT_OUT_AMOUNT/PSBT_OUT_SCRIPT naming a different destination. embit displays and signs the scope's output; the global tx the coordinator holds pays the attacker.
+ENC-02.v2_sequence_in_v0	reject_framing	-1	WRONG_VERSION_FIELD	encoding	v2 PSBT_IN_SEQUENCE in a v0 input claims 0xFFFFFFFF (final) while the global tx signals RBF with 0xFFFFFFFD.
+ENC-03.v2_keys_hide_change	reject_framing	-1	WRONG_VERSION_FIELD	encoding	Injected v2 output fields name one of our change scripts, so an output that pays an attacker in the global tx is classified as change and dropped from the review screens.
+ENC-04.scope_beyond_tx	reject_framing	-1	MALFORMED_ENCODING	encoding	A third output map, populated with v2 fields for a phantom payment, after the two outputs the global tx declares.
+ENC-05.v0_tx_in_v2	reject_framing	-1	WRONG_VERSION_FIELD	encoding	A v2 psbt that also carries a PSBT_GLOBAL_UNSIGNED_TX paying an attacker, while its scopes pay the honest destination.
+ENC-06.v2_outpoint_conflict	parses	1		encoding	A v2 input whose previous_txid names an arbitrary outpoint while its witness_utxo describes one of our real prevouts. Without a non_witness_utxo an offline signer cannot tell this from an honest spend: the bytes are the same shape. It is safe to sign, because BIP-143 commits the signature to the witness_utxo's amount and script, so it is invalid for any outpoint that does not hold exactly that.
+ENC-07.duplicate_conflicting_utxo	reject_framing	-1	MALFORMED_ENCODING	encoding	Two witness_utxo records in one input, the second claiming double the amount: last-wins and first-wins parsers show different fees.
+ENC-08.nonminimal_keylen	reject_framing	-1	MALFORMED_ENCODING	encoding	A key length in input 0 written in its non-minimal 0xfd form.
+ENC-09.v2_prevtxid_in_v0	reject_framing	-1	WRONG_VERSION_FIELD	encoding	A legacy input's previous tx is edited to show a 1,000-sat fee for an 800,000-sat one, and v2 PSBT_IN_PREVIOUS_TXID/OUTPUT_INDEX are injected naming the edited tx's own txid, so the txid check verifies the forgery against itself.
+ENC-10.v2_global_locktime_in_v0	reject_framing	-1	WRONG_VERSION_FIELD	encoding	v2 PSBT_GLOBAL_FALLBACK_LOCKTIME in a v0 psbt claims height 800,000 while the global tx's nLockTime is 0.
+OWN-op_return_burn	parses	0		own	burn
+OWN-op_return_zero	parses	0		own	data only
+OWN-fee_quarter_limit	parses	1		own	fee exactly 1/4 of sent: no warning
+OWN-fee_quarter_over	parses	1		own	one sat over 1/4: HIGH FEE
+OWN-fee_tenth_limit	parses	1		own	exactly 1/10 of inputs: HIGH FEE
+OWN-fee_tenth_under	parses	1		own	one sat under 1/10: no warning
+OWN-change_index_limit	parses	1		own	change at input index + 100: no warning
+OWN-change_index_over	parses	1		own	change at input index + 101: HIGH CHANGE INDEX

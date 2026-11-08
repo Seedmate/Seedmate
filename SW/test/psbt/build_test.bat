@@ -21,3 +21,10 @@ if errorlevel 1 exit /b 1
 gcc -std=c99 -Wall -Wextra -Wno-unused-parameter -O1 -I..\..\src test_descriptor.c ..\..\src\descriptor.c ..\..\src\ur_encode.c ..\..\src\bytewords.c ..\..\src\psbt_sign.c ..\..\src\psbt.c ..\..\src\sha256.c ..\..\src\sha512.c ..\..\src\kdf.c ..\..\src\crypto\bignum.c ..\..\src\crypto\ecdsa.c ..\..\src\crypto\secp256k1.c ..\..\src\crypto\segwit_addr.c ..\..\src\SSS\memzero.c -o test_descriptor.exe
 if errorlevel 1 exit /b 1
 .\test_descriptor.exe
+:: Hostile PSBTs against the firmware's parser and signing decision (extract_plan.py copies it from main.c):
+python extract_plan.py
+if errorlevel 1 exit /b 1
+gcc -std=c99 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -O1 -I..\..\src -I..\..\src\crypto -I..\..\src\SSS test_malicious.c ..\..\src\psbt.c ..\..\src\psbt_sign.c ..\..\src\descriptor.c ..\..\src\ur_encode.c ..\..\src\bytewords.c ..\..\src\sha256.c ..\..\src\sha512.c ..\..\src\kdf.c ..\..\src\SSS\memzero.c ..\..\src\crypto\bip32.c ..\..\src\crypto\bignum.c ..\..\src\crypto\ecdsa.c ..\..\src\crypto\secp256k1.c ..\..\src\crypto\ripemd160.c ..\..\src\crypto\segwit_addr.c -o test_malicious.exe
+if errorlevel 1 exit /b 1
+.\test_malicious.exe
+if errorlevel 1 exit /b 1

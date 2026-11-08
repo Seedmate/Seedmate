@@ -44,6 +44,8 @@
 #define SETTING_SDWRITE_OFF 0x04u               // Writing seeds to the SD disabled (default: disabled)
 #define SETTING_DECOY_OFF   0x08u               // No snake game at power-on (default: no game)
 #define SETTING_STOPWATCH_OFF 0x10u             // STOPWATCH hidden in CREATE (default: hidden)
+#define SETTING_IDLE_MASK   0xE0u               // AUTO UNLOAD time: 7 = never (default), see main.c
+#define SETTING_IDLE_SHIFT  5
 #define SETTINGS_DEFAULT    0xFFu
 
 // Flags of the newest valid record, or SETTINGS_DEFAULT if there is none

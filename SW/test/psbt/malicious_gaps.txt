@@ -1,0 +1,28 @@
+# Vectors meant to be refused that Seedmate would still sign, each reviewed.
+# Name, tab, why it is not dangerous. A new entry here needs a reason.
+TX-01	Change path not standard: not verified, shown as a destination. Safe.
+TX-06.depth6	Change path not standard: not verified, shown as a destination. Safe.
+TX-06.branch127	Change path not standard: not verified, shown as a destination. Safe.
+TX-18	Change path not standard: not verified, shown as a destination. Safe.
+TX-17	Far change index: called ours with the yellow HIGH CHANGE INDEX (ShieldSigner refuses).
+XTRAS.MIXED_INPUT_TYPES	Signs only the input it can, and says n OF m.
+XTRAS.MISMATCHED_WITNESS_SCRIPT	The extra script is unused by P2WPKH signing.
+XTRAS.ANYONE_CAN_SPEND_OUTPUT	No address: shown as NON-STANDARD SCRIPT with its amount, as a destination.
+XTRAS.BARE_MULTISIG_OUTPUT	No address: shown as NON-STANDARD SCRIPT with its amount, as a destination.
+TX-21.pays_us_claims_other	Wrong annotation: shown as a destination, nothing is claimed as ours.
+TX-22.surplus_paths	Extra entries are ignored: only the entry checked against the script counts.
+TX-22.mixed_path_maps	Extra entries are ignored: only the entry checked against the script counts.
+TX-22.mixed_path_maps_input	Extra entries are ignored: only the entry checked against the script counts.
+TX-23.forged_input_claim	Extra entry on a foreign key is ignored; the genuine key is what signs.
+TX-04	Multisig: signs only the key it verified; change only with a descriptor.
+TX-21.ms_fp_relabeled	Change is never called ours from PSBT data alone: destination, or the descriptor proves it.
+TX-21.ms_repointed_keys	Change is never called ours from PSBT data alone: destination, or the descriptor proves it.
+TX-21.ms_repointed_spk	Change is never called ours from PSBT data alone: destination, or the descriptor proves it.
+TX-24.xpub_fingerprint_mismatch	Change is never called ours from PSBT data alone: destination, or the descriptor proves it.
+TX-22.ms_decoy_first	Decoy derivations: a change output is ours only if the descriptor rebuilds its script.
+TX-22.ms_decoy_last	Decoy derivations: a change output is ours only if the descriptor rebuilds its script.
+ENC-01.v2_keys_in_v0	v2 fields in a v0 PSBT are ignored: what is shown and signed is the global tx.
+ENC-02.v2_sequence_in_v0	v2 fields in a v0 PSBT are ignored: what is shown and signed is the global tx.
+ENC-04.scope_beyond_tx	v2 fields in a v0 PSBT are ignored: what is shown and signed is the global tx.
+ENC-10.v2_global_locktime_in_v0	v2 fields in a v0 PSBT are ignored: what is shown and signed is the global tx.
+ENC-08.nonminimal_keylen	Non-minimal length read correctly; no effect on what is shown.

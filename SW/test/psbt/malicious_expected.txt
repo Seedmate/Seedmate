@@ -1,0 +1,392 @@
+NORMAL-1_p2wpkh	single	SIGN 1/1 ours=1 send=49995000 change=49995000 fee=10000 AMOUNTS_UNVERIFIED
+NORMAL-1_p2wpkh	multi	REFUSE SWITCH TO SINGLE SIG
+NORMAL-1_p2wpkh	multi+desc	REFUSE SWITCH TO SINGLE SIG
+NORMAL-2_wrapped	single	REFUSE TYPE NOT SUPPORTED
+NORMAL-2_wrapped	multi	REFUSE TYPE NOT SUPPORTED
+NORMAL-2_wrapped	multi+desc	REFUSE TYPE NOT SUPPORTED
+NORMAL-3_legacy	single	REFUSE TYPE NOT SUPPORTED
+NORMAL-3_legacy	multi	REFUSE TYPE NOT SUPPORTED
+NORMAL-3_legacy	multi+desc	REFUSE TYPE NOT SUPPORTED
+NORMAL-4_multi_input	single	SIGN 3/3 ours=1 send=149995000 change=149995000 fee=10000 AMOUNTS_UNVERIFIED
+NORMAL-4_multi_input	multi	REFUSE SWITCH TO SINGLE SIG
+NORMAL-4_multi_input	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-01	single	SIGN 1/1 ours=0 send=99000 change=0 fee=1000 AMOUNTS_UNVERIFIED
+TX-01	multi	REFUSE SWITCH TO SINGLE SIG
+TX-01	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-06.depth6	single	SIGN 1/1 ours=0 send=99000 change=0 fee=1000 AMOUNTS_UNVERIFIED
+TX-06.depth6	multi	REFUSE SWITCH TO SINGLE SIG
+TX-06.depth6	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-06.branch127	single	SIGN 1/1 ours=0 send=99000 change=0 fee=1000 AMOUNTS_UNVERIFIED
+TX-06.branch127	multi	REFUSE SWITCH TO SINGLE SIG
+TX-06.branch127	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-18	single	SIGN 1/1 ours=0 send=99000 change=0 fee=1000 AMOUNTS_UNVERIFIED
+TX-18	multi	REFUSE SWITCH TO SINGLE SIG
+TX-18	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-17	single	SIGN 1/1 ours=1 send=49500 change=49500 fee=1000 AMOUNTS_UNVERIFIED HIGH_CHANGE_INDEX
+TX-17	multi	REFUSE SWITCH TO SINGLE SIG
+TX-17	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-03.bare	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
+TX-03.bare	multi	REFUSE SWITCH TO SINGLE SIG
+TX-03.bare	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-03.fee_inflate	single	REFUSE FEE UNKNOWN
+TX-03.fee_inflate	multi	REFUSE FEE UNKNOWN
+TX-03.fee_inflate	multi+desc	REFUSE FEE UNKNOWN
+TX-12	single	PARSE UNSUPPORTED (V2?)
+TX-12	multi	PARSE UNSUPPORTED (V2?)
+TX-12	multi+desc	PARSE UNSUPPORTED (V2?)
+TX-14.cross_net	single	REFUSE TESTNET NOT SUPPORTED
+TX-14.cross_net	multi	REFUSE TESTNET NOT SUPPORTED
+TX-14.cross_net	multi+desc	REFUSE TESTNET NOT SUPPORTED
+TX-16.foreign_fingerprint	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
+TX-16.foreign_fingerprint	multi	REFUSE SWITCH TO SINGLE SIG
+TX-16.foreign_fingerprint	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-16.global_xpub_injected	single	REFUSE TESTNET NOT SUPPORTED
+TX-16.global_xpub_injected	multi	REFUSE TESTNET NOT SUPPORTED
+TX-16.global_xpub_injected	multi+desc	REFUSE TESTNET NOT SUPPORTED
+TX-16.unknown_field	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
+TX-16.unknown_field	multi	REFUSE SWITCH TO SINGLE SIG
+TX-16.unknown_field	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-09.attacker_internal_key	single	SIGN 1/1 ours=0 send=199000 change=0 fee=1000 AMOUNTS_UNVERIFIED
+TX-09.attacker_internal_key	multi	REFUSE SWITCH TO SINGLE SIG
+TX-09.attacker_internal_key	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-09.hidden_taptree	single	SIGN 1/1 ours=0 send=199000 change=0 fee=1000 AMOUNTS_UNVERIFIED
+TX-09.hidden_taptree	multi	REFUSE SWITCH TO SINGLE SIG
+TX-09.hidden_taptree	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-07	single	PARSE BAD FORMAT
+TX-07	multi	PARSE BAD FORMAT
+TX-07	multi+desc	PARSE BAD FORMAT
+TX-08.SINGLE	single	REFUSE SIGHASH NOT ALL
+TX-08.SINGLE	multi	REFUSE SWITCH TO SINGLE SIG
+TX-08.SINGLE	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-08.SINGLE_ACP	single	REFUSE SIGHASH NOT ALL
+TX-08.SINGLE_ACP	multi	REFUSE SWITCH TO SINGLE SIG
+TX-08.SINGLE_ACP	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-08.NONE	single	REFUSE SIGHASH NOT ALL
+TX-08.NONE	multi	REFUSE SWITCH TO SINGLE SIG
+TX-08.NONE	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-08.NONE_ACP	single	REFUSE SIGHASH NOT ALL
+TX-08.NONE_ACP	multi	REFUSE SWITCH TO SINGLE SIG
+TX-08.NONE_ACP	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-08.ANYONECANPAY	single	REFUSE SIGHASH NOT ALL
+TX-08.ANYONECANPAY	multi	REFUSE SWITCH TO SINGLE SIG
+TX-08.ANYONECANPAY	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-02	single	REFUSE FEE UNKNOWN
+TX-02	multi	REFUSE FEE UNKNOWN
+TX-02	multi+desc	REFUSE FEE UNKNOWN
+XTRAS.OP_RETURN_BURN	single	REFUSE FEE UNKNOWN
+XTRAS.OP_RETURN_BURN	multi	REFUSE FEE UNKNOWN
+XTRAS.OP_RETURN_BURN	multi+desc	REFUSE FEE UNKNOWN
+TX-10	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
+TX-10	multi	REFUSE SWITCH TO SINGLE SIG
+TX-10	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-15.mismatch	single	SIGN 1/1 ours=1 send=4500000 change=4500000 fee=1000000 HIGH_FEE AMOUNTS_UNVERIFIED
+TX-15.mismatch	multi	REFUSE SWITCH TO SINGLE SIG
+TX-15.mismatch	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-11.v0_bech32m	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
+TX-11.v0_bech32m	multi	REFUSE SWITCH TO SINGLE SIG
+TX-11.v0_bech32m	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-11.v1_bech32	single	SIGN 1/1 ours=0 send=199000 change=0 fee=1000 AMOUNTS_UNVERIFIED
+TX-11.v1_bech32	multi	REFUSE SWITCH TO SINGLE SIG
+TX-11.v1_bech32	multi+desc	REFUSE SWITCH TO SINGLE SIG
+XTRAS.NEGATIVE_AMOUNT	single	PARSE UNSUPPORTED (V2?)
+XTRAS.NEGATIVE_AMOUNT	multi	PARSE UNSUPPORTED (V2?)
+XTRAS.NEGATIVE_AMOUNT	multi+desc	PARSE UNSUPPORTED (V2?)
+XTRAS.NEGATIVE_FEE	single	REFUSE FEE UNKNOWN
+XTRAS.NEGATIVE_FEE	multi	REFUSE FEE UNKNOWN
+XTRAS.NEGATIVE_FEE	multi+desc	REFUSE FEE UNKNOWN
+XTRAS.MIXED_INPUT_TYPES	single	SIGN 1/2 ours=1 send=99500 change=99500 fee=201000 HIGH_FEE AMOUNTS_UNVERIFIED
+XTRAS.MIXED_INPUT_TYPES	multi	REFUSE SWITCH TO SINGLE SIG
+XTRAS.MIXED_INPUT_TYPES	multi+desc	REFUSE SWITCH TO SINGLE SIG
+XTRAS.WITNESS_UTXO_MISMATCH	single	REFUSE INPUT KEY MISMATCH
+XTRAS.WITNESS_UTXO_MISMATCH	multi	REFUSE INPUT KEY MISMATCH
+XTRAS.WITNESS_UTXO_MISMATCH	multi+desc	REFUSE INPUT KEY MISMATCH
+XTRAS.MISMATCHED_WITNESS_SCRIPT	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
+XTRAS.MISMATCHED_WITNESS_SCRIPT	multi	REFUSE SWITCH TO SINGLE SIG
+XTRAS.MISMATCHED_WITNESS_SCRIPT	multi+desc	REFUSE SWITCH TO SINGLE SIG
+XTRAS.HUGE_FEE	single	SIGN 1/1 ours=1 send=50000 change=50000 fee=900000 HIGH_FEE AMOUNTS_UNVERIFIED
+XTRAS.HUGE_FEE	multi	REFUSE SWITCH TO SINGLE SIG
+XTRAS.HUGE_FEE	multi+desc	REFUSE SWITCH TO SINGLE SIG
+XTRAS.DUST_OUTPUT	single	SIGN 1/1 ours=1 send=100 change=100000 fee=99900 HIGH_FEE AMOUNTS_UNVERIFIED
+XTRAS.DUST_OUTPUT	multi	REFUSE SWITCH TO SINGLE SIG
+XTRAS.DUST_OUTPUT	multi+desc	REFUSE SWITCH TO SINGLE SIG
+XTRAS.LOCKTIME_FUTURE	single	SIGN 1/1 ours=1 send=49500 change=49500 fee=1000 AMOUNTS_UNVERIFIED
+XTRAS.LOCKTIME_FUTURE	multi	REFUSE SWITCH TO SINGLE SIG
+XTRAS.LOCKTIME_FUTURE	multi+desc	REFUSE SWITCH TO SINGLE SIG
+XTRAS.RBF_SIGNAL	single	SIGN 1/1 ours=1 send=49500 change=49500 fee=1000 AMOUNTS_UNVERIFIED
+XTRAS.RBF_SIGNAL	multi	REFUSE SWITCH TO SINGLE SIG
+XTRAS.RBF_SIGNAL	multi+desc	REFUSE SWITCH TO SINGLE SIG
+XTRAS.NETWORK_HRP_MISMATCH	single	REFUSE TESTNET NOT SUPPORTED
+XTRAS.NETWORK_HRP_MISMATCH	multi	REFUSE TESTNET NOT SUPPORTED
+XTRAS.NETWORK_HRP_MISMATCH	multi+desc	REFUSE TESTNET NOT SUPPORTED
+XTRAS.TRUNCATED_PSBT	single	PARSE TRUNCATED
+XTRAS.TRUNCATED_PSBT	multi	PARSE TRUNCATED
+XTRAS.TRUNCATED_PSBT	multi+desc	PARSE TRUNCATED
+NORMAL-1_p2wpkh_V2	single	PARSE UNSUPPORTED (V2?)
+NORMAL-1_p2wpkh_V2	multi	PARSE UNSUPPORTED (V2?)
+NORMAL-1_p2wpkh_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+NORMAL-2_wrapped_V2	single	PARSE UNSUPPORTED (V2?)
+NORMAL-2_wrapped_V2	multi	PARSE UNSUPPORTED (V2?)
+NORMAL-2_wrapped_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+NORMAL-3_legacy_V2	single	PARSE UNSUPPORTED (V2?)
+NORMAL-3_legacy_V2	multi	PARSE UNSUPPORTED (V2?)
+NORMAL-3_legacy_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+NORMAL-4_multi_input_V2	single	PARSE UNSUPPORTED (V2?)
+NORMAL-4_multi_input_V2	multi	PARSE UNSUPPORTED (V2?)
+NORMAL-4_multi_input_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+TX-03.fee_inflate_V2	single	PARSE UNSUPPORTED (V2?)
+TX-03.fee_inflate_V2	multi	PARSE UNSUPPORTED (V2?)
+TX-03.fee_inflate_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+XTRAS.NEGATIVE_FEE_V2	single	PARSE UNSUPPORTED (V2?)
+XTRAS.NEGATIVE_FEE_V2	multi	PARSE UNSUPPORTED (V2?)
+XTRAS.NEGATIVE_FEE_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+XTRAS.OP_RETURN_BURN_V2	single	PARSE UNSUPPORTED (V2?)
+XTRAS.OP_RETURN_BURN_V2	multi	PARSE UNSUPPORTED (V2?)
+XTRAS.OP_RETURN_BURN_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+XTRAS.HUGE_FEE_V2	single	PARSE UNSUPPORTED (V2?)
+XTRAS.HUGE_FEE_V2	multi	PARSE UNSUPPORTED (V2?)
+XTRAS.HUGE_FEE_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+TX-19.relative_time_V2	single	PARSE UNSUPPORTED (V2?)
+TX-19.relative_time_V2	multi	PARSE UNSUPPORTED (V2?)
+TX-19.relative_time_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+TX-19.height_far_V2	single	PARSE UNSUPPORTED (V2?)
+TX-19.height_far_V2	multi	PARSE UNSUPPORTED (V2?)
+TX-19.height_far_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+XTRAS.MISSING_UTXO	single	REFUSE FEE UNKNOWN
+XTRAS.MISSING_UTXO	multi	REFUSE FEE UNKNOWN
+XTRAS.MISSING_UTXO	multi+desc	REFUSE FEE UNKNOWN
+XTRAS.MISSING_UTXO_V2	single	PARSE UNSUPPORTED (V2?)
+XTRAS.MISSING_UTXO_V2	multi	PARSE UNSUPPORTED (V2?)
+XTRAS.MISSING_UTXO_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+XTRAS.V2_MISSING_PREVOUT	single	PARSE UNSUPPORTED (V2?)
+XTRAS.V2_MISSING_PREVOUT	multi	PARSE UNSUPPORTED (V2?)
+XTRAS.V2_MISSING_PREVOUT	multi+desc	PARSE UNSUPPORTED (V2?)
+XTRAS.UNSUPPORTED_PSBT_VERSION	single	PARSE UNSUPPORTED (V2?)
+XTRAS.UNSUPPORTED_PSBT_VERSION	multi	PARSE UNSUPPORTED (V2?)
+XTRAS.UNSUPPORTED_PSBT_VERSION	multi+desc	PARSE UNSUPPORTED (V2?)
+XTRAS.UNSUPPORTED_PSBT_VERSION_V2	single	PARSE UNSUPPORTED (V2?)
+XTRAS.UNSUPPORTED_PSBT_VERSION_V2	multi	PARSE UNSUPPORTED (V2?)
+XTRAS.UNSUPPORTED_PSBT_VERSION_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+XTRAS.ANYONE_CAN_SPEND_OUTPUT	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
+XTRAS.ANYONE_CAN_SPEND_OUTPUT	multi	REFUSE SWITCH TO SINGLE SIG
+XTRAS.ANYONE_CAN_SPEND_OUTPUT	multi+desc	REFUSE SWITCH TO SINGLE SIG
+XTRAS.ANYONE_CAN_SPEND_OUTPUT_V2	single	PARSE UNSUPPORTED (V2?)
+XTRAS.ANYONE_CAN_SPEND_OUTPUT_V2	multi	PARSE UNSUPPORTED (V2?)
+XTRAS.ANYONE_CAN_SPEND_OUTPUT_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+XTRAS.BARE_MULTISIG_OUTPUT	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
+XTRAS.BARE_MULTISIG_OUTPUT	multi	REFUSE SWITCH TO SINGLE SIG
+XTRAS.BARE_MULTISIG_OUTPUT	multi+desc	REFUSE SWITCH TO SINGLE SIG
+XTRAS.BARE_MULTISIG_OUTPUT_V2	single	PARSE UNSUPPORTED (V2?)
+XTRAS.BARE_MULTISIG_OUTPUT_V2	multi	PARSE UNSUPPORTED (V2?)
+XTRAS.BARE_MULTISIG_OUTPUT_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+XTRAS.WITNESS_NONWITNESS_MISMATCH	single	REFUSE INPUT KEY MISMATCH
+XTRAS.WITNESS_NONWITNESS_MISMATCH	multi	REFUSE INPUT KEY MISMATCH
+XTRAS.WITNESS_NONWITNESS_MISMATCH	multi+desc	REFUSE INPUT KEY MISMATCH
+TX-19.timestamp_future	single	SIGN 1/1 ours=1 send=49500 change=49500 fee=1000 AMOUNTS_UNVERIFIED
+TX-19.timestamp_future	multi	REFUSE SWITCH TO SINGLE SIG
+TX-19.timestamp_future	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-19.height_far	single	SIGN 1/1 ours=1 send=49500 change=49500 fee=1000 AMOUNTS_UNVERIFIED
+TX-19.height_far	multi	REFUSE SWITCH TO SINGLE SIG
+TX-19.height_far	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-19.height_near	single	SIGN 1/1 ours=1 send=49500 change=49500 fee=1000 AMOUNTS_UNVERIFIED
+TX-19.height_near	multi	REFUSE SWITCH TO SINGLE SIG
+TX-19.height_near	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-19.inert	single	SIGN 1/1 ours=1 send=49500 change=49500 fee=1000 AMOUNTS_UNVERIFIED
+TX-19.inert	multi	REFUSE SWITCH TO SINGLE SIG
+TX-19.inert	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-19.relative_blocks	single	SIGN 1/1 ours=1 send=49500 change=49500 fee=1000 AMOUNTS_UNVERIFIED
+TX-19.relative_blocks	multi	REFUSE SWITCH TO SINGLE SIG
+TX-19.relative_blocks	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-19.relative_time	single	SIGN 1/1 ours=1 send=49500 change=49500 fee=1000 AMOUNTS_UNVERIFIED
+TX-19.relative_time	multi	REFUSE SWITCH TO SINGLE SIG
+TX-19.relative_time	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-19.relative_rbf_masquerade	single	SIGN 1/1 ours=1 send=49500 change=49500 fee=1000 AMOUNTS_UNVERIFIED
+TX-19.relative_rbf_masquerade	multi	REFUSE SWITCH TO SINGLE SIG
+TX-19.relative_rbf_masquerade	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-20.cltv_time	single	SIGN 1/1 ours=1 send=49500 change=49500 fee=1000 AMOUNTS_UNVERIFIED
+TX-20.cltv_time	multi	REFUSE SWITCH TO SINGLE SIG
+TX-20.cltv_time	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-20.cltv_height	single	SIGN 1/1 ours=1 send=49500 change=49500 fee=1000 AMOUNTS_UNVERIFIED
+TX-20.cltv_height	multi	REFUSE SWITCH TO SINGLE SIG
+TX-20.cltv_height	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-20.csv_relative	single	SIGN 1/1 ours=1 send=49500 change=49500 fee=1000 AMOUNTS_UNVERIFIED
+TX-20.csv_relative	multi	REFUSE SWITCH TO SINGLE SIG
+TX-20.csv_relative	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-21.claims_us_pays_other	single	REFUSE CHANGE KEY MISMATCH
+TX-21.claims_us_pays_other	multi	REFUSE SWITCH TO SINGLE SIG
+TX-21.claims_us_pays_other	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-21.claims_us_pays_other_V2	single	PARSE UNSUPPORTED (V2?)
+TX-21.claims_us_pays_other_V2	multi	PARSE UNSUPPORTED (V2?)
+TX-21.claims_us_pays_other_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+TX-21.pays_us_claims_other	single	SIGN 1/1 ours=0 send=199000 change=0 fee=1000 AMOUNTS_UNVERIFIED
+TX-21.pays_us_claims_other	multi	REFUSE SWITCH TO SINGLE SIG
+TX-21.pays_us_claims_other	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-21.pays_us_claims_other_V2	single	PARSE UNSUPPORTED (V2?)
+TX-21.pays_us_claims_other_V2	multi	PARSE UNSUPPORTED (V2?)
+TX-21.pays_us_claims_other_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+TX-21.taproot_claims_other	single	REFUSE TYPE NOT SUPPORTED
+TX-21.taproot_claims_other	multi	REFUSE TYPE NOT SUPPORTED
+TX-21.taproot_claims_other	multi+desc	REFUSE TYPE NOT SUPPORTED
+TX-22.surplus_paths	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
+TX-22.surplus_paths	multi	REFUSE SWITCH TO SINGLE SIG
+TX-22.surplus_paths	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-22.taproot_surplus_internal_key	single	REFUSE TYPE NOT SUPPORTED
+TX-22.taproot_surplus_internal_key	multi	REFUSE TYPE NOT SUPPORTED
+TX-22.taproot_surplus_internal_key	multi+desc	REFUSE TYPE NOT SUPPORTED
+TX-22.mixed_path_maps	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
+TX-22.mixed_path_maps	multi	REFUSE SWITCH TO SINGLE SIG
+TX-22.mixed_path_maps	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-22.mixed_path_maps_input	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
+TX-22.mixed_path_maps_input	multi	REFUSE SWITCH TO SINGLE SIG
+TX-22.mixed_path_maps_input	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-23.forged_output_claim	single	REFUSE CHANGE KEY MISMATCH
+TX-23.forged_output_claim	multi	REFUSE SWITCH TO SINGLE SIG
+TX-23.forged_output_claim	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-23.forged_output_claim_V2	single	PARSE UNSUPPORTED (V2?)
+TX-23.forged_output_claim_V2	multi	PARSE UNSUPPORTED (V2?)
+TX-23.forged_output_claim_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+TX-23.forged_taproot_claim	single	REFUSE TYPE NOT SUPPORTED
+TX-23.forged_taproot_claim	multi	REFUSE TYPE NOT SUPPORTED
+TX-23.forged_taproot_claim	multi+desc	REFUSE TYPE NOT SUPPORTED
+TX-23.forged_input_claim	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
+TX-23.forged_input_claim	multi	REFUSE SWITCH TO SINGLE SIG
+TX-23.forged_input_claim	multi+desc	REFUSE SWITCH TO SINGLE SIG
+TX-23.forged_input_claim_V2	single	PARSE UNSUPPORTED (V2?)
+TX-23.forged_input_claim_V2	multi	PARSE UNSUPPORTED (V2?)
+TX-23.forged_input_claim_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+TX-04	single	REFUSE SWITCH TO MULTI SIG
+TX-04	multi	SIGN 1/2 ours=0 send=199000 change=0 fee=1000 CHANGE_UNVERIFIED
+TX-04	multi+desc	SIGN 1/2 ours=1 send=99500 change=99500 fee=1000
+TX-13.duplicate	single	PARSE BAD FORMAT
+TX-13.duplicate	multi	PARSE BAD FORMAT
+TX-13.duplicate	multi+desc	PARSE BAD FORMAT
+TX-13.substitute	single	REFUSE TESTNET NOT SUPPORTED
+TX-13.substitute	multi	REFUSE TESTNET NOT SUPPORTED
+TX-13.substitute	multi+desc	REFUSE TESTNET NOT SUPPORTED
+TX-13.threshold	single	REFUSE SWITCH TO MULTI SIG
+TX-13.threshold	multi	SIGN 1/1 ours=0 send=99000 change=0 fee=1000 CHANGE_UNVERIFIED
+TX-13.threshold	multi+desc	REFUSE INPUT NOT IN WALLET
+TX-13.reorder	single	REFUSE SWITCH TO MULTI SIG
+TX-13.reorder	multi	SIGN 1/1 ours=0 send=99000 change=0 fee=1000 CHANGE_UNVERIFIED
+TX-13.reorder	multi+desc	REFUSE INPUT NOT IN WALLET
+TX-05	single	REFUSE TESTNET NOT SUPPORTED
+TX-05	multi	REFUSE TESTNET NOT SUPPORTED
+TX-05	multi+desc	REFUSE TESTNET NOT SUPPORTED
+TX-21.honest_foreign_annotated_spend	single	REFUSE SWITCH TO MULTI SIG
+TX-21.honest_foreign_annotated_spend	multi	SIGN 1/1 ours=0 send=199000 change=0 fee=1000
+TX-21.honest_foreign_annotated_spend	multi+desc	SIGN 1/1 ours=0 send=199000 change=0 fee=1000
+TX-21.ms_fp_relabeled	single	REFUSE SWITCH TO MULTI SIG
+TX-21.ms_fp_relabeled	multi	SIGN 1/1 ours=0 send=199000 change=0 fee=1000
+TX-21.ms_fp_relabeled	multi+desc	SIGN 1/1 ours=0 send=199000 change=0 fee=1000
+TX-21.ms_repointed_keys	single	REFUSE SWITCH TO MULTI SIG
+TX-21.ms_repointed_keys	multi	SIGN 1/1 ours=0 send=199000 change=0 fee=1000 CHANGE_UNVERIFIED
+TX-21.ms_repointed_keys	multi+desc	SIGN 1/1 ours=0 send=199000 change=0 fee=1000
+TX-21.ms_repointed_spk	single	REFUSE SWITCH TO MULTI SIG
+TX-21.ms_repointed_spk	multi	SIGN 1/1 ours=0 send=199000 change=0 fee=1000 CHANGE_UNVERIFIED
+TX-21.ms_repointed_spk	multi+desc	SIGN 1/1 ours=0 send=199000 change=0 fee=1000
+TX-22.ms_decoy_first	single	REFUSE SWITCH TO MULTI SIG
+TX-22.ms_decoy_first	multi	SIGN 1/1 ours=0 send=199000 change=0 fee=1000 CHANGE_UNVERIFIED
+TX-22.ms_decoy_first	multi+desc	SIGN 1/1 ours=0 send=199000 change=0 fee=1000
+TX-22.ms_decoy_last	single	REFUSE SWITCH TO MULTI SIG
+TX-22.ms_decoy_last	multi	SIGN 1/1 ours=0 send=199000 change=0 fee=1000 CHANGE_UNVERIFIED
+TX-22.ms_decoy_last	multi+desc	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000
+XTRAS.PREV_TX_TXID_MISMATCH	single	REFUSE PREV TX MISMATCH
+XTRAS.PREV_TX_TXID_MISMATCH	multi	REFUSE PREV TX MISMATCH
+XTRAS.PREV_TX_TXID_MISMATCH	multi+desc	REFUSE PREV TX MISMATCH
+XTRAS.PREV_TX_TXID_MISMATCH_V2	single	PARSE UNSUPPORTED (V2?)
+XTRAS.PREV_TX_TXID_MISMATCH_V2	multi	PARSE UNSUPPORTED (V2?)
+XTRAS.PREV_TX_TXID_MISMATCH_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+XTRAS.OP_RETURN_DIRECT_PUSH	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
+XTRAS.OP_RETURN_DIRECT_PUSH	multi	REFUSE SWITCH TO SINGLE SIG
+XTRAS.OP_RETURN_DIRECT_PUSH	multi+desc	REFUSE SWITCH TO SINGLE SIG
+XTRAS.OP_RETURN_DIRECT_PUSH_V2	single	PARSE UNSUPPORTED (V2?)
+XTRAS.OP_RETURN_DIRECT_PUSH_V2	multi	PARSE UNSUPPORTED (V2?)
+XTRAS.OP_RETURN_DIRECT_PUSH_V2	multi+desc	PARSE UNSUPPORTED (V2?)
+XTRAS.LEGACY_P2SH_WITNESS_ONLY	single	REFUSE INPUT KEY MISMATCH
+XTRAS.LEGACY_P2SH_WITNESS_ONLY	multi	REFUSE INPUT KEY MISMATCH
+XTRAS.LEGACY_P2SH_WITNESS_ONLY	multi+desc	REFUSE INPUT NOT IN WALLET
+TX-24.xpub_fingerprint_mismatch	single	REFUSE SWITCH TO MULTI SIG
+TX-24.xpub_fingerprint_mismatch	multi	SIGN 1/1 ours=0 send=199000 change=0 fee=1000 CHANGE_UNVERIFIED
+TX-24.xpub_fingerprint_mismatch	multi+desc	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000
+TX-21.ms_foreign_quorum	single	REFUSE SWITCH TO MULTI SIG
+TX-21.ms_foreign_quorum	multi	SIGN 1/1 ours=0 send=199000 change=0 fee=1000 CHANGE_UNVERIFIED
+TX-21.ms_foreign_quorum	multi+desc	SIGN 1/1 ours=0 send=199000 change=0 fee=1000
+TX-21.ms_foreign_quorum_no_xpubs	single	REFUSE SWITCH TO MULTI SIG
+TX-21.ms_foreign_quorum_no_xpubs	multi	SIGN 1/1 ours=0 send=199000 change=0 fee=1000 CHANGE_UNVERIFIED
+TX-21.ms_foreign_quorum_no_xpubs	multi+desc	SIGN 1/1 ours=0 send=199000 change=0 fee=1000
+TX-21.ms_honest_change_no_xpubs	single	REFUSE SWITCH TO MULTI SIG
+TX-21.ms_honest_change_no_xpubs	multi	SIGN 1/1 ours=0 send=199000 change=0 fee=1000 CHANGE_UNVERIFIED
+TX-21.ms_honest_change_no_xpubs	multi+desc	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000
+ENC-01.v2_keys_in_v0	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
+ENC-01.v2_keys_in_v0	multi	REFUSE SWITCH TO SINGLE SIG
+ENC-01.v2_keys_in_v0	multi+desc	REFUSE SWITCH TO SINGLE SIG
+ENC-02.v2_sequence_in_v0	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
+ENC-02.v2_sequence_in_v0	multi	REFUSE SWITCH TO SINGLE SIG
+ENC-02.v2_sequence_in_v0	multi+desc	REFUSE SWITCH TO SINGLE SIG
+ENC-03.v2_keys_hide_change	single	REFUSE CHANGE KEY MISMATCH
+ENC-03.v2_keys_hide_change	multi	REFUSE SWITCH TO SINGLE SIG
+ENC-03.v2_keys_hide_change	multi+desc	REFUSE SWITCH TO SINGLE SIG
+ENC-04.scope_beyond_tx	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
+ENC-04.scope_beyond_tx	multi	REFUSE SWITCH TO SINGLE SIG
+ENC-04.scope_beyond_tx	multi+desc	REFUSE SWITCH TO SINGLE SIG
+ENC-05.v0_tx_in_v2	single	PARSE UNSUPPORTED (V2?)
+ENC-05.v0_tx_in_v2	multi	PARSE UNSUPPORTED (V2?)
+ENC-05.v0_tx_in_v2	multi+desc	PARSE UNSUPPORTED (V2?)
+ENC-06.v2_outpoint_conflict	single	PARSE UNSUPPORTED (V2?)
+ENC-06.v2_outpoint_conflict	multi	PARSE UNSUPPORTED (V2?)
+ENC-06.v2_outpoint_conflict	multi+desc	PARSE UNSUPPORTED (V2?)
+ENC-07.duplicate_conflicting_utxo	single	PARSE BAD FORMAT
+ENC-07.duplicate_conflicting_utxo	multi	PARSE BAD FORMAT
+ENC-07.duplicate_conflicting_utxo	multi+desc	PARSE BAD FORMAT
+ENC-08.nonminimal_keylen	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
+ENC-08.nonminimal_keylen	multi	REFUSE SWITCH TO SINGLE SIG
+ENC-08.nonminimal_keylen	multi+desc	REFUSE SWITCH TO SINGLE SIG
+ENC-09.v2_prevtxid_in_v0	single	REFUSE PREV TX MISMATCH
+ENC-09.v2_prevtxid_in_v0	multi	REFUSE PREV TX MISMATCH
+ENC-09.v2_prevtxid_in_v0	multi+desc	REFUSE PREV TX MISMATCH
+ENC-10.v2_global_locktime_in_v0	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
+ENC-10.v2_global_locktime_in_v0	multi	REFUSE SWITCH TO SINGLE SIG
+ENC-10.v2_global_locktime_in_v0	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-op_return_burn	single	SIGN 1/1 ours=0 send=199000 change=0 fee=1000 BURNS AMOUNTS_UNVERIFIED
+OWN-op_return_burn	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-op_return_burn	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-op_return_zero	single	SIGN 1/1 ours=0 send=199000 change=0 fee=1000 AMOUNTS_UNVERIFIED
+OWN-op_return_zero	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-op_return_zero	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-fee_quarter_limit	single	SIGN 1/1 ours=1 send=100000 change=875000 fee=25000 AMOUNTS_UNVERIFIED
+OWN-fee_quarter_limit	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-fee_quarter_limit	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-fee_quarter_over	single	SIGN 1/1 ours=1 send=100000 change=874999 fee=25001 HIGH_FEE AMOUNTS_UNVERIFIED
+OWN-fee_quarter_over	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-fee_quarter_over	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-fee_tenth_limit	single	SIGN 1/1 ours=1 send=0 change=900000 fee=100000 HIGH_FEE AMOUNTS_UNVERIFIED
+OWN-fee_tenth_limit	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-fee_tenth_limit	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-fee_tenth_under	single	SIGN 1/1 ours=1 send=0 change=900001 fee=99999 AMOUNTS_UNVERIFIED
+OWN-fee_tenth_under	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-fee_tenth_under	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-change_index_limit	single	SIGN 1/1 ours=1 send=500000 change=499000 fee=1000 AMOUNTS_UNVERIFIED
+OWN-change_index_limit	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-change_index_limit	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-change_index_over	single	SIGN 1/1 ours=1 send=500000 change=499000 fee=1000 AMOUNTS_UNVERIFIED HIGH_CHANGE_INDEX
+OWN-change_index_over	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-change_index_over	multi+desc	REFUSE SWITCH TO SINGLE SIG
+BIP174 Network transaction, not PSBT format	parser	NOT A PSBT
+BIP174 PSBT missing outputs	parser	TRUNCATED
+BIP174 PSBT where one input has a filled scriptSig in the unsigned tx	parser	BAD FORMAT
+BIP174 PSBT where inputs and outputs are provided but without an unsigned tx	parser	NO UNSIGNED TX
+BIP174 PSBT with duplicate keys in an input	parser	BAD FORMAT
+BIP174 PSBT with invalid global transaction typed key	parser	NO UNSIGNED TX
+BIP174 PSBT with invalid input witness utxo typed key	parser	BAD FORMAT
+BIP174 PSBT with invalid pubkey length for input partial signature typed key	parser	BAD FORMAT
+BIP174 PSBT with invalid redeemscript typed key	parser	BAD FORMAT
+BIP174 PSBT with invalid witnessscript typed key	parser	BAD FORMAT
+BIP174 PSBT with invalid pubkey in input BIP 32 derivation paths typed key	parser	BAD FORMAT
+BIP174 PSBT with invalid non-witness utxo typed key	parser	BAD FORMAT
+BIP174 PSBT with invalid final scriptsig typed key	parser	BAD FORMAT
+BIP174 PSBT with invalid final script witness typed key	parser	BAD FORMAT
+BIP174 PSBT with invalid pubkey in output BIP 32 derivation paths typed key	parser	BAD FORMAT
+BIP174 PSBT with invalid input sighash type typed key	parser	BAD FORMAT
+BIP174 PSBT with invalid output redeemScript typed key	parser	BAD FORMAT
+BIP174 PSBT with invalid output witnessScript typed key	parser	BAD FORMAT
+BIP174 PSBT with unsigned tx serialized with witness serialization format	parser	BAD FORMAT
+BIP174 PSBT with an invalid value data due to its size being not the stated size	parser	BAD FORMAT

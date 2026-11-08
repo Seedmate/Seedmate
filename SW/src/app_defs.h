@@ -52,13 +52,15 @@
 #define cDICE_MODE_n_opt 2
 #define cHASH_MODE_n_opt 2
 #define cRESOURCE_n_opt 6
-#define cSETTINGS_n_opt 6
+#define cSETTINGS_n_opt 7
 #define cSETTINGS_SEEDQR 0
 #define cSETTINGS_SDWRITE 1
 #define cSETTINGS_DECOY 2
 #define cSETTINGS_STOPWATCH 3
-#define cSETTINGS_MCU_SERIAL 4
-#define cSETTINGS_UPDATE_FW 5
+#define cSETTINGS_IDLE 4
+#define cSETTINGS_MCU_SERIAL 5
+#define cSETTINGS_UPDATE_FW 6
+#define cIDLE_n_opt 5               // AUTO UNLOAD: never, 5, 10, 20, 30 minutes
 #define cEND_OF_LINE 150
 #define cENTROPY_BITS12W 127
 #define cENTROPY_BITS24W 255

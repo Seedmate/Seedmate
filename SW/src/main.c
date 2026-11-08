@@ -93,6 +93,12 @@
 #include "vault.h"
 #include "nostr.h"
 #include "crypto/fault_handler.h"
+#include <setjmp.h>
+
+// The idle timer of AUTO UNLOAD runs in app_tasks(): every wait for a key calls it
+static void app_tasks(void);
+static void idle_touch(void);
+static bool idle_expired(void);
 
 
 
@@ -440,6 +446,7 @@ int card_view_page = 0;
 #define LED_BUSY_MS 150u
 static void led_busy(void) {
     static uint32_t last;
+    idle_touch();                   // Working: this is not idle time
     if ((uint32_t)(_CP0_GET_COUNT() - last) >= LED_BUSY_MS * (CPU_CLOCK_FREQUENCY / 2000u)) {
         last = _CP0_GET_COUNT();
         LED = !LED;
@@ -594,7 +601,7 @@ void debug_print_sss_state(void) {
     bool redraw = true;
     
     while(1) {
-        SYS_Tasks(); // Keep hardware watchdog and background tasks happy
+        app_tasks(); // Keep hardware watchdog and background tasks happy
         
         if (redraw) {
             black_screen();
@@ -774,6 +781,42 @@ typedef enum
 } state_t;
 
 state_t estado = INIT;
+
+// ============================================================================
+// AUTO UNLOAD: no key for the chosen time wipes the session (SETTINGS)
+// ============================================================================
+
+uint8_t idle_option = 0;                    // Index in menu_idle[]; 0 = never
+static const uint8_t idle_minutes[cIDLE_n_opt] = {0, 5, 10, 20, 30};
+#define IDLE_TICKS_PER_S (CPU_CLOCK_FREQUENCY / 2u)
+static jmp_buf idle_jump;                   // The state machine loop of main()
+static bool idle_jump_set = false;
+static bool idle_hold = false;              // The scanner interrupt is on: leave only through BACK
+static uint32_t idle_mark;
+static uint16_t idle_elapsed;               // Seconds without a key
+
+static void idle_touch(void) {
+    idle_mark = _CP0_GET_COUNT();
+    idle_elapsed = 0;
+}
+
+static bool idle_expired(void) {
+    if (idle_option == 0) return false;
+    if (estado == MAIN || estado == INIT ||     // Nothing loaded there
+        BT_OK == 0 || BT1 == 0 || BT2 == 0 || BT4 == 0 || BT5 == 0 || BT6 == 0) {
+        idle_touch();
+        return false;
+    }
+    while ((uint32_t)(_CP0_GET_COUNT() - idle_mark) >= IDLE_TICKS_PER_S) {
+        idle_mark += IDLE_TICKS_PER_S;
+        idle_elapsed++;
+    }
+    return idle_elapsed >= idle_minutes[idle_option] * 60u;
+}
+
+static void app_tasks(void) {
+    if (idle_jump_set && !idle_hold && idle_expired()) longjmp(idle_jump, 1);
+}
 
 // Button enum
 typedef enum
@@ -1251,7 +1294,7 @@ static bool editor_review_passphrase(const char* text, int len) {
 
     while (BT_OK == 0 || BT1 == 0) SYS_Tasks();
     while (1) {
-        SYS_Tasks();
+        app_tasks();
         if (BT_OK == 0) {
             delay_ms(30);
             if (BT_OK == 0) {
@@ -1332,7 +1375,7 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
     black_screen();
 
     while (1) {
-        SYS_Tasks();
+        app_tasks();
 
         if (full_redraw) {
             drawFastHLine(0, KBD_SEPARATOR_Y, 160, ST7735_WHITE);
@@ -4317,6 +4360,12 @@ static bool psbt_view_address(const uint8_t *script, uint32_t len, char *out) {
     return false;
 }
 
+// A script that cannot be shown as an address cannot be checked by eye: yellow,
+// except the OP_RETURN (only data: an amount in one has its own warning)
+static uint16_t psbt_no_address_color(const psbt_output_t *out) {
+    return psbt_script_type(out->script, out->script_len) == PSBT_SCRIPT_OP_RETURN ? ST7735_WHITE : ST7735_YELLOW;
+}
+
 // Amounts use one unit each: under 100 000 sats in SAT ("48 000 SAT"),
 // otherwise BTC with the 8 decimals grouped ("0.01 500 000 BTC"), so the
 // magnitude shows at a glance. The unit is always written next to the number.
@@ -4557,6 +4606,7 @@ static struct {
     uint8_t in[PSBT_OWNER_CACHE];       // psbt_owner_t
     uint8_t out[PSBT_OWNER_CACHE];
     uint32_t mine_inputs;               // Ours and signed or to sign
+    bool high_fee;                      // The fee deserves a warning
 } psbt_checked;
 
 // The derivation psbt_check_owner() reports: the first with our fingerprint,
@@ -4956,7 +5006,7 @@ static void psbt_view_flow(const psbt_t *psbt) {
     if (psbt_get_fee(psbt, &fee)) {
         outs[n_out].sats = fee;
         outs[n_out].color = ST7735_YELLOW;
-        strcpy(label[n_out], "FEE");
+        strcpy(label[n_out], (psbt_checked.valid && psbt_checked.high_fee) ? "HIGH FEE" : "FEE");
         psbt_format_amount_short(fee, amount[n_out]);
         n_out++;
     }
@@ -5190,12 +5240,14 @@ static void psbt_view_output(const psbt_t *psbt, uint32_t index) {
         draw_grouped(addr, y);                      // 5 groups of 4 per line
         y += 10 * (int)((strlen(addr) + 19) / 20);
     } else {
-        drawtext(5, y, addr, ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, y, addr, psbt_no_address_color(&out), ST7735_BLACK, 1);
         y += 10;
     }
     y += 4;
 
-    if (plain) {
+    if (out.amount > 0 && psbt_script_type(out.script, out.script_len) == PSBT_SCRIPT_OP_RETURN) {
+        drawtext(5, y, "THIS AMOUNT IS BURNED", ST7735_YELLOW, ST7735_BLACK, 1);
+    } else if (plain) {
         uint16_t color = psbt_owner_text(owner, &kp, true, text);
         drawtext(5, y, text, color, ST7735_BLACK, 1);
     } else {
@@ -5276,7 +5328,7 @@ static bool show_psbt_details(const uint8_t *data, uint32_t len) {
         drawtext(5, 20, reason, ST7735_WHITE, ST7735_BLACK, 1);
         grid_back_only();
         while (BT1 == 0) SYS_Tasks();   // Release the key that opened us
-        while (BT1 == 1) SYS_Tasks();
+        while (BT1 == 1) app_tasks();
         return false;
     }
     return psbt_viewer(&psbt);
@@ -5299,7 +5351,7 @@ static int psbt_wait_key(void) {
     led_done();                     // Waiting for the user: nothing running
     while (BT_OK == 0 || BT1 == 0 || BT5 == 0 || BT4 == 0) SYS_Tasks();
     delay_ms(30);
-    while (BT_OK == 1 && BT1 == 1 && BT5 == 1 && BT4 == 1) SYS_Tasks();
+    while (BT_OK == 1 && BT1 == 1 && BT5 == 1 && BT4 == 1) app_tasks();
     delay_ms(30);
     if (BT1 == 0) return BACK_BT;
     if (BT_OK == 0) return OK_BT;
@@ -5682,7 +5734,7 @@ static void show_ur_animated_qr(const uint8_t *psbt, uint32_t len) {
         for (uint32_t t = 0; t < UR_FRAME_DELAY_MS / 10; t++) {
             if (BT1 == 0) break;
             delay_ms(10);
-            SYS_Tasks();
+            app_tasks();
         }
         if (BT1 == 0) break;
         seq = (seq % ur.seq_len) + 1;
@@ -5694,7 +5746,9 @@ static void show_ur_animated_qr(const uint8_t *psbt, uint32_t len) {
 // PSBT signing: safety checks, confirmation, signatures and QR export
 // ============================================================================
 
-#define PSBT_HIGH_CHANGE_INDEX 1000     // Change above this index is flagged
+#define PSBT_CHANGE_LOOKAHEAD 100       // Ours above the highest index of the inputs + this is flagged
+#define PSBT_HIGH_FEE_OF_SENT   4       // Fee over 1/4 of what is sent (change excluded)
+#define PSBT_HIGH_FEE_OF_INPUTS 10      // Fee of at least 1/10 of the inputs
 
 typedef struct {
     uint32_t signable;          // Our verified P2WPKH inputs without a signature yet
@@ -5711,6 +5765,8 @@ typedef struct {
     bool amounts_unverified;    // Some input amount is not committed by a txid
     bool high_change_index;
     bool change_unverified;     // Multisig change without a descriptor: counted as sent
+    bool high_fee;              // Fee over PSBT_HIGH_FEE_* of what is spent or sent
+    bool burns;                 // An OP_RETURN output carries an amount
 } psbt_sign_plan_t;
 
 // Coin type 1' (testnet/signet) in a BIP44-style path
@@ -5817,6 +5873,7 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
     uint32_t checks = psbt->input_count + psbt->output_count;
     char label[24];
     bool other_type = false;                    // An input of a script type we do not sign
+    uint32_t max_index = 0;                     // Highest address index among our inputs
 
     for (uint32_t i = 0; i < psbt->input_count; i++) {
         psbt_count_label("INPUT ", i, psbt->input_count, label);
@@ -5847,6 +5904,10 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
         bool single_path = psbt_bip84_path(&kp, &account);
         bool multi_path = !single_path && psbt_multisig_path(&kp, &account);
         bool mine = owner == PSBT_OWNER_VERIFIED || owner == PSBT_OWNER_VERIFIED_MULTI;
+        if (mine) {
+            uint32_t index = psbt_path_element(&kp, multi_path ? 5 : 4);
+            if (index > max_index) max_index = index;
+        }
         psbt_script_type_t type = psbt_script_type(in.script, in.script_len);
         if ((owner == PSBT_OWNER_FP_ONLY && !single_path && !multi_path) ||
             (type != PSBT_SCRIPT_P2WPKH && type != PSBT_SCRIPT_P2WSH)) {
@@ -5904,17 +5965,23 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
         }
         if (owner == PSBT_OWNER_VERIFIED) {
             plan->change += out.amount;
-            if (psbt_path_element(&kp, 4) > PSBT_HIGH_CHANGE_INDEX) plan->high_change_index = true;
+            if (psbt_path_element(&kp, 4) > max_index + PSBT_CHANGE_LOOKAHEAD) plan->high_change_index = true;
         } else if (owner == PSBT_OWNER_VERIFIED_MULTI) {
             plan->change += out.amount;             // Every cosigner key checked
-            if (psbt_path_element(&kp, 5) > PSBT_HIGH_CHANGE_INDEX) plan->high_change_index = true;
+            if (psbt_path_element(&kp, 5) > max_index + PSBT_CHANGE_LOOKAHEAD) plan->high_change_index = true;
         } else if (owner == PSBT_OWNER_MULTISIG_CHANGE) {
             plan->send += out.amount;
             plan->change_unverified = true;
         } else {
             plan->send += out.amount;
         }
+        if (out.amount > 0 && psbt_script_type(out.script, out.script_len) == PSBT_SCRIPT_OP_RETURN) {
+            plan->burns = true;
+        }
     }
+    plan->high_fee = plan->fee * PSBT_HIGH_FEE_OF_INPUTS >= plan->send + plan->change + plan->fee ||
+                     (plan->send > 0 && plan->fee * PSBT_HIGH_FEE_OF_SENT > plan->send);
+    psbt_checked.high_fee = plan->high_fee;
     psbt_checked.mine_inputs = plan->signable + plan->already_signed;
     psbt_checked.valid = true;                  // The review now shows these results
 }
@@ -5967,6 +6034,9 @@ static bool psbt_confirm_signing(const psbt_t *psbt, const psbt_sign_plan_t *pla
                 drawtext(5, y, line, ST7735_WHITE, ST7735_BLACK, 1);
                 y += 9;
             }
+        } else if (!is_addr) {
+            drawtext(5, y, addr, psbt_no_address_color(&out), ST7735_BLACK, 1);
+            y += 9;
         } else {                                    // 62 characters: 3 plain lines
             draw_bip84_wrapped_text(addr, 5, y, PSBT_VIEW_LINE_CHARS - 1, 3);
             y += 9 * (int)((n + PSBT_VIEW_LINE_CHARS - 2) / (PSBT_VIEW_LINE_CHARS - 1));
@@ -6008,15 +6078,17 @@ static bool psbt_confirm_signing(const psbt_t *psbt, const psbt_sign_plan_t *pla
     strcpy(line, "FEE ");
     psbt_format_amount(plan->fee, &line[4]);
     bool has_rate = psbt_fee_rate_text(psbt, plan->fee, rate);
-    if (has_rate && strlen(line) + 1 + strlen(rate) <= PSBT_VIEW_LINE_CHARS - 1) {
+    if (has_rate && !plan->high_fee && strlen(line) + 1 + strlen(rate) <= PSBT_VIEW_LINE_CHARS - 1) {
         strcat(line, " ");
         strcat(line, rate);
         has_rate = false;
     }
     drawtext(5, y, line, ST7735_YELLOW, ST7735_BLACK, 1);
     y += 9;
-    if (has_rate) {
-        drawtext(5, y, rate, ST7735_YELLOW, ST7735_BLACK, 1);
+    if (has_rate || plan->high_fee) {           // The warning shares the line of the rate
+        strcpy(line, has_rate ? rate : "");
+        if (plan->high_fee) strcat(line, has_rate ? " HIGH FEE" : "HIGH FEE");
+        drawtext(5, y, line, ST7735_YELLOW, ST7735_BLACK, 1);
         y += 9;
     }
 
@@ -6041,6 +6113,10 @@ static bool psbt_confirm_signing(const psbt_t *psbt, const psbt_sign_plan_t *pla
     }
     if (plan->high_change_index) {
         drawtext(5, y, "HIGH CHANGE INDEX", ST7735_YELLOW, ST7735_BLACK, 1);
+        y += 9;
+    }
+    if (plan->burns) {                          // Short: it also fits left of the grid
+        drawtext(5, y, "BURNS BTC", ST7735_YELLOW, ST7735_BLACK, 1);
         y += 9;
     }
     // Then what helps, while there is room
@@ -6472,6 +6548,7 @@ static void scan_rx_callback(uintptr_t context) {
 }
 
 static void scan_rx_start(void) {
+    idle_hold = true;
     scan_rx_head = 0;
     scan_rx_tail = 0;
     scan_rx_overflow = false;
@@ -6480,6 +6557,7 @@ static void scan_rx_start(void) {
 }
 
 static void scan_rx_stop(void) {
+    idle_hold = false;
     UART2_ReadAbort();
     UART2_ReadCallbackRegister(NULL, 0);
 }
@@ -6587,7 +6665,7 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
     uint32_t expected_msg_len = 0;
     uint32_t single_len = 0;                    // A single part UR: the whole message in one code
 
-    while (BT1 == 1) { 
+    while (BT1 == 1 && !idle_expired()) {       // AUTO UNLOAD leaves like BACK: the scanner is restored
         SYS_Tasks(); // Keep MCU watchdog alive in the main loop
 
         // Bytes were lost: the ring buffer filled up (frames are then
@@ -6599,6 +6677,7 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
 
         uint8_t rx;
         if (scan_rx_get(&rx)) {
+            idle_touch();                       // A code is being read
             int burst_idx = 0;
             uint32_t last_byte = _CP0_GET_COUNT();
             bool have_byte = true;
@@ -6795,7 +6874,7 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
                                             grid_confirm("USE");    // OK uses the data anyway
 
                                             // Wait for button press
-                                            while (BT1 == 1 && BT_OK == 1) SYS_Tasks();
+                                            while (BT1 == 1 && BT_OK == 1 && !idle_expired()) SYS_Tasks();
                                             
                                             if (BT_OK == 0) {
                                                 psbt_recovered = true;
@@ -6804,7 +6883,7 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
                                                 break; 
                                             }
 
-                                            if (BT1 == 0) break;
+                                            if (BT1 == 0 || idle_expired()) break;
                                             rectan(5, 62, 159, 103, BLACK);
                                             rectan(GRID_X, 105, GRID_X + 90, 125, BLACK);
                                             grid_back_only();
@@ -6922,6 +7001,7 @@ static bool scan_descriptor_qr(uint8_t **msg, uint32_t *len, bool *is_text) {
     grid_back_only();
     while (1) {
         int n = qr_read_raw(buf, cap);
+        app_tasks();
         if (BT1 == 0) {
             memzero(buf, cap);
             while (BT1 == 0) SYS_Tasks();
@@ -7260,8 +7340,19 @@ static void check_scanned_address(void) {
 
 static uint8_t setting_pending;     // Flags to save when the user confirms
 
+// AUTO UNLOAD in the flags: 7 (three bits at 1, a blank page or an older
+// firmware's record) is NEVER, 6 the first time, 5 the second...
+static uint8_t idle_field(uint8_t option) {
+    return (uint8_t)((7u - option) << SETTING_IDLE_SHIFT);
+}
+
+static uint8_t idle_from_flags(uint8_t flags) {
+    uint8_t option = (uint8_t)(7u - ((flags & SETTING_IDLE_MASK) >> SETTING_IDLE_SHIFT));
+    return (option < cIDLE_n_opt) ? option : 0;
+}
+
 static uint8_t settings_flags_now(void) {
-    return (uint8_t)(0xE0u | SETTING_LEGACY_DECOY | (decoy_enabled ? 0u : SETTING_DECOY_OFF) |
+    return (uint8_t)(idle_field(idle_option) | SETTING_LEGACY_DECOY | (decoy_enabled ? 0u : SETTING_DECOY_OFF) |
                      (seedqr_enabled ? 0u : SETTING_SEEDQR_OFF) | (sdwrite_enabled ? 0u : SETTING_SDWRITE_OFF) |
                      (stopwatch_enabled ? 0u : SETTING_STOPWATCH_OFF));
 }
@@ -7285,8 +7376,34 @@ static void ask_setting_change(void) {
         new_on = (flags & SETTING_DECOY_OFF) == 0;
     }
     setting_pending = flags;
-    print_setting_confirm(settings_pointer, new_on);
+    print_setting_confirm(settings_pointer, new_on, 0);
     estado = CONFIRM_SETTING;
+}
+
+// The choice of AUTO UNLOAD; a new value goes to the same confirmation
+static int wait_any_key(void);
+static void idle_setting_run(void) {
+    int sel = idle_option;
+    black_screen();
+    print_titled_menu("AUTO UNLOAD", menu_idle, cIDLE_n_opt, sel);
+    while (1) {
+        int key = wait_any_key();
+        if (key == UP_BT || key == DOWN_BT) {
+            sel = (sel + ((key == UP_BT) ? cIDLE_n_opt - 1 : 1)) % cIDLE_n_opt;
+            print_titled_menu("AUTO UNLOAD", menu_idle, cIDLE_n_opt, sel);
+        } else if (key == OK_BT && sel != idle_option) {
+            setting_pending = (uint8_t)((settings_flags_now() & ~SETTING_IDLE_MASK) | idle_field((uint8_t)sel));
+            black_screen();
+            print_setting_confirm(cSETTINGS_IDLE, sel != 0, sel);
+            estado = CONFIRM_SETTING;
+            return;
+        } else if (key == OK_BT || key == BACK_BT) {
+            while (BT1 == 0) SYS_Tasks();       // Do not let BACK reach the state machine
+            black_screen();
+            print_settings_screen(settings_pointer);
+            return;
+        }
+    }
 }
 
 // ============================================================================
@@ -7458,7 +7575,7 @@ static int wait_any_key(void) {
     while (BT_OK == 0 || BT1 == 0 || BT2 == 0 || BT4 == 0 || BT5 == 0 || BT6 == 0) SYS_Tasks();
     delay_ms(30);
     while (1) {
-        SYS_Tasks();
+        app_tasks();
         int bt = (BT_OK == 0) ? OK_BT : (BT1 == 0) ? BACK_BT : (BT2 == 0) ? LEFT_BT :
                  (BT4 == 0) ? DOWN_BT : (BT5 == 0) ? UP_BT : (BT6 == 0) ? RIGHT_BT : NONE;
         if (bt == NONE) continue;
@@ -9806,6 +9923,71 @@ static void show_qr_ready(int sss_k) {
     grid_scan_back();
 }
 
+// Every place that holds the seed or something derived from it. The shares
+// are locals of main(). transition_to_main() wipes the keys and the passphrase.
+static void session_wipe(uint8_t **shares, uint8_t **shares_input, uint8_t *sss_result, size_t len) {
+    memzero(data_array_256b, sizeof(data_array_256b));
+    memzero(triple_backup_256b, sizeof(triple_backup_256b));
+    memzero(xor_merge_word1, sizeof(xor_merge_word1));
+    memzero(xor_merge_word2, sizeof(xor_merge_word2));
+    memzero(xor_merge_word3, sizeof(xor_merge_word3));
+    for (int i = 0; i < 5; i++) memzero(coefficient_buffers[i], BYTES_PER_COEFF);
+    for (int i = 0; i < cN_MAX; i++) memzero(shares[i], len);
+    multi_input_wipe(shares_input, sss_result, len);
+    memzero(derive_child, sizeof(derive_child));
+    memzero(card_sequence, sizeof(card_sequence));
+    memzero(dice_string_buf, sizeof(dice_string_buf));
+    (void)append_checksum(data_array_256b, 32);     // Its static copy, now zeros
+    memzero(buffer, sizeof(buffer));
+    memzero(scan_rx_ring, sizeof(scan_rx_ring));    // The last QR read
+    memzero(eff_index, sizeof(eff_index));
+    memzero(eff_digit, sizeof(eff_digit));
+    memzero(eff_dice, sizeof(eff_dice));
+    memzero(dice_two_bits, sizeof(dice_two_bits));
+    uint32_t cap;
+    uint8_t *scratch = fountain_scratch_buffer(&cap);
+    memzero(scratch, cap);
+}
+
+// Zeroes the stack below the caller: the frames of the flow that was left
+// never ran their own wipes
+extern char _splim[];
+static void __attribute__((noinline)) stack_wipe(void) {
+    volatile uint32_t *p = (volatile uint32_t *)(((uintptr_t)_splim + 3u) & ~3u);
+    volatile uint32_t *end = (volatile uint32_t *)__builtin_frame_address(0) - 8;
+    while (p < end) *p++ = 0;
+}
+
+// AUTO UNLOAD fired: the flow that was on screen is gone (longjmp). Wipes it
+// all, resets what the flows leave set while they run, and says what happened.
+static void idle_recover(uint8_t **shares, uint8_t **shares_input, uint8_t *sss_result, size_t len) {
+    idle_hold = false;
+    estado = MAIN;                          // The timer stops
+    stack_wipe();
+    session_wipe(shares, shares_input, sss_result, len);
+    sign_menu_descriptor = false;
+    psbt_inspect_only = false;
+    editor_title_fixed = false;
+    editor_title_first = false;
+    reader_insert = false;
+    reader_passphrase = false;
+    derive_from_wallet = false;
+    qr_view_text = false;
+    qr_from_eff = false;
+    capturing_xor_word = false;
+    bip84_qr_return_to_menu = false;
+    bip84_qr_return_to_info = false;
+    main_pointer = cMAIN_LOAD;              // Back to the main menu, not to OPSEC
+    black_screen();
+    draw_title("AUTO UNLOAD", ST7735_LIGHTGREY);
+    drawtext(5, 30, "NO KEY PRESSED FOR", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 40, (char*)menu_idle[idle_option], ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 58, "SEED AND KEYS WIPED", ST7735_GREEN, ST7735_BLACK, 1);
+    grid_OK_only();
+    while (wait_any_key() != OK_BT) { }
+    while (BT_OK == 0) SYS_Tasks();         // Do not let OK reach the main menu
+}
+
 int main ( void ){
     /* Initialize all modules */
     SYS_Initialize ( NULL );
@@ -9815,6 +9997,7 @@ int main ( void ){
         stopwatch_enabled = (saved & SETTING_STOPWATCH_OFF) == 0;
         seedqr_enabled = (saved & SETTING_SEEDQR_OFF) == 0;
         sdwrite_enabled = (saved & SETTING_SDWRITE_OFF) == 0;
+        idle_option = idle_from_flags(saved);
     }
     R_LCD=1;
     LED_LCD =1;
@@ -9958,10 +10141,21 @@ int SSS_N = 9;
     uint8_t *shares_input[cN_MAX] = {sh1, sh2, sh3, sh4, sh5, sh6, sh7, sh8, sh9};
     uint8_t share_indices[cK_MAX] = { 1, 2,0,0,0,0 };
 
+    if (setjmp(idle_jump) != 0) {               // AUTO UNLOAD, from any wait of any flow
+        idle_recover(shares, shares_input, SSS_result, LEN);
+        memzero(word, sizeof(word));
+        memzero(result, sizeof(result));
+        transition_to_main();
+        pulsed_bt = NONE;
+        repeat_bt = NONE;
+        BT1_ST = BT2_ST = BT_OK_ST = BT4_ST = BT5_ST = BT6_ST = 1;
+    }
+    idle_jump_set = true;
+
     while ( true )
     {
         /* Maintain state machines of all polled MPLAB Harmony modules. */
-        SYS_Tasks ( );
+        app_tasks();
 
         // Button pressing logic
         if ((BT_OK ==0) & (BT_OK_ST==1)) {
@@ -10586,25 +10780,7 @@ int SSS_N = 9;
 
             case CONFIRM_UNLOAD:
                 if (pulsed_bt == OK_BT) {
-                    // Every place that holds the seed or something derived from it
-                    memzero(data_array_256b, sizeof(data_array_256b));
-                    memzero(triple_backup_256b, sizeof(triple_backup_256b));
-                    memzero(xor_merge_word1, sizeof(xor_merge_word1));
-                    memzero(xor_merge_word2, sizeof(xor_merge_word2));
-                    memzero(xor_merge_word3, sizeof(xor_merge_word3));
-                    for (int i = 0; i < 5; i++) memzero(coefficient_buffers[i], BYTES_PER_COEFF);
-                    for (int i = 0; i < cN_MAX; i++) memzero(shares[i], LEN);
-                    multi_input_wipe(shares_input, SSS_result, LEN);
-                    memzero(derive_child, sizeof(derive_child));
-                    memzero(card_sequence, sizeof(card_sequence));
-                    memzero(dice_string_buf, sizeof(dice_string_buf));
-                    (void)append_checksum(data_array_256b, 32);     // Its static copy, now zeros
-                    memzero(buffer, sizeof(buffer));
-                    {
-                        uint32_t cap;
-                        uint8_t *scratch = fountain_scratch_buffer(&cap);
-                        memzero(scratch, cap);
-                    }
+                    session_wipe(shares, shares_input, SSS_result, LEN);
                     black_screen();
                     drawtext(5, 50, "SEED UNLOADED", ST7735_GREEN, ST7735_BLACK, 1);
                     delay_ms(800);
@@ -10662,6 +10838,7 @@ int SSS_N = 9;
                 
                 for (uint32_t current_sector = 0; current_sector < wipe_total_sectors; current_sector++) {
                     SYS_Tasks(); // Keep MCU watchdog and tasks running
+                    idle_touch();                   // Can take hours on a big card
                     
                     if ((current_sector % 256) == 0) {
                         LED = 1 - LED; 
@@ -12437,6 +12614,9 @@ int SSS_N = 9;
                         else if (settings_pointer == cSETTINGS_DECOY || settings_pointer == cSETTINGS_STOPWATCH) {
                             ask_setting_change();
                         }
+                    else if (settings_pointer == cSETTINGS_IDLE) {
+                        idle_setting_run();
+                    }
                     else if (settings_pointer == cSETTINGS_MCU_SERIAL) {
                         print_mcu_serial_screen();
                         estado = SHOW_MCU_SERIAL;
@@ -12762,6 +12942,7 @@ int SSS_N = 9;
                     stopwatch_enabled = (setting_pending & SETTING_STOPWATCH_OFF) == 0;
                     seedqr_enabled = (setting_pending & SETTING_SEEDQR_OFF) == 0;
                     sdwrite_enabled = (setting_pending & SETTING_SDWRITE_OFF) == 0;
+                    idle_option = idle_from_flags(setting_pending);
                     drawtext(5, 50, "SETTING SAVED", ST7735_GREEN, ST7735_BLACK, 1);
                     delay_ms(800);
                     black_screen();

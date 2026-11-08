@@ -146,6 +146,51 @@ static void map_skip(reader_t *r) {
     }
 }
 
+// Strict check of one map, leaving r after it (BIP174: a key appears once in
+// its scope, and a known type has a key of a fixed form). Only used by
+// psbt_parse(): the readers below can then trust what they find.
+#define PSBT_MAP_MAX_ENTRIES 64         // Also bounds the duplicate search
+enum { SCOPE_GLOBAL, SCOPE_INPUT, SCOPE_OUTPUT };
+
+static bool key_len_ok(uint8_t scope, uint8_t type, uint32_t key_len) {
+    bool pubkey = false, known;
+    if (scope == SCOPE_GLOBAL) {
+        if (type == PSBT_GLOBAL_XPUB) return key_len == 1 + XPUB_SERIALIZED_LEN;
+        known = type == PSBT_GLOBAL_UNSIGNED_TX || type == PSBT_GLOBAL_VERSION;
+    } else if (scope == SCOPE_INPUT) {
+        pubkey = type == PSBT_IN_PARTIAL_SIG || type == PSBT_IN_BIP32_DERIVATION;
+        known = type <= PSBT_IN_FINAL_WITNESS;
+    } else {
+        pubkey = type == PSBT_OUT_BIP32_DERIVATION;
+        known = type <= PSBT_OUT_BIP32_DERIVATION;
+    }
+    if (pubkey) return key_len == 34 || key_len == 66;
+    return !known || key_len == 1;
+}
+
+static psbt_status_t map_check(reader_t *r, uint8_t scope) {
+    uint32_t start = r->pos, count = 0;
+    uint8_t type;
+    uint32_t key_len, val_len;
+    const uint8_t *val;
+
+    while (map_next(r, &type, &key_len, &val, &val_len)) {
+        const uint8_t *key = last_key;
+        if (++count > PSBT_MAP_MAX_ENTRIES || !key_len_ok(scope, type, key_len)) return PSBT_ERR_FORMAT;
+
+        reader_t prev;
+        rd_init(&prev, r->p, start, r->end);
+        for (uint32_t i = 1; i < count; i++) {
+            uint8_t t;
+            uint32_t k, v;
+            const uint8_t *d;
+            map_next(&prev, &t, &k, &d, &v);
+            if (k == key_len && memcmp(last_key, key, k) == 0) return PSBT_ERR_FORMAT;
+        }
+    }
+    return r->err ? PSBT_ERR_TRUNCATED : PSBT_OK;
+}
+
 // Positions r at the start of map number 'index' in a run of maps
 static void map_seek(reader_t *r, const psbt_t *psbt, uint32_t first_map_ofs, uint32_t index) {
     rd_init(r, psbt->buf, first_map_ofs, psbt->len);
@@ -302,18 +347,20 @@ psbt_status_t psbt_parse(const uint8_t *data, uint32_t len, psbt_t *psbt) {
     if (r.err) return PSBT_ERR_TRUNCATED;
     if (!have_tx) return PSBT_ERR_NO_TX;
 
+    reader_t global;
+    rd_init(&global, data, 5, len);
+    psbt_status_t st = map_check(&global, SCOPE_GLOBAL);
+
     // One map per input and per output, in order
     psbt->input_maps_ofs = r.pos;
-    for (uint32_t i = 0; i < psbt->input_count && !r.err; i++) {
-        map_skip(&r);
+    for (uint32_t i = 0; i < psbt->input_count && st == PSBT_OK; i++) {
+        st = map_check(&r, SCOPE_INPUT);
     }
     psbt->output_maps_ofs = r.pos;
-    for (uint32_t i = 0; i < psbt->output_count && !r.err; i++) {
-        map_skip(&r);
+    for (uint32_t i = 0; i < psbt->output_count && st == PSBT_OK; i++) {
+        st = map_check(&r, SCOPE_OUTPUT);
     }
-    if (r.err) return PSBT_ERR_TRUNCATED;
-
-    return PSBT_OK;
+    return st;
 }
 
 bool psbt_get_input(const psbt_t *psbt, uint32_t index, psbt_input_t *in) {

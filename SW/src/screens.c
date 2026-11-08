@@ -40,6 +40,7 @@ const uint16_t bmp_add_symbol[7]   = { 0x1000, 0x1000, 0x1000, 0xFE00, 0x1000, 0
 // Global Menus (Forces the compiler to store pointers strictly in ROM)
 // ============================================================================
 // Names by function id (cMAIN_*), not by position in the menus
+const char* const menu_idle[cIDLE_n_opt] = {"NEVER", "5 MINUTES", "10 MINUTES", "20 MINUTES", "30 MINUTES"};
 const char* const menu_main[]     = {"CREATE NEW SEED WORDS", "LOAD SEED WORDS", "BIP85 CHILD SEED", "SHAMIR SECRET SHARE", "SEED WORD XOR", "OBFUSCATION", "MNEMONIC TO CARDS", "SD CARD", "RESOURCES", "SETTINGS", "OPSEC", "TOOLS"};
 const uint8_t main_menu_ids[cMAIN_n_opt] = {cMAIN_create, cMAIN_LOAD, cMAIN_BIP85, cMAIN_OPSEC, cMAIN_TOOLS, cMAIN_ERASESD, cMAIN_QR, cMAIN_SETTINGS};
 const char* const menu_opsec[]    = {"SHAMIR SECRET SHARE", "SEED WORD XOR", "OBFUSCATION", "MNEMONIC TO CARDS"};
@@ -1467,6 +1468,8 @@ void print_settings_screen(int sel) {
     uint16_t color_sdwrite = (sel == cSETTINGS_SDWRITE) ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t color_decoy = (sel == cSETTINGS_DECOY) ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t color_stopwatch = (sel == cSETTINGS_STOPWATCH) ? ST7735_ORANGE : ST7735_WHITE;
+    uint16_t color_idle = (sel == cSETTINGS_IDLE) ? ST7735_ORANGE : ST7735_WHITE;
+    char text_idle[26];
     uint16_t color_serial = (sel == cSETTINGS_MCU_SERIAL) ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t color_fw = (sel == cSETTINGS_UPDATE_FW) ? ST7735_ORANGE : ST7735_WHITE;
 
@@ -1475,8 +1478,11 @@ void print_settings_screen(int sel) {
     drawtext(1, 23, text_sdwrite, color_sdwrite, ST7735_BLACK, 1);
     drawtext(1, 33, text_decoy, color_decoy, ST7735_BLACK, 1);
     drawtext(1, 43, text_stopwatch, color_stopwatch, ST7735_BLACK, 1);
-    drawtext(1, 53, "MCU SERIAL NUMBER", color_serial, ST7735_BLACK, 1);
-    drawtext(1, 63, "UPDATE FIRMWARE", color_fw, ST7735_BLACK, 1);
+    strcpy(text_idle, "AUTO UNLOAD: ");
+    strcat(text_idle, menu_idle[idle_option]);
+    drawtext(1, 53, text_idle, color_idle, ST7735_BLACK, 1);
+    drawtext(1, 63, "MCU SERIAL NUMBER", color_serial, ST7735_BLACK, 1);
+    drawtext(1, 73, "UPDATE FIRMWARE", color_fw, ST7735_BLACK, 1);
 
     // Versions at the bottom left, next to the button grid: this firmware and
     // the bootloader, whose tag it keeps at a fixed boot flash address
@@ -1638,12 +1644,20 @@ static void draw_skip_keys(void) {
     print_rigth_arrow(4 + 34 + 5, 120, ST7735_BLACK);
 }
 
-void print_setting_confirm(int row, bool new_on) {
+void print_setting_confirm(int row, bool new_on, int idle_sel) {
     const char *name, *l1, *l2 = "", *l3 = "";
+    char idle_name[26];
     uint16_t body = ST7735_WHITE;
     rectan(0, 0, 159, 127, ST7735_BLACK);
     draw_title("SAVE SETTING?", ST7735_LIGHTGREY);
-    if (row == cSETTINGS_SEEDQR) {
+    if (row == cSETTINGS_IDLE) {
+        strcpy(idle_name, "AUTO UNLOAD: ");
+        strcat(idle_name, menu_idle[idle_sel]);
+        name = idle_name;
+        l1 = new_on ? "WITH NO KEY PRESSED FOR" : "THE SEED STAYS LOADED";
+        l2 = new_on ? "THAT LONG THE SEED IS" : "UNTIL YOU UNLOAD IT";
+        l3 = new_on ? "WIPED FROM MEMORY" : "";
+    } else if (row == cSETTINGS_SEEDQR) {
         name = new_on ? "SEEDQR: ON" : "SEEDQR: OFF";
         l1 = new_on ? "SEEDQR WILL SHOW YOUR" : "SEEDQR WILL BE";
         l2 = new_on ? "SEED AS A QR CODE" : "DISABLED";
