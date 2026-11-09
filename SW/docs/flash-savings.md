@@ -74,7 +74,9 @@ The project builds with `-O1`. All of these work with the free license.
 What they do:
 - `-mmemcpy`: copies of structures and of fixed size blocks call `memcpy()`
   instead of being written out as loads and stores (`HDNode` copies, 32 and 33
-  byte keys). No change of behaviour; slightly slower copies.
+  byte keys). No change of behaviour. The linked `memcpy()` copies byte by
+  byte, and PBKDF2 copies two hash contexts per iteration: time KEF and
+  LOADING WALLET.
 - `-G 1024`: globals up to 1 KB are reached with one instruction from the
   `gp` register instead of two. RAM +36 B. The data init table also shrinks
   (1,344 to 864 B).
@@ -180,7 +182,7 @@ crypto-account QR about 0.6 KB, Nostr 0.5 KB, triple and obfuscation 1.6 KB.
 | Step | Saves | Free after it |
 |---|---|---|
 | Today | - | 16.4 KB |
-| Options A (`-mmemcpy -G 1024`) | 11.5 KB measured | 27.9 KB |
+| Options A (`-mmemcpy -G 1024`), applied on 2026-11-10 | 11,513 B measured | 27.6 KB |
 | Options B or C on the interface files | 5 to 7 KB measured | 33 to 35 KB |
 | Changes 2, 5, 6, 8, 9 (small and safe) | about 3 to 4 KB | 36 to 39 KB |
 | Changes 1, 3, 7 | about 3 to 5 KB | 39 to 44 KB |

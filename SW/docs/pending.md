@@ -3,7 +3,7 @@
 The open work list, kept up to date with every change (Claude updates it when
 a task is done, decided or added). Last update: 2026-11-10.
 
-Memory today: flash 221.6 KB of 238 KB (93.1%, about 16.4 KB free); RAM
+Memory today: flash 210.4 KB of 238 KB (88.4%, about 27.6 KB free); RAM
 23.7 KB of 32 KB (about 11.5 KB of stack).
 
 ## 1. Before shipping v2.0
@@ -21,6 +21,7 @@ Memory today: flash 221.6 KB of 238 KB (93.1%, about 16.4 KB free); RAM
 | FAT32 in the bootloader | Cards over 32 GB: today only a small FAT16 partition works. The bootloader has 136 B free in its code area, so it needs savings first |
 | Stack measurement | Stack watermark, before Taproot |
 | PSBT and AUTO UNLOAD: device test | Built on 2026-11-08, not tried on the board. HIGH FEE on the flow and on the confirmation (fee over 1/4 of what is sent, change excluded, or at least 1/10 of the inputs); BURNS BTC and "THIS AMOUNT IS BURNED" for an OP_RETURN with an amount. SETTINGS > AUTO UNLOAD (never, 5, 10, 20, 30 minutes, never by default): try it inside a deep flow (editor, vault, PSBT review, QR scan, words on screen) and check that it wipes, says why and returns to the main menu; the keys pressed and long operations must restart the time |
+| Compiler options `-mmemcpy -G 1024`: device test | Applied on 2026-11-10 (flash -11,513 B, RAM +36 B), not tried on the board. The whole binary changed: load a seed, sign a PSBT, SD read and write, vault, QR in and out. `memcpy` copies byte by byte, so time the KEF derivation (44 s before at 100,000 iterations) and LOADING WALLET. If slower than acceptable, build `kdf.c` and `kef.c` without `-mmemcpy` |
 | Packed word lists: device test | Done on 2026-11-08, saved 11.1 KB, PC tests only. On the device: word entry and its keyboard (should not feel slower), showing 24 words, seeds from QR and SD, EFF PASSWORD |
 | Try it all with real PSBTs | On the device with PSBTs made by real wallets (Sparrow, Nunchuk, single sig and multisig, by SD and by QR): the new review, HIGH FEE, the stricter parser (nothing valid may be refused: the PC tests use generated files, and a real wallet may add fields they lack), AUTO UNLOAD during a signing. Nothing from those wallets goes into the repo (rule 5) |
 | PSBT hardening: device test | Done on 2026-11-08, PC tests only. The parser refuses duplicate keys and known fields with a key of the wrong form (all 20 invalid BIP174 vectors refused now); outputs without an address are yellow; HIGH CHANGE INDEX is relative to the inputs (over the highest input index + 100). Try the Sparrow PSBTs again to confirm nothing valid is refused. What is still accepted on purpose, with the reason: `test/psbt/malicious_gaps.txt` |
@@ -94,7 +95,6 @@ Full analysis of 2026-11-10 in `docs/flash-savings.md` (measuring scripts in
 
 | Option | Saves | Risk |
 |---|---|---|
-| Compiler options `-mmemcpy -G 1024` | 11.5 KB (measured build) | Low: whole device test pass |
 | More size options on the interface files | 5 to 7 KB (measured build) | Low: check the derivation times |
 | Small code changes (drawtext wrapper, unused SPI drivers, one scanner read, debug screen) | 3 to 4 KB (estimate) | Low |
 | Text formatter, lines in one call, key helpers | 3 to 5 KB (estimate) | Low |

@@ -31,8 +31,8 @@ The open work list is `docs/pending.md`: update it whenever a task is done, deci
 Even on v2 the budget is limited. Every change must be justified against it.
 
 v2 budget (last build of `Seedmate_v2`):
-- Flash: 238 KB usable (0x9D004000, 0x3B800; the first 12 KB belong to the bootloader, the next 4 KB to the app vectors, 0x9D003000, and its reset block, 0x9D003800). Used about 221.6 KB (93.1% of the 238 KB left after the settings page); AES-GCM (about 7 KB) joins when the vault screens call it.
-- RAM: 32 KB (0x80000000, 0x8000). Used about 23.7 KB (72.2%), and the reserved stack is about 12 KB.
+- Flash: 238 KB usable (0x9D004000, 0x3B800; the first 12 KB belong to the bootloader, the next 4 KB to the app vectors, 0x9D003000, and its reset block, 0x9D003800). Used about 210.4 KB (88.4% of the 238 KB left after the settings page); AES-GCM (about 7 KB) joins when the vault screens call it.
+- RAM: 32 KB (0x80000000, 0x8000). Used about 23.7 KB (72.4%), and the reserved stack is about 12 KB.
 - RAM address `0x80007F00` is the bootloader shared flag (`UPDATE_FLAG_ADDR`); never place data there.
 - Biggest RAM users today: UR fountain decoder buffers `pure_parts` (8.7 KB) and `mixed_frames` (3.2 KB), `next_beams`/`current_beams` (1.5 KB each), `fast_bw_lookup` (1.3 KB), the loaded multisig wallet `ms_wallet` (0.6 KB).
 - Biggest flash users: `.text` (about 78 KB) and the BIP39 word list (about 5.7 KB, packed).
@@ -82,7 +82,7 @@ Texts are upper case. Before adding a screen, look at a similar existing one and
 
 ## Building and checking (no IDE needed)
 
-The project builds from the command line with MPLAB X's `make` and XC32 v5.10 (`-O1 -ffunction-sections -fdata-sections`, linked with `--gc-sections`, no LTO, and `-Werror -Wall`, so any new warning breaks the build). From `BIP39_MCC.X`:
+The project builds from the command line with MPLAB X's `make` and XC32 v5.10 (`-O1 -ffunction-sections -fdata-sections -mmemcpy -G 1024`, the last two in the additional options of the project, see `docs/flash-savings.md`; linked with `--gc-sections -G 1024`, no LTO, and `-Werror -Wall`, so any new warning breaks the build). From `BIP39_MCC.X`:
 
 ```bash
 export PATH="/c/Program Files/Microchip/MPLABX/v6.35/gnuBins/GnuWin32/bin:/c/Program Files/Microchip/xc32/v5.10/bin:$PATH"
