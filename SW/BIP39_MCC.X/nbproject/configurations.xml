@@ -173,6 +173,7 @@
       <itemPath>../src/fountain.c</itemPath>
       <itemPath>../src/bip85.c</itemPath>
       <itemPath>../src/vault.c</itemPath>
+      <itemPath>../src/kef.c</itemPath>
       <itemPath>../src/nostr.c</itemPath>
     </logicalFolder>
   </logicalFolder>

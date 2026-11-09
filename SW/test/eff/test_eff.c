@@ -2,7 +2,7 @@
 // rebuilds the official file "dddd<TAB>word\n" x 1296 from the list and its
 // dice order, and compares its SHA-256 with the one of the file published by
 // the EFF. Any changed, missing or reordered word fails.
-// Build: gcc -Wall -I../../src -o test_eff test_eff.c ../../src/EFF_short.c ../../src/sha256.c
+// Build: gcc -Wall -I../../src -I../../src/SSS -o test_eff test_eff.c ../../src/EFF_short.c ../../src/sha256.c ../../src/SSS/memzero.c
 #include <stdio.h>
 #include <string.h>
 #include "EFF_short.h"
@@ -25,14 +25,15 @@ int main(void) {
 
     sha256_init(&ctx);
     for (int i = 0; i < EFF_SHORT_WORDS; i++) {
-        const char *w = get_eff_short_word(i);
+        char w[9];
+        bool ok = get_eff_short_word(i, w);
         char dice[5];
         int v = i;
         for (int k = 3; k >= 0; k--) { dice[k] = (char)('1' + v % 6); v /= 6; }
         dice[4] = '\0';
-        CHECK(w != NULL && strlen(w) >= 3 && strlen(w) <= 5);
+        CHECK(ok && strlen(w) >= 3 && strlen(w) <= 5);
         CHECK(index_of_dice(dice) == i);
-        snprintf(line, sizeof(line), "%s\t%s\n", dice, w ? w : "");
+        snprintf(line, sizeof(line), "%s\t%s\n", dice, w);
         sha256_update(&ctx, (const BYTE *)line, strlen(line));
     }
     sha256_final(&ctx, hash);
@@ -40,10 +41,11 @@ int main(void) {
     CHECK(strcmp(hex, official_sha256) == 0);
 
     // Out of range and a few known entries of the printed list
-    CHECK(get_eff_short_word(-1) == NULL && get_eff_short_word(EFF_SHORT_WORDS) == NULL);
-    CHECK(strcmp(get_eff_short_word(index_of_dice("1111")), "acid") == 0);
-    CHECK(strcmp(get_eff_short_word(index_of_dice("6652")), "yo-yo") == 0);
-    CHECK(strcmp(get_eff_short_word(index_of_dice("6666")), "zoom") == 0);
+    char word[9];
+    CHECK(!get_eff_short_word(-1, word) && !get_eff_short_word(EFF_SHORT_WORDS, word));
+    CHECK(get_eff_short_word(index_of_dice("1111"), word) && strcmp(word, "acid") == 0);
+    CHECK(get_eff_short_word(index_of_dice("6652"), word) && strcmp(word, "yo-yo") == 0);
+    CHECK(get_eff_short_word(index_of_dice("6666"), word) && strcmp(word, "zoom") == 0);
 
     if (failures == 0) printf("test_eff: list matches the official EFF file (SHA-256 %s)\n", hex);
     return failures != 0;

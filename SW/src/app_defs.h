@@ -34,11 +34,12 @@
 #define cSDBLOCK_n_opt 8
 #define cSD_WRITE_LAST_SLOT 200     // Seeds are written to slots 2..200 (sectors 1..199); slot 1 (sector 0) is legacy, read only
 #define cSD_WRITE_LAST_PAGE ((cSD_WRITE_LAST_SLOT - 1) / cSDBLOCK_n_opt)
-#define cBACKUP_n_opt 4             // SEED BACKUP menu: SD, SEEDQR, COMPACT SEEDQR, VERIFY TRANSCRIPT
+#define cBACKUP_n_opt 5             // SEED BACKUP menu: SD, SEEDQR, COMPACT SEEDQR, ENCRYPTED QR, VERIFY TRANSCRIPT
 #define cBACKUP_SD 0
 #define cBACKUP_SEEDQR 1
 #define cBACKUP_COMPACT 2
-#define cBACKUP_VERIFY 3
+#define cBACKUP_KEF 3
+#define cBACKUP_VERIFY 4
 // SD card layout: sector 0 legacy seed slot (read only), 1..199 seed slots 2..200,
 // the vault will start at 501, and the last sector of the first 1 MB holds the
 // marker written by INITIALIZE CARD. Seeds are written only if the marker is valid.

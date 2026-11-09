@@ -93,6 +93,7 @@
 #include "vault.h"
 #include "nostr.h"
 #include "crypto/fault_handler.h"
+#include "kef.h"
 #include <setjmp.h>
 
 // The idle timer of AUTO UNLOAD runs in app_tasks(): every wait for a key calls it
@@ -1275,11 +1276,13 @@ static void draw_editor_counter(int len, int max_chars) {
 
 // --- Passphrase check after SAVE: the whole passphrase and its length, so a
 // typo is seen before any key is derived. OK accepts, BACK edits again. ---
+static const char *editor_review_title = NULL;  // Set when the text is not a passphrase
+
 static bool editor_review_passphrase(const char* text, int len) {
     black_screen();
-    draw_title("CHECK PASSPHRASE", ST7735_LIGHTGREY);
+    draw_title(editor_review_title ? (char *)editor_review_title : "CHECK PASSPHRASE", ST7735_LIGHTGREY);
     if (len == 0) {
-        drawtext(5, 20, "NO PASSPHRASE", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(5, 20, editor_review_title ? "EMPTY" : "NO PASSPHRASE", ST7735_WHITE, ST7735_BLACK, 1);
     }
     // Same 25 characters per line as the editor (drawn one by one: no copy)
     for (int i = 0; i < len; i++) {
@@ -2229,6 +2232,7 @@ static uint8_t derive_child[36];            // Entropy of the child seed
 static uint32_t derive_child_fp;            // Master fingerprint of the key it comes from
 static uint8_t transcript_tag[8];           // Seed whose transcript was verified or skipped (see transcript_pending)
 static bool warned_seedqr;                  // The SeedQR warning was accepted in this session
+static bool warned_sd;                      // The SD seed warning was accepted in this session
 static bool warned_nsec;                    // The nsec warning was accepted in this session
 
 // Derives the child (BACK cancels the PBKDF2) and shows where it comes from
@@ -2763,22 +2767,20 @@ int get_next_valid_key(int current_idx, int step, const char *current_word, bool
     return best_idx;
 }
 
+// The list is packed: a word is decoded into one of two buffers (some screens
+// use two words at once). They can hold words of a seed: wiped in transition_to_main().
+static char word_ring[2][WORDLIST_WORD_MAX + 1];
+
 const char* get_word(int index) {
+    static uint8_t next_ring = 0;
+
     if (index < 0 || index >= 2048) {
         return NULL;
     }
-    
-    const char* ptr = bip39_words; 
-    
-    
-    for (int i = 0; i < index; i++) {
-        while (*ptr != '\0') {
-            ptr++;
-        }
-        ptr++; 
-    }
-    
-    return ptr; 
+    char *word = word_ring[next_ring];
+    next_ring ^= 1;
+    wordlist_get(&bip39_list, (uint32_t)index, word);
+    return word;
 }
 
 
@@ -2786,22 +2788,7 @@ int find_word_index(const char *word) {
     if (word == NULL || word[0] == '\0') {
         return -1;
     }
-
-    const char* ptr = bip39_words;
-    
-    for (int i = 0; i < 2048; ++i) {
-        if (strcmp(ptr, word) == 0) {
-            return i; // Word found, return its index
-        }
-        
-        // If not, advance pointer to the next word
-        while (*ptr != '\0') {
-            ptr++;
-        }
-        ptr++;
-    }
-    
-    return -1; // Word not found
+    return wordlist_find(&bip39_list, word);
 }
 
 
@@ -2913,27 +2900,26 @@ static void get_valid_next_letters(const char *prefix, bool *valid_letters) {
         return;
     }
 
-    const char* ptr = bip39_words;
-    for (int i = 0; i < 2048; ++i) {
-        int cmp = strncmp(ptr, prefix, prefix_len);
+    wordlist_iter_t it;
+    wordlist_seek_prefix(&it, &bip39_list, prefix, prefix_len);
+    while (wordlist_next(&it)) {
+        int cmp = strncmp(it.word, prefix, prefix_len);
         if (cmp == 0) {
-            char next_char = ptr[prefix_len];
-            // FIX: Check against lowercase ASCII boundaries
+            char next_char = it.word[prefix_len];
             if (next_char >= 'a' && next_char <= 'z') {
                 valid_letters[next_char - 'a'] = true;
             }
         } else if (cmp > 0) {
             break; // Dictionary is sorted, we can stop
         }
-        while (*ptr != '\0') ptr++;
-        ptr++;
     }
 }
 
 static const char *search_unique_prefix(const char *prefix, char *result, size_t result_size) {
-    const char *unique_match = NULL;
     size_t prefix_len;
     int match_count = 0;
+    char match[WORDLIST_WORD_MAX + 1];
+    wordlist_iter_t it;
 
     if (result == NULL || result_size == 0) return NULL;
     result[0] = '\0';
@@ -2942,46 +2928,32 @@ static const char *search_unique_prefix(const char *prefix, char *result, size_t
     prefix_len = strlen(prefix);
     if (prefix_len == 0) return NULL;
 
-    const char* ptr = bip39_words;
-    
-    for (int i = 0; i < 2048; ++i) {
-        // Compare prefix with the currently pointed word
-        if (strncmp(ptr, prefix, prefix_len) == 0) {
-            
-            // --- EXACT MATCH CHECK ---
-            // If the next character in the dictionary is null, the length is identical
-            if (ptr[prefix_len] == '\0') {
-                unique_match = ptr;
+    wordlist_seek_prefix(&it, &bip39_list, prefix, prefix_len);
+    while (wordlist_next(&it)) {
+        int cmp = strncmp(it.word, prefix, prefix_len);
+        if (cmp == 0) {
+            strcpy(match, it.word);
+            if (it.word[prefix_len] == '\0') {    // Exact match, stop searching
                 match_count = 1;
-                break; // Exact match, stop searching
+                break;
             }
-
-            unique_match = ptr;
-            match_count++;
-            if (match_count > 1) {
-                return NULL; // More than one match
+            if (++match_count > 1) {
+                return NULL;                        // More than one match
             }
+        } else if (cmp > 0) {
+            break;                                  // The list is sorted
         }
-        
-        // Advance to the next word
-        while (*ptr != '\0') {
-            ptr++;
-        }
-        ptr++;
     }
-
-        // Safe return if no match is found (though the smart keyboard makes this unreachable)
-        if (unique_match == NULL) {
-            return NULL;
-        }
-
-        size_t i = 0;
-        while (i < (result_size - 1) && unique_match[i] != '\0') {
-            result[i] = unique_match[i];
-            i++;
-        }
-        result[i] = '\0';
-        return result;
+    if (match_count == 0) {
+        return NULL;
+    }
+    size_t i = 0;
+    while (i < (result_size - 1) && match[i] != '\0') {
+        result[i] = match[i];
+        i++;
+    }
+    result[i] = '\0';
+    return result;
 }
 
 
@@ -3817,10 +3789,12 @@ void tc_fault_handler(const char *msg) {
 
 void transition_to_main(void) {
     black_screen();
+    memzero(word_ring, sizeof(word_ring));
     memzero(&wallet_root, sizeof(wallet_root));
     memzero(wallet_root_tag, sizeof(wallet_root_tag));
     wallet_root_ok = false;
     warned_seedqr = false;
+    warned_sd = false;
     warned_nsec = false;
     memzero(transcript_tag, sizeof(transcript_tag));
     memzero(bip84_passphrase, sizeof(bip84_passphrase)); // The seed is unloaded
@@ -7416,6 +7390,23 @@ static int qr_tile = -1;            // QR viewer: -1 whole code, else the zoomed
 static int qr_tiles = 0;            // Tiles per side of the QR on screen
 static bool qr_view_text = false;   // The viewer shows QR FROM TEXT (text in buffer), not the seed
 static bool qr_from_eff = false;    // That text is an EFF PASSWORD: BACK returns to it, not to the editor
+static bool qr_from_kef = false;    // That text is an encrypted seed: BACK returns to SEED BACKUP
+
+// Is this QR text a KEF envelope for 12 or 24 words? Returns KEF_OK with the
+// envelope in out; a QR of digits is a SeedQR. The sizes are checked here, so
+// the key is not asked for something that could not be loaded.
+static kef_status_t kef_parse_text(const char *text, int len, uint8_t *out, uint32_t cap, kef_envelope_t *env) {
+    while (len > 0 && (text[len - 1] == '\r' || text[len - 1] == '\n' || text[len - 1] == ' ' || text[len - 1] == 0)) len--;
+    bool digits = true;
+    for (int i = 0; i < len && digits; i++) digits = text[i] >= '0' && text[i] <= '9';
+    if (len == 0 || digits) return KEF_ERR_FORMAT;
+    uint32_t n = kef_base43_decode(text, (uint32_t)len, out, cap);
+    if (n == 0) return KEF_ERR_FORMAT;
+    kef_status_t r = kef_unwrap(out, n, env);
+    if (r != KEF_OK) return r;
+    uint32_t words = env->payload_len - KEF_IV_LEN - KEF_TAG_LEN;
+    return (words == 16 || words == 24 || words == 20 || words == 28 || words == 32) ? KEF_OK : KEF_ERR_FORMAT;
+}
 
 // SEED BACKUP menu; BACK returns to the word list, so its key says LIST
 static void draw_backup_menu(void) {
@@ -7444,9 +7435,17 @@ static void redraw_qr(void) {
 static void show_seedqr(void) {
     qr_view_text = false;
     qr_from_eff = false;
+    qr_from_kef = false;
     qr_tile = -1;
     redraw_qr();
     estado = VIEW_QR;
+}
+
+// True if a text read by the QR READER is an encrypted seed (only named, never opened)
+static bool kef_is_envelope(const char *text, int len) {
+    uint8_t env_bytes[KEF_ENVELOPE_MAX];
+    kef_envelope_t env;
+    return kef_parse_text(text, len, env_bytes, sizeof(env_bytes), &env) == KEF_OK;
 }
 
 // ============================================================================
@@ -7754,12 +7753,14 @@ static uint8_t timer_digit(void) {
 
 // Word i (and its digit), upper case for the screens or lower case as typed
 static void eff_word_text(int i, bool upper, char *out) {
-    const char *w = get_eff_short_word(eff_index[i]);
+    char w[WORDLIST_WORD_MAX + 1] = {0};
     int n = 0;
-    while (w != NULL && w[n] != '\0') {
+    (void)get_eff_short_word(eff_index[i], w);
+    while (w[n] != '\0') {
         out[n] = (upper && w[n] >= 'a' && w[n] <= 'z') ? (char)(w[n] - 32) : w[n];
         n++;
     }
+    memzero(w, sizeof(w));
     if (eff_numbers) out[n++] = (char)('0' + eff_digit[i]);
     out[n] = '\0';
     if (!upper && eff_capital && out[0] >= 'a' && out[0] <= 'z') out[0] = (char)(out[0] - 32);
@@ -8201,6 +8202,8 @@ static void print_reader_screen(void) {
     } else if (text_looks_like_seed(t, (size_t)reader_len)) {
         kind = "LOOKS LIKE A SEED";
         color = ST7735_YELLOW;
+    } else if (kef_is_envelope(t, reader_len)) {
+        kind = "ENCRYPTED SEED (KEF)";
     } else if (strncmp(t, "UR:", 3) == 0 || strncmp(t, "ur:", 3) == 0) {
         kind = "ONE PART OF A UR CODE";
     } else if (strncmp(t, "bitcoin:", 8) == 0 || strncmp(t, "BITCOIN:", 8) == 0) {
@@ -9974,6 +9977,8 @@ static void idle_recover(uint8_t **shares, uint8_t **shares_input, uint8_t *sss_
     derive_from_wallet = false;
     qr_view_text = false;
     qr_from_eff = false;
+    qr_from_kef = false;
+    editor_review_title = NULL;
     capturing_xor_word = false;
     bip84_qr_return_to_menu = false;
     bip84_qr_return_to_info = false;
@@ -9986,6 +9991,268 @@ static void idle_recover(uint8_t **shares, uint8_t **shares_input, uint8_t *sss_
     grid_OK_only();
     while (wait_any_key() != OK_BT) { }
     while (BT_OK == 0) SYS_Tasks();         // Do not let OK reach the main menu
+}
+
+// ============================================================================
+// Encrypted seed QR (KEF, compatible with Krux; see kef.h and docs/kef.md)
+// ============================================================================
+
+#define KEF_SECRET_MAX      200         // Characters of the key, as Krux
+#define KEF_ID_TEXT_MAX     20
+#define KEF_ITERATIONS      100000u     // Fixed on export, as the default of Krux
+#define KEF_TITLE           "ENCRYPTED QR (KEF)"
+
+// The key of the QR, in the editor. False if it was cancelled.
+static bool kef_ask_key(char *key) {
+    while (1) {
+        char title[25] = "KEY:";
+        editor_review_title = "CHECK THE KEY";
+        bool saved = full_text_editor(title, sizeof(title), key, KEF_SECRET_MAX + 1, PASSPHRASE_MODE);
+        editor_review_title = NULL;
+        if (!saved) return false;
+        if (key[0] != '\0') return true;
+        black_screen();
+        draw_title(KEF_TITLE, ST7735_LIGHTGREY);
+        drawtext(5, 40, "A KEY IS NEEDED", ST7735_RED, ST7735_BLACK, 1);
+        grid_OK_only();
+        while (wait_any_key() != OK_BT) { }
+    }
+}
+
+// PBKDF2 with its progress screen; BACK cancels
+static bool kef_derive_screen(const char *key, const uint8_t *id, uint32_t id_len, uint32_t iterations, uint8_t *out) {
+    char text[24];
+
+    black_screen();
+    draw_title(KEF_TITLE, ST7735_LIGHTGREY);
+    fast_itoa(iterations, text);
+    strcat(text, " ITERATIONS");
+    drawtext(5, 30, text, ST7735_CYAN, ST7735_BLACK, 1);
+    grid_back_only();
+    key_progress_phase("DERIVING THE KEY", 0);
+    bool ok = kef_derive_key((const uint8_t *)key, (uint32_t)strlen(key), id, id_len, iterations, out,
+                             pbkdf2_progress_cancellable);
+    led_done();
+    wait_keys_released();
+    return ok;
+}
+
+// Unique per seal, not secret: the key press pool, two timers and a counter
+static void kef_new_iv(uint8_t iv[KEF_IV_LEN]) {
+    static uint32_t counter = 0;
+    uint32_t mixed[3] = {TMR1, _CP0_GET_COUNT(), counter++};
+    uint8_t digest[SHA256_BLOCK_SIZE];
+    SHA256_CTX ctx;
+
+    sha256_init(&ctx);
+    sha256_update(&ctx, sss_entropy_pool, sizeof(sss_entropy_pool));
+    sha256_update(&ctx, (const BYTE *)mixed, sizeof(mixed));
+    sha256_update(&ctx, (const BYTE *)"KEF IV", 6);
+    sha256_final(&ctx, digest);
+    memcpy(iv, digest, KEF_IV_LEN);
+}
+
+static void kef_message(const char *line1, const char *line2) {
+    black_screen();
+    draw_title(KEF_TITLE, ST7735_RED);
+    drawtext(5, 40, (char *)line1, ST7735_RED, ST7735_BLACK, 1);
+    if (line2 != NULL) drawtext(5, 52, (char *)line2, ST7735_WHITE, ST7735_BLACK, 1);
+    grid_OK_only();
+    while (wait_any_key() != OK_BT) { }
+    wait_keys_released();
+}
+
+// Encrypts the seed on screen into buffer, as the text of a QR. False: nothing
+// to show (cancelled, or the reason was already on screen).
+static __attribute__((noinline)) bool kef_export_run(void) {
+    char key[KEF_SECRET_MAX + 1] = {0};
+    char id[KEF_ID_TEXT_MAX + 1] = {0};
+    uint8_t derived[KEF_KEY_SIZE], iv[KEF_IV_LEN], back[KEF_PLAIN_MAX];
+    uint8_t env_bytes[1 + KEF_ID_TEXT_MAX + 4 + KEF_IV_LEN + KEF_PLAIN_MAX + KEF_TAG_LEN];
+    char line[28], num[12];
+    uint32_t plain_len = 16u + (uint32_t)size_pointer * 16u, env_len = 0, back_len = 0;
+    bool done = false;
+    HDNode root;
+
+    black_screen();
+    draw_title(KEF_TITLE, ST7735_LIGHTGREY);
+    drawtext(5, 18, "READ BY SEEDMATE AND KRUX", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 34, "AS STRONG AS ITS KEY:", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(5, 44, "USE A LONG RANDOM ONE", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(5, 58, "WITHOUT THE KEY THE QR", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(5, 68, "IS USELESS", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(5, 82, "PASSPHRASE NOT INCLUDED", ST7735_YELLOW, ST7735_BLACK, 1);
+    grid_confirm("NEXT");
+    int bt;
+    do {
+        bt = wait_any_key();
+    } while (bt != OK_BT && bt != BACK_BT);
+    wait_keys_released();
+    if (bt == BACK_BT) return false;
+
+    // The ID, which is also the salt, is the fingerprint in lower case, as Krux
+    if (!derive_root_screen(KEF_TITLE, &root)) return false;
+    uint32_t fp = hdnode_fingerprint(&root);
+    memzero(&root, sizeof(root));
+    for (int i = 0; i < 8; i++) id[i] = "0123456789abcdef"[(fp >> (28 - 4 * i)) & 0xF];
+
+    if (!kef_ask_key(key)) goto wipe;
+
+    // As Krux: the count is not a round number, so the same key and ID never
+    // derive the same AES key
+    uint32_t iterations = KEF_ITERATIONS + TMR1 % (KEF_ITERATIONS / 10u);
+
+    black_screen();
+    draw_title("ENCRYPT THE SEED?", ST7735_LIGHTGREY);
+    strcpy(line, "SEED: ");
+    fast_itoa((size_pointer == cSIZE_12) ? 12 : 24, num);
+    strcat(line, num);
+    strcat(line, " WORDS");
+    drawtext(5, 20, line, ST7735_WHITE, ST7735_BLACK, 1);
+    strcpy(line, "ID: ");
+    strcat(line, id);
+    drawtext(5, 32, line, ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 42, "FINGERPRINT SHOWN IN QR", ST7735_YELLOW, ST7735_BLACK, 1);
+    strcpy(line, "ITERATIONS: ");
+    fast_itoa(iterations, num);
+    strcat(line, num);
+    drawtext(5, 56, line, ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 68, "AES-GCM (KEF V20)", ST7735_WHITE, ST7735_BLACK, 1);
+    grid_confirm("ENCR");
+    do {
+        bt = wait_any_key();
+    } while (bt != OK_BT && bt != BACK_BT);
+    wait_keys_released();
+    if (bt == BACK_BT) goto wipe;
+
+    if (!kef_derive_screen(key, (const uint8_t *)id, (uint32_t)strlen(id), iterations, derived)) goto wipe;
+
+    kef_new_iv(iv);
+    drawtext(10, 82, "ENCRYPTING AND VERIFYING", ST7735_CYAN, ST7735_BLACK, 1);
+    {
+        kef_envelope_t env;
+        kef_status_t r = kef_seal_v20(derived, (const uint8_t *)id, (uint32_t)strlen(id), iterations, iv,
+                                      data_array_256b, plain_len, env_bytes, sizeof(env_bytes), &env_len);
+        if (r == KEF_OK) r = kef_unwrap(env_bytes, env_len, &env);
+        if (r == KEF_OK) r = kef_open(derived, &env, back, &back_len);     // Opens what was written
+        if (r != KEF_OK || back_len != plain_len || memcmp(back, data_array_256b, plain_len) != 0) {
+            kef_message("ENCRYPTION FAILED", "NOTHING WAS SHOWN");
+            goto wipe;
+        }
+    }
+    memset(buffer, 0, sizeof(buffer));
+    {
+        uint32_t text_len = kef_base43_encode(env_bytes, env_len, (char *)buffer, sizeof(buffer) - 1);
+        if (text_len == 0) {
+            kef_message("QR TEXT TOO LONG", NULL);
+            goto wipe;
+        }
+        buffer[text_len] = 0;
+    }
+    done = true;
+
+wipe:
+    memzero(key, sizeof(key));
+    memzero(derived, sizeof(derived));
+    memzero(back, sizeof(back));
+    return done;
+}
+
+typedef enum { KEF_LOAD_NOT_KEF, KEF_LOAD_OK, KEF_LOAD_CANCELLED } kef_load_t;
+
+// Every seed read from a QR comes here first. Not KEF: the normal seed checks
+// go on. KEF_LOAD_OK: the seed is in data_array_256b and size_pointer is set.
+static __attribute__((noinline)) kef_load_t kef_load_from_qr(const char *text, int len) {
+    kef_envelope_t env;
+    char key[KEF_SECRET_MAX + 1] = {0};
+    char line[28], num[12];
+    uint8_t derived[KEF_KEY_SIZE], plain[KEF_PLAIN_MAX];
+    uint32_t plain_len = 0;
+    kef_load_t result = KEF_LOAD_CANCELLED;
+
+    memset(buffer, 0, sizeof(buffer));
+    kef_status_t parsed = kef_parse_text(text, len, buffer, KEF_ENVELOPE_MAX, &env);
+    if (parsed != KEF_OK) {
+        memset(buffer, 0, sizeof(buffer));
+        return KEF_LOAD_NOT_KEF;
+    }
+    uint32_t bytes = env.payload_len - KEF_IV_LEN - KEF_TAG_LEN;
+    if (bytes != 16 && bytes != 32) {
+        kef_message("15/18/21 WORDS", "NOT SUPPORTED");
+        memset(buffer, 0, sizeof(buffer));
+        return KEF_LOAD_CANCELLED;
+    }
+
+    black_screen();
+    draw_title(KEF_TITLE, ST7735_LIGHTGREY);
+    drawtext(5, 20, "ENCRYPTED SEED", ST7735_WHITE, ST7735_BLACK, 1);
+    strcpy(line, "ID: ");
+    {
+        uint8_t n = (env.id_len > KEF_ID_TEXT_MAX) ? KEF_ID_TEXT_MAX : env.id_len;
+        for (uint8_t i = 0; i < n; i++) {
+            line[4 + i] = (env.id[i] >= 0x20 && env.id[i] <= 0x7E) ? (char)env.id[i] : '.';
+        }
+        line[4 + n] = '\0';
+    }
+    drawtext(5, 32, line, ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 44, (env.version == KEF_V_GCM) ? "AES-GCM" : "AES-CTR", ST7735_WHITE, ST7735_BLACK, 1);
+    strcpy(line, "ITERATIONS: ");
+    fast_itoa(env.iterations, num);
+    strcat(line, num);
+    drawtext(5, 56, line, ST7735_CYAN, ST7735_BLACK, 1);
+    grid_confirm("KEY");
+    int bt;
+    do {
+        bt = wait_any_key();
+    } while (bt != OK_BT && bt != BACK_BT);
+    wait_keys_released();
+    if (bt == BACK_BT) goto done;
+
+    while (1) {
+        if (!kef_ask_key(key)) goto done;
+        if (!kef_derive_screen(key, env.id, env.id_len, env.iterations, derived)) goto done;
+        kef_status_t r = kef_open(derived, &env, plain, &plain_len);
+        memzero(derived, sizeof(derived));
+        if (r == KEF_OK && (plain_len == 16 || plain_len == 32)) break;
+        black_screen();
+        draw_title("NOT DECRYPTED", ST7735_RED);
+        drawtext(5, 40, "WRONG KEY OR DAMAGED QR", ST7735_RED, ST7735_BLACK, 1);
+        grid_confirm("KEY");
+        do {
+            bt = wait_any_key();
+        } while (bt != OK_BT && bt != BACK_BT);
+        wait_keys_released();
+        if (bt == BACK_BT) goto done;
+    }
+
+    memset(data_array_256b, 0, 36);
+    memcpy(data_array_256b, plain, plain_len);
+    size_pointer = (plain_len == 16) ? cSIZE_12 : cSIZE_24;
+    result = KEF_LOAD_OK;
+    black_screen();
+
+done:
+    memzero(key, sizeof(key));
+    memzero(derived, sizeof(derived));
+    memzero(plain, sizeof(plain));
+    memset(buffer, 0, sizeof(buffer));
+    return result;
+}
+
+// The slot list of SEED BACKUP > SD, if the card is initialized
+static void open_sd_slots(int sd_block) {
+    int marker = sd_marker_state();
+    if (marker != 0) {
+        print_blocked(marker == 1 ? "CARD NOT INITIALIZED" : "SD READ ERROR",
+                      marker == 1 ? "USE SD CARD >" : "CHECK THE SD CARD",
+                      marker == 1 ? "INITIALIZE CARD" : "AND TRY AGAIN");
+        estado = BACKUP_BLOCKED;
+        return;
+    }
+    if (SD_page > cSD_WRITE_LAST_PAGE) SD_page = 0;
+    black_screen();
+    sel_sd_block_screen_wr(sd_block);
+    estado = SEL_SD_BLOCK_WR;
 }
 
 int main ( void ){
@@ -10091,11 +10358,6 @@ int main ( void ){
     U2STAbits.URXEN = 1; // Enable RX
     U2MODEbits.ON = 1;   // Turn on UART2
 
-    //test QR XPUB
-    //black_screen();
-    //draw_xpub_qr("[89aa9c70/84h/0h/0h]xpub6C1WhE68AB95vTj1iM3Bpsu6jwuuKN8D2Z3mGaKNE8xxMHS2ehyN65V6md1KzaDREgcuRDs7AmfvNKFZ6sSykKyxHZDFFWXqVkKL8iss6SD");
-    //delay_ms(3000);
- 
 
     int BT1_ST= 1;
     int BT2_ST= 1;
@@ -12706,10 +12968,24 @@ int SSS_N = 9;
                             if (transcript_verify(false) == VERIFY_OK) transcript_mark_done();
                             print_backup_menu();
                             pulsed_bt = NONE;
+                        } else if (backup_pointer == cBACKUP_KEF) {
+                            if (kef_export_run()) {         // Not blocked by SEEDQR: it is encrypted
+                                qr_view_text = true;
+                                qr_from_eff = false;
+                                qr_from_kef = true;
+                                qr_tile = -1;
+                                redraw_qr();
+                                estado = VIEW_QR;
+                            } else {
+                                print_backup_menu();
+                            }
+                            pulsed_bt = NONE;
                         } else if (backup_pointer == cBACKUP_SD) {
                             if (!sdwrite_enabled) {
                                 print_blocked("SD SEED SAVE IS OFF", "TURN IT ON IN", "SETTINGS > SD SEED SAVE");
                                 estado = BACKUP_BLOCKED;
+                            } else if (warned_sd) {
+                                open_sd_slots(SDblock_pointer);
                             } else {
                                 print_sd_warning("NEXT");
                                 estado = WARNING_SD;
@@ -12751,18 +13027,8 @@ int SSS_N = 9;
                 break;
             case WARNING_SD:
                 if (pulsed_bt == OK_BT) {
-                    int marker = sd_marker_state();
-                    if (marker != 0) {
-                        print_blocked(marker == 1 ? "CARD NOT INITIALIZED" : "SD READ ERROR",
-                                      marker == 1 ? "USE SD CARD >" : "CHECK THE SD CARD",
-                                      marker == 1 ? "INITIALIZE CARD" : "AND TRY AGAIN");
-                        estado = BACKUP_BLOCKED;
-                        break;
-                    }
-                    if (SD_page > cSD_WRITE_LAST_PAGE) SD_page = 0;
-                    black_screen();
-                    sel_sd_block_screen_wr(SDblock_pointer);
-                    estado = SEL_SD_BLOCK_WR;
+                    warned_sd = true;
+                    open_sd_slots(SDblock_pointer);
                 } else if (pulsed_bt == BACK_BT) {
                     print_backup_menu();
                 }
@@ -12779,6 +13045,11 @@ int SSS_N = 9;
                             redraw_qr();
                         } else if (qr_from_eff) {
                             print_eff_result();     // Back to the password
+                        } else if (qr_from_kef) {
+                            qr_from_kef = false;
+                            qr_view_text = false;
+                            memzero(buffer, sizeof(buffer));
+                            print_backup_menu();
                         } else if (qr_view_text) {
                             text_qr_edit();         // Back to the text, to correct it
                         } else {
@@ -13112,7 +13383,15 @@ int SSS_N = 9;
                                 //cur_y += 12;
 
                                 // Execute validation
-                                bool valid_res = validate_and_load_qr(&rx_buf[data_start], payload_len);
+                                kef_load_t kef_result = kef_load_from_qr((const char *)&rx_buf[data_start], payload_len);
+                                if (kef_result == KEF_LOAD_CANCELLED) {
+                                    black_screen();
+                                    show_qr_ready(SSS_K);
+                                    pulsed_bt = NONE;
+                                    break;
+                                }
+                                bool valid_res = kef_result == KEF_LOAD_OK ||
+                                                 validate_and_load_qr(&rx_buf[data_start], payload_len);
 
                                 // Print validation result
                                 //drawtext(0, cur_y, "VAL RES:", ST7735_WHITE, ST7735_BLACK, 1);
