@@ -3,7 +3,7 @@
 The open work list, kept up to date with every change (Claude updates it when
 a task is done, decided or added). Last update: 2026-11-10.
 
-Memory today: flash 210.4 KB of 238 KB (88.4%, about 27.6 KB free); RAM
+Memory today: flash 211.8 KB of 238 KB (89.0%, about 26.2 KB free); RAM
 23.7 KB of 32 KB (about 11.5 KB of stack).
 
 ## 1. Before shipping v2.0
@@ -22,6 +22,9 @@ Memory today: flash 210.4 KB of 238 KB (88.4%, about 27.6 KB free); RAM
 | Stack measurement | Stack watermark, before Taproot |
 | PSBT and AUTO UNLOAD: device test | Built on 2026-11-08, not tried on the board. HIGH FEE on the flow and on the confirmation (fee over 1/4 of what is sent, change excluded, or at least 1/10 of the inputs); BURNS BTC and "THIS AMOUNT IS BURNED" for an OP_RETURN with an amount. SETTINGS > AUTO UNLOAD (never, 5, 10, 20, 30 minutes, never by default): try it inside a deep flow (editor, vault, PSBT review, QR scan, words on screen) and check that it wipes, says why and returns to the main menu; the keys pressed and long operations must restart the time |
 | Compiler options `-mmemcpy -G 1024`: device test | Applied on 2026-11-10 (flash -11,513 B, RAM +36 B), not tried on the board. The whole binary changed: load a seed, sign a PSBT, SD read and write, vault, QR in and out. `memcpy` copies byte by byte, so time the KEF derivation (44 s before at 100,000 iterations) and LOADING WALLET. If slower than acceptable, build `kdf.c` and `kef.c` without `-mmemcpy` |
+| CREATE > MIX ENTROPY: device test | Done on 2026-11-11: the XOR flow from CREATE, titled "MIX ENTROPY - XOR" (2, 3, 4 INPUTS). Try BACK from every step (XOR menu to CREATE, source menu to the XOR menu, size, word entry, SD list, QR scan), the result asking the transcript before WALLET, and UNLOAD returning to the main menu; SEED WORD XOR in OPSEC must still return to OPSEC |
+| KEF ITERATIONS setting: device test | Done on 2026-11-11: SETTINGS > KEF ITERATIONS, 10,000 (default) to 300,000 in steps of 10,000, permanent, with the process time and the protection level. The export uses it (plus up to 10%); the notice, confirmation and import screens were lightened (import shows the estimated time). Try: change it, power off and on, export at 10,000 and 300,000, read both in the Krux, check that the time shown is close to the real one |
+| Text editor DEL held: device test | Done on 2026-11-11: held, BACK / DEL deletes again after 500 ms and then every 120 ms (the UP / DOWN pace), in the title and the text. Check the pace feels right |
 | Packed word lists: device test | Done on 2026-11-08, saved 11.1 KB, PC tests only. On the device: word entry and its keyboard (should not feel slower), showing 24 words, seeds from QR and SD, EFF PASSWORD |
 | Try it all with real PSBTs | On the device with PSBTs made by real wallets (Sparrow, Nunchuk, single sig and multisig, by SD and by QR): the new review, HIGH FEE, the stricter parser (nothing valid may be refused: the PC tests use generated files, and a real wallet may add fields they lack), AUTO UNLOAD during a signing. Nothing from those wallets goes into the repo (rule 5) |
 | PSBT hardening: device test | Done on 2026-11-08, PC tests only. The parser refuses duplicate keys and known fields with a key of the wrong form (all 20 invalid BIP174 vectors refused now); outputs without an address are yellow; HIGH CHANGE INDEX is relative to the inputs (over the highest input index + 100). Try the Sparrow PSBTs again to confirm nothing valid is refused. What is still accepted on purpose, with the reason: `test/psbt/malicious_gaps.txt` |

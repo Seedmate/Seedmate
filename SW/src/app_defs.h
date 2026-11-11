@@ -25,7 +25,7 @@
 #define cPASS_KEYBOARD 0
 #define cPASS_QR 1
 #define cPASS_VAULT 2
-#define cSEED_n_opt 6
+#define cSEED_n_opt 7
 #define cSIZE_n_opt 2
 #define cOBFUS_n_opt 6
 #define cXOR_n_opt 3
@@ -53,14 +53,17 @@
 #define cDICE_MODE_n_opt 2
 #define cHASH_MODE_n_opt 2
 #define cRESOURCE_n_opt 6
-#define cSETTINGS_n_opt 7
+#define cSETTINGS_n_opt 8
 #define cSETTINGS_SEEDQR 0
 #define cSETTINGS_SDWRITE 1
 #define cSETTINGS_DECOY 2
 #define cSETTINGS_STOPWATCH 3
 #define cSETTINGS_IDLE 4
-#define cSETTINGS_MCU_SERIAL 5
-#define cSETTINGS_UPDATE_FW 6
+#define cSETTINGS_KEF 5
+#define cSETTINGS_MCU_SERIAL 6
+#define cSETTINGS_UPDATE_FW 7
+#define cKEF_ITER_STEP 10000u       // KEF ITERATIONS: steps of 10,000, the minimum of the format
+#define cKEF_STEPS_MAX 30           // Up to 300,000 (about 2 minutes)
 #define cIDLE_n_opt 5               // AUTO UNLOAD: never, 5, 10, 20, 30 minutes
 #define cEND_OF_LINE 150
 #define cENTROPY_BITS12W 127
@@ -118,7 +121,8 @@
 #define cSEED_word 2
 #define cSEED_cards 3
 #define cSEED_triple 4
-#define cSEED_timer 5               // Last: not shown while SETTINGS keeps it off
+#define cSEED_timer 5               // Not shown while SETTINGS keeps it off
+#define cSEED_mix 6                 // MIX ENTROPY: the XOR flow, always the last entry
 #define cSIZE_12 0
 #define cSIZE_24 1
 #define cKEYBOARD 0

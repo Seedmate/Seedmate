@@ -38,8 +38,8 @@ static bool is_valid(const uint8_t *r) {
 
 // Scans the page: newest valid flags (or default), and the first blank slot
 // (SETTINGS_SLOTS if the page is full)
-static uint8_t scan(unsigned *first_blank) {
-    uint8_t flags = SETTINGS_DEFAULT;
+static uint16_t scan(unsigned *first_blank) {
+    uint16_t flags = SETTINGS_DEFAULT;
     uint8_t rec[8];
 
     *first_blank = SETTINGS_SLOTS;
@@ -48,21 +48,22 @@ static uint8_t scan(unsigned *first_blank) {
         if (is_blank(rec)) {
             if (*first_blank == SETTINGS_SLOTS) *first_blank = i;
         } else if (is_valid(rec)) {
-            flags = rec[1];     // Later slots are newer
+            flags = (uint16_t)(rec[1] | (rec[3] << 8));     // Later slots are newer
         }
     }
     return flags;
 }
 
-uint8_t settings_load(void) {
+uint16_t settings_load(void) {
     unsigned blank;
     return scan(&blank);
 }
 
-bool settings_save(uint8_t flags) {
+bool settings_save(uint16_t flags) {
     unsigned slot;
-    uint8_t current = scan(&slot);
-    uint8_t rec[8] = {REC_TAG, flags, (uint8_t)~flags, 0xFF, 0xFF, 0xFF, 0xFF, REC_END};
+    uint16_t current = scan(&slot);
+    uint8_t low = (uint8_t)flags;
+    uint8_t rec[8] = {REC_TAG, low, (uint8_t)~low, (uint8_t)(flags >> 8), 0xFF, 0xFF, 0xFF, REC_END};
 
     if (flags == current) return true;
     if (slot == SETTINGS_SLOTS) {               // Full: start the page over with the new value
@@ -72,7 +73,7 @@ bool settings_save(uint8_t flags) {
     if (!nvm_write_slot(slot, rec)) return false;
 
     nvm_read_slot(slot, rec);                   // Read it back
-    return is_valid(rec) && rec[1] == flags;
+    return is_valid(rec) && rec[1] == low && rec[3] == (uint8_t)(flags >> 8);
 }
 
 #ifndef SETTINGS_HOST_TEST

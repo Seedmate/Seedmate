@@ -19,8 +19,10 @@
  *   factory default, so no initialization is needed and settings added in
  *   later firmware keep their default for older records.
  *
- *   Record: A5 flags ~flags FF FF FF FF 5A. A record that does not match
- *   (power lost while writing) is ignored.
+ *   Record: A5 flags ~flags kef FF FF FF 5A. kef is the KEF iteration
+ *   count of the encrypted QR export, stored as SETTING_KEF_FIELD(): 0xFF
+ *   (blank, or a record of an older firmware) is the default. A record that
+ *   does not match (power lost while writing) is ignored.
  *   The only function that writes flash takes a slot number, so it cannot
  *   touch anything outside the page. Host tests in ../test/settings/.
  *
@@ -46,14 +48,20 @@
 #define SETTING_STOPWATCH_OFF 0x10u             // STOPWATCH hidden in CREATE (default: hidden)
 #define SETTING_IDLE_MASK   0xE0u               // AUTO UNLOAD time: 7 = never (default), see main.c
 #define SETTING_IDLE_SHIFT  5
-#define SETTINGS_DEFAULT    0xFFu
+// High byte: KEF iterations in steps of 10,000, as ~(steps - 1), so 0xFF is
+// 10,000 (default). Not secret: the count is written in clear in the QR.
+#define SETTING_KEF_MASK    0xFF00u
+#define SETTING_KEF_FIELD(steps) ((uint16_t)((uint8_t)~((steps) - 1u) << 8))
+#define SETTING_KEF_STEPS(flags) ((uint8_t)(~((flags) >> 8) + 1u))
+#define SETTINGS_DEFAULT    0xFFFFu
 
-// Flags of the newest valid record, or SETTINGS_DEFAULT if there is none
-uint8_t settings_load(void);
+// Flags (low byte) and KEF field (high byte) of the newest valid record, or
+// SETTINGS_DEFAULT if there is none
+uint16_t settings_load(void);
 
 // Saves flags as a new record (nothing is written if they are the current
 // ones). Returns false if the flash did not take it: the settings in flash
 // are then unchanged.
-bool settings_save(uint8_t flags);
+bool settings_save(uint16_t flags);
 
 #endif // SETTINGS_H

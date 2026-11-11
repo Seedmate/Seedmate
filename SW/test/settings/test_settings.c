@@ -90,6 +90,23 @@ int main(void) {
     CHECK(!settings_save(0xFC));
     CHECK(settings_load() == 0xFB);
 
+    // KEF iterations in the high byte: 0xFF (blank or older record) is 1 step
+    CHECK(SETTING_KEF_STEPS(SETTINGS_DEFAULT) == 1);
+    for (unsigned steps = 1; steps <= 30; steps++) {
+        uint16_t f = (uint16_t)((SETTINGS_DEFAULT & ~SETTING_KEF_MASK) | SETTING_KEF_FIELD(steps));
+        CHECK(SETTING_KEF_STEPS(f) == steps);
+    }
+    fresh_page();
+    memcpy(page[0], (uint8_t[8]){0xA5, 0xF7, 0x08, 0xFF, 0xFF, 0xFF, 0xFF, 0x5A}, 8);   // Older firmware's record
+    written[0] = 1;
+    CHECK(settings_load() == 0xFFF7 && SETTING_KEF_STEPS(settings_load()) == 1);
+    {
+        uint16_t f = (uint16_t)(0xF7 | SETTING_KEF_FIELD(30));
+        CHECK(settings_save(f) && settings_load() == f && SETTING_KEF_STEPS(settings_load()) == 30);
+        CHECK(settings_save((uint16_t)(f | 0x08)) && SETTING_KEF_STEPS(settings_load()) == 30);   // Kept with other changes
+        CHECK(settings_save((uint16_t)(f | 0x08)) && writes == 2);                                  // Same value: no write
+    }
+
     if (failures == 0) printf("test_settings: all tests passed\n");
     return failures != 0;
 }

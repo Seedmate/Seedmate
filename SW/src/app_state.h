@@ -21,6 +21,7 @@ extern int main_pointer;
 extern int obfuscation_pointer;
 extern bool seedqr_enabled;
 extern uint8_t idle_option;
+extern uint8_t kef_steps;
 extern bool sdwrite_enabled;
 extern bool decoy_enabled;
 extern bool stopwatch_enabled;

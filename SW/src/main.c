@@ -179,6 +179,12 @@ int settings_pointer = 0;
 char bip84_passphrase[200] = {0}; // Holds the optional BIP39 passphrase
 
 
+// UP / DOWN held down repeat: first after KEY_REPEAT_FIRST_MS, then every
+// KEY_REPEAT_NEXT_MS (lists and numbers). OK, LEFT and RIGHT never do; BACK
+// only as DEL in the text editor.
+#define KEY_REPEAT_FIRST_MS     500u
+#define KEY_REPEAT_NEXT_MS      120u
+
 //Text editor
 // Title on line y=2, text in a 5-line window (y 15..63) and the keyboard
 // below the separator: 3 rows of 9 keys plus a column for CANCEL / SAVE and
@@ -329,6 +335,7 @@ static int bip84_option_count(void) {
 
 // XOR Globals moved from main()
 int xor_pointer = 0;
+static bool xor_from_create = false;   // The XOR flow was opened as CREATE > MIX ENTROPY
 BYTE xor_merge_word1[32] = {0};
 BYTE xor_merge_word2[32] = {0};
 BYTE xor_merge_word3[32] = {0};
@@ -788,6 +795,7 @@ state_t estado = INIT;
 // ============================================================================
 
 uint8_t idle_option = 0;                    // Index in menu_idle[]; 0 = never
+uint8_t kef_steps = 1;                      // KEF ITERATIONS setting, in steps of cKEF_ITER_STEP
 static const uint8_t idle_minutes[cIDLE_n_opt] = {0, 5, 10, 20, 30};
 #define IDLE_TICKS_PER_S (CPU_CLOCK_FREQUENCY / 2u)
 static jmp_buf idle_jump;                   // The state machine loop of main()
@@ -1372,7 +1380,11 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
     
     bool full_redraw = true;
     bool text_changed = true;
-    
+
+    // DEL held down deletes again, at the pace of the UP / DOWN repeat
+    bool del_held = false;
+    uint32_t del_t = 0, del_wait = 0;
+
     while(BT_OK == 0 || BT1 == 0) SYS_Tasks();
 
     black_screen();
@@ -1585,12 +1597,23 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
             }
         }
         
-        if (BT1 == 0) { // BACK / DELETE
-            delay_ms(30);
-            if (BT1 == 0) {
-                update_entropy_coefficients();
-                LED = 1;
-                
+        if (BT1 == 0) { // BACK / DELETE: one character, then more while held
+            bool fire = false;
+            if (!del_held) {
+                delay_ms(30);
+                if (BT1 == 0) {
+                    update_entropy_coefficients();
+                    LED = 1;
+                    del_held = true;
+                    del_wait = KEY_REPEAT_FIRST_MS;
+                    fire = true;
+                }
+            } else if ((uint32_t)(_CP0_GET_COUNT() - del_t) >= del_wait * (CPU_CLOCK_FREQUENCY / 2000u)) {
+                del_wait = KEY_REPEAT_NEXT_MS;
+                fire = true;
+            }
+            if (fire) {
+                del_t = _CP0_GET_COUNT();
                 if (editing_title) {
                     if (title_cursor > 0) {
                         memmove(&title[title_cursor - 1], &title[title_cursor], title_len - title_cursor + 1);
@@ -1606,11 +1629,11 @@ bool full_text_editor(char* title, int max_title_len, char* buffer, int max_len,
                         text_changed = true;
                     }
                 }
-                
-                while(BT1 == 0) SYS_Tasks();
-                delay_ms(30);
-                LED = 0;
             }
+        } else if (del_held) {          // Released: debounce, then a new press can delete
+            del_held = false;
+            delay_ms(30);
+            LED = 0;
         }
 
         // D-pad on the keyboard: rows and columns wrap around, the side column
@@ -3815,6 +3838,10 @@ void transition_to_main(void) {
     memzero(&ms_receive_node_cache, sizeof(ms_receive_node_cache));
     memzero(&ms_change_node_cache, sizeof(ms_change_node_cache));
     memzero(vault_key, sizeof(vault_key));
+    if (xor_from_create) {                  // MIX ENTROPY is a CREATE function
+        xor_from_create = false;
+        main_pointer = cMAIN_create;
+    }
     if (main_pointer == cMAIN_SSS || main_pointer == cMAIN_XOR ||
         main_pointer == cMAIN_OBFUS || main_pointer == cMAIN_MNEM2CARD) {
         print_generic_menu(menu_opsec, cOPSEC_n_opt, opsec_pointer);    // Back to OPSEC
@@ -4010,9 +4037,27 @@ static int create_menu_count(void) {
     return stopwatch_enabled ? cSEED_n_opt : cSEED_n_opt - 1;
 }
 
+// Entry id (cSEED_*) at a position of the CREATE menu, and back: MIX ENTROPY
+// is always the last position, STOPWATCH the one before it when shown
+static int create_id(int pos) {
+    return (pos == create_menu_count() - 1) ? cSEED_mix : pos;
+}
+
+static int create_pos(int id) {
+    return (id == cSEED_mix) ? create_menu_count() - 1 : id;
+}
+
 static void draw_create_menu(void) {
-    if (seed_pointer >= create_menu_count()) seed_pointer = cSEED_coin;
-    print_generic_menu(menu_create, create_menu_count(), seed_pointer);
+    const char *options[cSEED_n_opt];
+    if (seed_pointer == cSEED_timer && !stopwatch_enabled) seed_pointer = cSEED_coin;
+    for (int i = 0; i < create_menu_count(); i++) options[i] = menu_create[create_id(i)];
+    print_titled_menu(menu_main[cMAIN_create], options, create_menu_count(), create_pos(seed_pointer));
+}
+
+// The XOR menu: SEED WORD XOR in OPSEC, or MIX ENTROPY in CREATE
+static void print_xor_menu(void) {
+    if (xor_from_create) print_titled_menu("MIX ENTROPY - XOR", menu_mix, cXOR_n_opt, xor_pointer);
+    else print_generic_menu(menu_xor, cXOR_n_opt, xor_pointer);
 }
 
 // Helper to transition to the CREATE_SEED screen
@@ -7312,7 +7357,7 @@ static void check_scanned_address(void) {
 // Permanent settings (settings.c): changes are confirmed, then saved in flash
 // ============================================================================
 
-static uint8_t setting_pending;     // Flags to save when the user confirms
+static uint16_t setting_pending;    // Flags to save when the user confirms
 
 // AUTO UNLOAD in the flags: 7 (three bits at 1, a blank page or an older
 // firmware's record) is NEVER, 6 the first time, 5 the second...
@@ -7325,15 +7370,22 @@ static uint8_t idle_from_flags(uint8_t flags) {
     return (option < cIDLE_n_opt) ? option : 0;
 }
 
-static uint8_t settings_flags_now(void) {
-    return (uint8_t)(idle_field(idle_option) | SETTING_LEGACY_DECOY | (decoy_enabled ? 0u : SETTING_DECOY_OFF) |
-                     (seedqr_enabled ? 0u : SETTING_SEEDQR_OFF) | (sdwrite_enabled ? 0u : SETTING_SDWRITE_OFF) |
-                     (stopwatch_enabled ? 0u : SETTING_STOPWATCH_OFF));
+// KEF ITERATIONS of the flags: out of range (a damaged record) is the default
+static uint8_t kef_steps_from(uint16_t flags) {
+    uint8_t steps = SETTING_KEF_STEPS(flags);
+    return (steps >= 1 && steps <= cKEF_STEPS_MAX) ? steps : 1;
+}
+
+static uint16_t settings_flags_now(void) {
+    return (uint16_t)(SETTING_KEF_FIELD(kef_steps) |
+                      idle_field(idle_option) | SETTING_LEGACY_DECOY | (decoy_enabled ? 0u : SETTING_DECOY_OFF) |
+                      (seedqr_enabled ? 0u : SETTING_SEEDQR_OFF) | (sdwrite_enabled ? 0u : SETTING_SDWRITE_OFF) |
+                      (stopwatch_enabled ? 0u : SETTING_STOPWATCH_OFF));
 }
 
 // Asks to confirm the change of the selected setting (SeedQR, SD write or decoy game)
 static void ask_setting_change(void) {
-    uint8_t flags = settings_flags_now();
+    uint16_t flags = settings_flags_now();
     bool new_on;
 
     if (settings_pointer == cSETTINGS_SEEDQR) {
@@ -7372,6 +7424,65 @@ static void idle_setting_run(void) {
             estado = CONFIRM_SETTING;
             return;
         } else if (key == OK_BT || key == BACK_BT) {
+            while (BT1 == 0) SYS_Tasks();       // Do not let BACK reach the state machine
+            black_screen();
+            print_settings_screen(settings_pointer);
+            return;
+        }
+    }
+}
+
+// "PROCESS TIME: 44 SEC": the KEF key derivation on this device, measured at
+// 44 s for 100,000 iterations (2026-11-08, before -mmemcpy)
+static void kef_time_text(uint32_t iterations, char *out) {
+    char num[12];
+    strcpy(out, "PROCESS TIME: ");
+    fast_itoa((iterations / 1000u * 44u + 50u) / 100u, num);
+    strcat(out, num);
+    strcat(out, " SEC");
+}
+
+// KEF ITERATIONS (SETTINGS): count of the encrypted QR export, 10,000 to
+// 300,000 in steps of 10,000 (UP / DOWN, repeating while held), with the time
+// it takes and how much it slows down guessing the key. OK goes to the same
+// confirmation as the other settings.
+static void kef_setting_run(void) {
+    char text[28];
+    uint8_t steps = kef_steps;
+    bool full = true;
+
+    while (1) {
+        uint32_t iterations = (uint32_t)steps * cKEF_ITER_STEP;
+        if (full) {
+            black_screen();
+            draw_title((char *)menu_settings_kef, ST7735_LIGHTGREY);
+            drawtext(5, 16, "ITERATIONS:", ST7735_WHITE, ST7735_BLACK, 1);
+            drawtext(5, 66, "BRUTE FORCE PROTECTION:", ST7735_WHITE, ST7735_BLACK, 1);
+            full = false;
+        }
+        fast_itoa(iterations, text);
+        strcat(text, "  ");                     // Covers a longer number drawn before
+        drawtext(5, 28, text, ST7735_ORANGE, ST7735_BLACK, 2);
+        kef_time_text(iterations, text);
+        progress_line(52, text);
+        drawtext(5, 78, (steps < 5) ? "LOW   " : (steps < 15) ? "MEDIUM" : "STRONG",
+                 (steps < 5) ? ST7735_YELLOW : ST7735_WHITE, ST7735_BLACK, 1);
+        rectan(GRID_X, 105, GRID_X + 90, 125, BLACK);  // Labels are drawn without a background
+        grid_labels("BACK", (steps < cKEF_STEPS_MAX) ? "+" : NULL, (steps != kef_steps) ? "SAVE" : NULL,
+                    NULL, (steps > 1) ? "-" : NULL, NULL);
+
+        int key = wait_any_key();
+        if (key == UP_BT && steps < cKEF_STEPS_MAX) {
+            steps++;
+        } else if (key == DOWN_BT && steps > 1) {
+            steps--;
+        } else if (key == OK_BT && steps != kef_steps) {
+            setting_pending = (uint16_t)((settings_flags_now() & ~SETTING_KEF_MASK) | SETTING_KEF_FIELD(steps));
+            black_screen();
+            print_setting_confirm(cSETTINGS_KEF, true, steps);
+            estado = CONFIRM_SETTING;
+            return;
+        } else if (key == BACK_BT) {
             while (BT1 == 0) SYS_Tasks();       // Do not let BACK reach the state machine
             black_screen();
             print_settings_screen(settings_pointer);
@@ -7549,10 +7660,6 @@ static void eff_wipe(void) {
 
 // Waits for one of the six keys (pressed and released) in a modal screen,
 // feeding the key press entropy pool like the main loop does
-// UP / DOWN held down repeat: first after KEY_REPEAT_FIRST_MS, then every
-// KEY_REPEAT_NEXT_MS (lists and numbers). OK, BACK, LEFT and RIGHT never do.
-#define KEY_REPEAT_FIRST_MS     500u
-#define KEY_REPEAT_NEXT_MS      120u
 static int wait_any_key(void) {
     static int last_bt = NONE;
     static uint32_t last_t;
@@ -9547,7 +9654,7 @@ static void transcript_tag_now(uint8_t tag[8]) {
 // CREATE, not checked or skipped yet
 static bool transcript_pending(void) {
     uint8_t tag[8];
-    if (main_pointer != cMAIN_create) return false;
+    if (main_pointer != cMAIN_create && !xor_from_create) return false;   // New seeds only
     transcript_tag_now(tag);
     bool pending = memcmp(tag, transcript_tag, sizeof(tag)) != 0;
     memzero(tag, sizeof(tag));
@@ -9975,6 +10082,7 @@ static void idle_recover(uint8_t **shares, uint8_t **shares_input, uint8_t *sss_
     reader_insert = false;
     reader_passphrase = false;
     derive_from_wallet = false;
+    xor_from_create = false;
     qr_view_text = false;
     qr_from_eff = false;
     qr_from_kef = false;
@@ -9999,7 +10107,6 @@ static void idle_recover(uint8_t **shares, uint8_t **shares_input, uint8_t *sss_
 
 #define KEF_SECRET_MAX      200         // Characters of the key, as Krux
 #define KEF_ID_TEXT_MAX     20
-#define KEF_ITERATIONS      100000u     // Fixed on export, as the default of Krux
 #define KEF_TITLE           "ENCRYPTED QR (KEF)"
 
 // The key of the QR, in the editor. False if it was cancelled.
@@ -10079,9 +10186,8 @@ static __attribute__((noinline)) bool kef_export_run(void) {
     drawtext(5, 18, "READ BY SEEDMATE AND KRUX", ST7735_WHITE, ST7735_BLACK, 1);
     drawtext(5, 34, "AS STRONG AS ITS KEY:", ST7735_YELLOW, ST7735_BLACK, 1);
     drawtext(5, 44, "USE A LONG RANDOM ONE", ST7735_YELLOW, ST7735_BLACK, 1);
-    drawtext(5, 58, "WITHOUT THE KEY THE QR", ST7735_YELLOW, ST7735_BLACK, 1);
-    drawtext(5, 68, "IS USELESS", ST7735_YELLOW, ST7735_BLACK, 1);
-    drawtext(5, 82, "PASSPHRASE NOT INCLUDED", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(5, 58, "LOSE THE KEY = QR USELESS", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(5, 72, "PASSPHRASE NOT INCLUDED", ST7735_YELLOW, ST7735_BLACK, 1);
     grid_confirm("NEXT");
     int bt;
     do {
@@ -10098,9 +10204,10 @@ static __attribute__((noinline)) bool kef_export_run(void) {
 
     if (!kef_ask_key(key)) goto wipe;
 
-    // As Krux: the count is not a round number, so the same key and ID never
-    // derive the same AES key
-    uint32_t iterations = KEF_ITERATIONS + TMR1 % (KEF_ITERATIONS / 10u);
+    // The KEF ITERATIONS setting plus, as Krux, up to 10% more: the count is
+    // not a round number, so the same key and ID never derive the same AES key
+    uint32_t base = (uint32_t)kef_steps * cKEF_ITER_STEP;
+    uint32_t iterations = base + TMR1 % (base / 10u);
 
     black_screen();
     draw_title("ENCRYPT THE SEED?", ST7735_LIGHTGREY);
@@ -10117,7 +10224,6 @@ static __attribute__((noinline)) bool kef_export_run(void) {
     fast_itoa(iterations, num);
     strcat(line, num);
     drawtext(5, 56, line, ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(5, 68, "AES-GCM (KEF V20)", ST7735_WHITE, ST7735_BLACK, 1);
     grid_confirm("ENCR");
     do {
         bt = wait_any_key();
@@ -10185,7 +10291,6 @@ static __attribute__((noinline)) kef_load_t kef_load_from_qr(const char *text, i
 
     black_screen();
     draw_title(KEF_TITLE, ST7735_LIGHTGREY);
-    drawtext(5, 20, "ENCRYPTED SEED", ST7735_WHITE, ST7735_BLACK, 1);
     strcpy(line, "ID: ");
     {
         uint8_t n = (env.id_len > KEF_ID_TEXT_MAX) ? KEF_ID_TEXT_MAX : env.id_len;
@@ -10194,12 +10299,13 @@ static __attribute__((noinline)) kef_load_t kef_load_from_qr(const char *text, i
         }
         line[4 + n] = '\0';
     }
-    drawtext(5, 32, line, ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(5, 44, (env.version == KEF_V_GCM) ? "AES-GCM" : "AES-CTR", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 20, line, ST7735_WHITE, ST7735_BLACK, 1);
     strcpy(line, "ITERATIONS: ");
     fast_itoa(env.iterations, num);
     strcat(line, num);
-    drawtext(5, 56, line, ST7735_CYAN, ST7735_BLACK, 1);
+    drawtext(5, 32, line, ST7735_WHITE, ST7735_BLACK, 1);
+    kef_time_text(env.iterations, line);
+    drawtext(5, 44, line, ST7735_CYAN, ST7735_BLACK, 1);
     grid_confirm("KEY");
     int bt;
     do {
@@ -10259,12 +10365,13 @@ int main ( void ){
     /* Initialize all modules */
     SYS_Initialize ( NULL );
     {
-        uint8_t saved = settings_load();    // Permanent settings; no record = factory defaults
+        uint16_t saved = settings_load();   // Permanent settings; no record = factory defaults
         decoy_enabled = (saved & SETTING_DECOY_OFF) == 0;
         stopwatch_enabled = (saved & SETTING_STOPWATCH_OFF) == 0;
         seedqr_enabled = (saved & SETTING_SEEDQR_OFF) == 0;
         sdwrite_enabled = (saved & SETTING_SDWRITE_OFF) == 0;
-        idle_option = idle_from_flags(saved);
+        idle_option = idle_from_flags((uint8_t)saved);
+        kef_steps = kef_steps_from(saved);
     }
     R_LCD=1;
     LED_LCD =1;
@@ -10621,8 +10728,8 @@ int SSS_N = 9;
                     print_child_config_screen();
                     estado = CHILD_CONFIG;
                 } else if (main_pointer==cMAIN_XOR){// XOR
-                    
-                    print_generic_menu(menu_xor, cXOR_n_opt, xor_pointer);
+                    xor_from_create = false;
+                    print_xor_menu();
                     estado = SEL_XOR;
                 } else if (main_pointer==cMAIN_OBFUS){// Obfuscation
                     transition_to_obfus();
@@ -10805,7 +10912,13 @@ int SSS_N = 9;
             case CREATE_SEED:        /////  SCREEN     2   /////////////
                 switch (pulsed_bt) {
                     case OK_BT:
-                        if (seed_pointer == cSEED_triple) {
+                        if (seed_pointer == cSEED_mix) {     // MIX ENTROPY: the XOR flow
+                            main_pointer = cMAIN_XOR;
+                            xor_from_create = true;
+                            black_screen();
+                            print_xor_menu();
+                            estado = SEL_XOR;
+                        } else if (seed_pointer == cSEED_triple) {
                             transition_to_input(selinput_pointer);
                             size_pointer = cSIZE_24;
                             entropy_bits = cENTROPY_BITS24W;
@@ -10821,14 +10934,12 @@ int SSS_N = 9;
                         transition_to_main();
                         break;
                     case UP_BT:
-                        if (seed_pointer > 0) {
-                            seed_pointer--;
-                        }
+                        if (create_pos(seed_pointer) > 0) seed_pointer = create_id(create_pos(seed_pointer) - 1);
                         draw_create_menu();
                         break;
                     case DOWN_BT:
-                        if (seed_pointer < (create_menu_count() - 1)) {
-                            seed_pointer++;
+                        if (create_pos(seed_pointer) < create_menu_count() - 1) {
+                            seed_pointer = create_id(create_pos(seed_pointer) + 1);
                         }
                         draw_create_menu();
                         break;
@@ -11270,19 +11381,25 @@ int SSS_N = 9;
                         transition_to_input(selinput_pointer);
                         break;
                     case BACK_BT:
-                        transition_to_main();
+                        if (xor_from_create) {          // MIX ENTROPY: back to CREATE
+                            xor_from_create = false;
+                            main_pointer = cMAIN_create;
+                            transition_to_create_seed();
+                        } else {
+                            transition_to_main();       // SEED WORD XOR: back to OPSEC
+                        }
                         break;
                     case UP_BT:
                         if (xor_pointer > 0) {
                             xor_pointer--;
                         }
-                        print_generic_menu(menu_xor, cXOR_n_opt, xor_pointer);
+                        print_xor_menu();
                         break;
                     case DOWN_BT:
                         if (xor_pointer < (cXOR_n_opt-1)) {
                             xor_pointer++;
                         }
-                        print_generic_menu(menu_xor, cXOR_n_opt, xor_pointer);
+                        print_xor_menu();
                         break;
                     case LEFT_BT:
                         break;
@@ -11753,7 +11870,7 @@ int SSS_N = 9;
                         if (multi_input_mode()) multi_input_wipe(shares_input, SSS_result, LEN);    // Cancelled
                         if (main_pointer == cMAIN_XOR)   {
                             black_screen();
-                            print_generic_menu(menu_xor, cXOR_n_opt, xor_pointer);
+                            print_xor_menu();
                             estado = SEL_XOR;
                         }else if((main_pointer==cMAIN_SSS) & (sss_pointer==cSPLIT)){
                             black_screen();
@@ -12879,6 +12996,9 @@ int SSS_N = 9;
                     else if (settings_pointer == cSETTINGS_IDLE) {
                         idle_setting_run();
                     }
+                    else if (settings_pointer == cSETTINGS_KEF) {
+                        kef_setting_run();
+                    }
                     else if (settings_pointer == cSETTINGS_MCU_SERIAL) {
                         print_mcu_serial_screen();
                         estado = SHOW_MCU_SERIAL;
@@ -13213,7 +13333,8 @@ int SSS_N = 9;
                     stopwatch_enabled = (setting_pending & SETTING_STOPWATCH_OFF) == 0;
                     seedqr_enabled = (setting_pending & SETTING_SEEDQR_OFF) == 0;
                     sdwrite_enabled = (setting_pending & SETTING_SDWRITE_OFF) == 0;
-                    idle_option = idle_from_flags(setting_pending);
+                    idle_option = idle_from_flags((uint8_t)setting_pending);
+                    kef_steps = kef_steps_from(setting_pending);
                     drawtext(5, 50, "SETTING SAVED", ST7735_GREEN, ST7735_BLACK, 1);
                     delay_ms(800);
                     black_screen();
