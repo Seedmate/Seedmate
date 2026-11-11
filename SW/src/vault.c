@@ -16,6 +16,7 @@
 #include "memzero.h"
 #include "ur_encode.h"                          // ur_crc32_update()
 #include "crypto/aes/aesgcm.h"
+#include "sha256.h"
 
 static const uint8_t header_magic[8] = {'S', 'M', 'V', 'A', 'U', 'L', 'T', 0};
 #define HDR_VERSION     8u
@@ -67,14 +68,46 @@ static void record_header(uint8_t sector[512], uint32_t sector_no, uint8_t part)
     for (int i = 0; i < 4; i++) sector[4 + i] = (uint8_t)(sector_no >> (24 - 8 * i));
 }
 
+// Nonce of a record: the first 12 bytes of HMAC-SHA256(key, counter || plain
+// header || plaintext). The counter alone is not enough: it lives in clear in
+// the header sector, and someone who has the card twice could put an old
+// header back, so the same counter and sector would be used again. With the
+// text in the nonce, a repeated counter only repeats the nonce for the very
+// same text, which gives the very same record and leaks nothing new
+// (security audit M3). The nonce is stored in the record, so records sealed
+// before 2026-11-11 (nonce = counter || sector) open as they always did.
+static void record_nonce(const uint8_t sector[512], const uint8_t key[32], uint64_t counter,
+                         uint8_t nonce[12]) {
+    uint8_t pad[64], mac[32], ctr[8];
+    SHA256_CTX ctx;
+
+    for (int i = 0; i < 8; i++) ctr[i] = (uint8_t)(counter >> (56 - 8 * i));
+    memset(pad, 0x36, sizeof(pad));
+    for (int i = 0; i < 32; i++) pad[i] ^= key[i];
+    sha256_init(&ctx);
+    sha256_update(&ctx, pad, sizeof(pad));
+    sha256_update(&ctx, ctr, sizeof(ctr));
+    sha256_update(&ctx, sector, 8);                         // Plain header (the AAD)
+    sha256_update(&ctx, &sector[VAULT_REC_DATA], VAULT_REC_DATA_LEN);
+    sha256_final(&ctx, mac);
+    for (int i = 0; i < 64; i++) pad[i] ^= 0x36 ^ 0x5C;
+    sha256_init(&ctx);
+    sha256_update(&ctx, pad, sizeof(pad));
+    sha256_update(&ctx, mac, sizeof(mac));
+    sha256_final(&ctx, mac);
+    memcpy(nonce, mac, 12);
+    memzero(pad, sizeof(pad));
+    memzero(mac, sizeof(mac));
+    memzero(&ctx, sizeof(ctx));
+}
+
 bool vault_record_seal(uint8_t sector[512], const uint8_t key[32], uint32_t sector_no,
                        uint64_t counter, uint8_t part) {
     gcm_ctx ctx;
     bool ok;
 
     record_header(sector, sector_no, part);
-    for (int i = 0; i < 8; i++) sector[VAULT_REC_NONCE + i] = (uint8_t)(counter >> (56 - 8 * i));
-    for (int i = 0; i < 4; i++) sector[VAULT_REC_NONCE + 8 + i] = (uint8_t)(sector_no >> (24 - 8 * i));
+    record_nonce(sector, key, counter, &sector[VAULT_REC_NONCE]);
 
     ok = gcm_init_and_key(key, 32, &ctx) == RETURN_GOOD &&
          gcm_encrypt_message(&sector[VAULT_REC_NONCE], 12, sector, 8,

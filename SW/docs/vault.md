@@ -58,11 +58,20 @@ vault_key = BIP85 HEX, 32 bytes, index 8377      (m/83696968'/128169'/32'/8377')
 - Why not ChaCha20-Poly1305 (the first idea): the recovery tool is an HTML page,
   and browsers have AES-GCM built in (WebCrypto), not ChaCha. AES is already in
   the vendored trezor-crypto; it costs a few KB more flash than ChaCha.
-- Nonce = `write_counter (8 bytes, big endian) || sector (4 bytes, big endian)`.
-  `write_counter` is global to the vault (in the header) and goes up by one
-  before every record write, so a nonce is never reused with the same key, not
-  even after deleting and rewriting a sector. The camera-less device has no good
-  random source; this needs none.
+- Nonce = the first 12 bytes of `HMAC-SHA256(vault_key, write_counter (8 bytes,
+  big endian) || plain header (8 bytes) || plaintext (476 bytes))`, stored in
+  the record. `write_counter` is global to the vault (in the header) and goes
+  up by one before every record write. The counter alone is not enough: it is
+  in clear in the header, and someone who had the card twice could put an old
+  header back and make the device use a counter again. With the text in the
+  nonce, a repeated counter repeats the nonce only for the very same text,
+  which gives the very same record and leaks nothing (security audit M3,
+  2026-11-11). The camera-less device has no good random source; this needs
+  none.
+- Records written before 2026-11-11 have the nonce `write_counter || sector`.
+  Readers never compute the nonce: they take the 12 bytes stored in the
+  record, so both kinds open the same way (the HTML recovery page must do the
+  same).
 - Additional authenticated data = the 8 plain header bytes of the record
   (magic, version, sector, part): a record copied to another sector, or
   edited in its plain fields, fails the check.

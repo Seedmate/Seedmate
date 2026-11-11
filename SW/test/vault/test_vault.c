@@ -301,6 +301,27 @@ int main(void) {
     check(vault_record_open(s, key, 502), "open");
     check(memcmp(&s[VAULT_REC_DATA], vec_record_plain, VAULT_REC_DATA_LEN) == 0, "plaintext");
 
+    // A record sealed before the HMAC nonce (nonce = counter || sector) still opens
+    memcpy(s, vec_record_legacy, 512);
+    check(vault_record_open(s, key, 502), "record with the old nonce opens");
+    check(memcmp(&s[VAULT_REC_DATA], vec_record_plain, VAULT_REC_DATA_LEN) == 0, "old record plaintext");
+
+    // Audit M3: the same counter and sector again (an old header put back)
+    // give another nonce to another text, and the very same record to the same text
+    {
+        static uint8_t a[512], b[512], c[512];
+        memset(a, 0, 512);
+        memcpy(&a[VAULT_REC_DATA], vec_record_plain, VAULT_REC_DATA_LEN);
+        memcpy(c, a, 512);
+        memcpy(b, a, 512);
+        b[VAULT_REC_DATA + 30] ^= 1;                // Another text
+        check(vault_record_seal(a, key, 502, 1, VAULT_PART_SINGLE) &&
+              vault_record_seal(b, key, 502, 1, VAULT_PART_SINGLE) &&
+              vault_record_seal(c, key, 502, 1, VAULT_PART_SINGLE), "seal three times with one counter");
+        check(memcmp(&a[VAULT_REC_NONCE], &b[VAULT_REC_NONCE], 12) != 0, "another text, another nonce");
+        check(memcmp(a, c, 512) == 0, "same text, same record");
+    }
+
     memcpy(s, vec_record2, 512);
     check(vault_record_open(s, key, 2046), "open record 2 (sector 2046, long counter)");
     check(s[VAULT_REC_DATA + VAULT_PT_TYPE] == VAULT_TYPE_DESCRIPTOR && s[3] == 0x12,

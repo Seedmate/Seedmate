@@ -46,7 +46,7 @@
 #define SETTING_SDWRITE_OFF 0x04u               // Writing seeds to the SD disabled (default: disabled)
 #define SETTING_DECOY_OFF   0x08u               // No snake game at power-on (default: no game)
 #define SETTING_STOPWATCH_OFF 0x10u             // STOPWATCH hidden in CREATE (default: hidden)
-#define SETTING_IDLE_MASK   0xE0u               // AUTO UNLOAD time: 7 = never (default), see main.c
+#define SETTING_IDLE_MASK   0xE0u               // AUTO UNLOAD time: 7 = 10 minutes (default), see main.c
 #define SETTING_IDLE_SHIFT  5
 // High byte: KEF iterations in steps of 10,000, as ~(steps - 1), so 0xFF is
 // 10,000 (default). Not secret: the count is written in clear in the QR.

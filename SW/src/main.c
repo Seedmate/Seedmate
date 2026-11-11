@@ -336,6 +336,7 @@ static int bip84_option_count(void) {
 // XOR Globals moved from main()
 int xor_pointer = 0;
 static bool xor_from_create = false;   // The XOR flow was opened as CREATE > MIX ENTROPY
+static SHA256_CTX stopwatch_ctx;       // STOPWATCH seed: every timer sample, hashed at the end
 BYTE xor_merge_word1[32] = {0};
 BYTE xor_merge_word2[32] = {0};
 BYTE xor_merge_word3[32] = {0};
@@ -6139,7 +6140,7 @@ static bool psbt_confirm_signing(const psbt_t *psbt, const psbt_sign_plan_t *pla
 
     // Warnings first, always shown
     if (plan->amounts_unverified) {
-        drawtext(5, y, "AMOUNTS NOT VERIFIED", ST7735_YELLOW, ST7735_BLACK, 1);
+        drawtext(5, y, "AMOUNTS NOT VERIFIED", ST7735_RED, ST7735_BLACK, 1);
         y += 9;
     }
     if (plan->change_unverified) {
@@ -6398,6 +6399,25 @@ static void psbt_export_menu(const uint8_t *psbt, uint32_t len, uint32_t signed_
     }
 }
 
+// An input without its previous transaction: its amount comes from the PSBT
+// only, and a coordinator could lie about it across two signings to raise the
+// fee (audit L9). Said in red before the confirmation; NEXT goes on.
+static bool psbt_prev_tx_warning(void) {
+    black_screen();
+    draw_title("PREVIOUS TX MISSING", ST7735_RED);
+    drawtext(5, 22, "CHECK INPUT AMOUNTS", ST7735_RED, ST7735_BLACK, 1);
+    drawtext(5, 32, "MANUALLY", ST7735_RED, ST7735_BLACK, 1);
+    drawtext(5, 50, "THE PSBT HAS NO PREVIOUS", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 60, "TRANSACTIONS: THE AMOUNTS", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(5, 70, "ARE NOT VERIFIED", ST7735_WHITE, ST7735_BLACK, 1);
+    grid_confirm("NEXT");
+    int key;
+    do {
+        key = psbt_wait_key();
+    } while (key != OK_BT && key != BACK_BT);
+    return key == OK_BT;
+}
+
 // Shows a PSBT, then offers to sign it with the loaded seed and returns the
 // signed PSBT as an animated QR or a file. buf has room for 'capacity' bytes.
 static void psbt_review_and_sign(uint8_t *buf, uint32_t len, uint32_t capacity) {
@@ -6428,6 +6448,7 @@ static void psbt_review_and_sign(uint8_t *buf, uint32_t len, uint32_t capacity) 
         return;
     }
     if (!psbt_viewer(&psbt)) return;                        // BACK: nothing signed
+    if (plan.amounts_unverified && !psbt_prev_tx_warning()) return;
     if (!psbt_confirm_signing(&psbt, &plan)) return;
 
     const char *why;
@@ -7332,13 +7353,17 @@ static uint16_t setting_pending;    // Flags to save when the user confirms
 
 // AUTO UNLOAD in the flags: 7 (three bits at 1, a blank page or an older
 // firmware's record) is NEVER, 6 the first time, 5 the second...
+// The field holds 7 - (option ^ IDLE_DEFAULT_OPTION), so 7 (a blank page,
+// no record yet) is the factory default, 10 minutes (audit L11: the seed is
+// not left loaded by mistake), and every option has its own value
+#define IDLE_DEFAULT_OPTION 2u              // menu_idle[2], 10 MINUTES
 static uint8_t idle_field(uint8_t option) {
-    return (uint8_t)((7u - option) << SETTING_IDLE_SHIFT);
+    return (uint8_t)((7u - (option ^ IDLE_DEFAULT_OPTION)) << SETTING_IDLE_SHIFT);
 }
 
 static uint8_t idle_from_flags(uint8_t flags) {
-    uint8_t option = (uint8_t)(7u - ((flags & SETTING_IDLE_MASK) >> SETTING_IDLE_SHIFT));
-    return (option < cIDLE_n_opt) ? option : 0;
+    uint8_t option = (uint8_t)((7u - ((flags & SETTING_IDLE_MASK) >> SETTING_IDLE_SHIFT)) ^ IDLE_DEFAULT_OPTION);
+    return (option < cIDLE_n_opt) ? option : IDLE_DEFAULT_OPTION;
 }
 
 // KEF ITERATIONS of the flags: out of range (a damaged record) is the default
@@ -7402,55 +7427,6 @@ static void idle_setting_run(void) {
         }
     }
 }
-
-// ============================================================================
-// TEMPORARY (BOOT_LOCK_TEST): checks the write protection the bootloader sets
-// before it starts the app. Shown on SETTINGS > MCU SERIAL NUMBER. Remove it
-// once the bootloader has been tried on the board.
-// ============================================================================
-#define BOOT_LOCK_TEST 1
-#if BOOT_LOCK_TEST
-#define BOOT_LOCK_TEST_ADDR 0x1D0027E8u    // Blank and unused, just before the bootloader tag
-
-static uint32_t boot_lock_nvm_op(uint32_t op) {
-    NVMCON = 0x4000u | op;                  // WREN + operation
-    __builtin_disable_interrupts();
-    NVMKEY = 0xAA996655;
-    NVMKEY = 0x556699AA;
-    NVMCONSET = 0x8000;                     // WR
-    while (NVMCONbits.WR);
-    NVMCONCLR = 0x4000;
-    __builtin_enable_interrupts();
-    return NVMCON & 0x3000u;                // WRERR / LVDERR
-}
-
-static void boot_lock_line(int y, const char *name, uint32_t value, bool ok) {
-    char text[24];
-    strcpy(text, name);
-    u16_to_hex4((uint16_t)(value >> 16), &text[strlen(text)]);
-    u16_to_hex4((uint16_t)value, &text[strlen(text)]);
-    strcat(text, ok ? " LOCKED" : " OPEN");
-    drawtext(5, y, text, ok ? ST7735_GREEN : ST7735_RED, ST7735_BLACK, 1);
-}
-
-static void boot_lock_test(void) {
-    uint32_t pwp = NVMPWP, bwp = NVMBWP;
-    boot_lock_line(40, "PWP ", pwp, (pwp & 0x80000000u) == 0 && (pwp & 0x00FFFFFFu) == 0x3000u);
-    boot_lock_line(52, "BWP ", bwp, (bwp & 0x00008000u) == 0 && (bwp & 0x00000700u) == 0x700u);
-
-    // A real write of zeros into a blank, unused double-word of the bootloader:
-    // refused if the protection works; if not, only that unused spot changes
-    NVMADDR = BOOT_LOCK_TEST_ADDR;
-    NVMDATA0 = 0;
-    NVMDATA1 = 0;
-    uint32_t err = boot_lock_nvm_op(0x2);
-    const volatile uint32_t *p = (const volatile uint32_t *)(0xA0000000u | BOOT_LOCK_TEST_ADDR);
-    bool written = p[0] != 0xFFFFFFFFu || p[1] != 0xFFFFFFFFu;
-    (void)boot_lock_nvm_op(0x0);            // NOP: clears the error flags for the settings writes
-    drawtext(5, 68, written ? "WRITE DONE: NOT PROTECTED" : (err ? "WRITE REFUSED (ERROR)" : "WRITE REFUSED"),
-             written ? ST7735_RED : ST7735_GREEN, ST7735_BLACK, 1);
-}
-#endif
 
 // "PROCESS TIME: 44 SEC": the KEF key derivation on this device, measured at
 // 44 s for 100,000 iterations (2026-11-08, before -mmemcpy)
@@ -10074,6 +10050,7 @@ static void session_wipe(uint8_t **shares, uint8_t **shares_input, uint8_t *sss_
     memzero(eff_digit, sizeof(eff_digit));
     memzero(eff_dice, sizeof(eff_dice));
     memzero(dice_two_bits, sizeof(dice_two_bits));
+    memzero(&stopwatch_ctx, sizeof(stopwatch_ctx));
     uint32_t cap;
     uint8_t *scratch = fountain_scratch_buffer(&cap);
     memzero(scratch, cap);
@@ -10363,6 +10340,26 @@ done:
     memzero(plain, sizeof(plain));
     memset(buffer, 0, sizeof(buffer));
     return result;
+}
+
+// POKER CARDS: how to draw them, before the entry screen (audit L4: a card
+// drawn without putting it back is not independent of the others). False:
+// BACK, to the size menu.
+static bool card_intro(void) {
+    black_screen();
+    draw_title((char *)menu_create[cSEED_cards], ST7735_LIGHTGREY);
+    drawtext(1, 16, "AFTER EACH CARD:", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 26, "PUT IT BACK IN THE DECK", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(1, 36, "AND SHUFFLE WELL", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(1, 54, "ENTER RANK, THEN SUIT:", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 64, "tc = TEN OF CLUBS", ST7735_WHITE, ST7735_BLACK, 1);
+    drawtext(1, 78, "RANK a 2-9 t j q k", ST7735_CYAN, ST7735_BLACK, 1);
+    drawtext(1, 88, "SUIT c d h s", ST7735_CYAN, ST7735_BLACK, 1);
+    grid_confirm("NEXT");
+    int bt;
+    do { bt = wait_any_key(); } while (bt != OK_BT && bt != BACK_BT);
+    wait_keys_released();
+    return bt == OK_BT;
 }
 
 // The slot list of SEED BACKUP > SD, if the card is initialized
@@ -11344,6 +11341,9 @@ int SSS_N = 9;
                             print_previous_confirmed_word(word_number, word_number_text);
                             print_keyboard_with_validation(lt_idx, found_bool, word);
                         }   else if (seed_pointer==cSEED_timer){// Stopwatch test only
+                            sha256_init(&stopwatch_ctx);
+                            sha256_update(&stopwatch_ctx, (const BYTE *)"SEEDMATE STOPWATCH", 18);
+                            memzero(data_array_256b, sizeof(data_array_256b));
                             black_screen();
                             estado = TMR_INPUT;
                             dice_x_pointer = 0;
@@ -11351,6 +11351,10 @@ int SSS_N = 9;
                             bit_count_dice = 0;
                             print_TMR_screen(size_pointer);
                         }   else if (seed_pointer==cSEED_cards){
+                            if (!card_intro()) {            // BACK: the size menu again
+                                transition_to_size();
+                                break;
+                            }
                             reset_card_entropy_mode();
                             estado = CARD_INPUT;
 							black_screen();
@@ -12079,11 +12083,30 @@ int SSS_N = 9;
                 switch (pulsed_bt) {
                     case OK_BT:
                         time_now = TMR1;
-                        last_input_len = 16;
-                        for (int i = 15; i >= 0; i--) {
-                            int bit_i = (int)((time_now >> i) & 1u);
-                            set_bit(data_array_256b, bit_count_dice, bit_i);
-                            bit_count_dice+=1;
+                        if (main_pointer == cMAIN_create) {
+                            // STOPWATCH seed (audit L4): the timer runs from the same clock as
+                            // the loop that reads it, so a sample is not 16 random bits. Each
+                            // one counts as 8 (twice the presses) and the seed is the SHA-256
+                            // of all of them, which spreads their randomness over every bit
+                            int target = (size_pointer == cSIZE_12) ? 128 : 256;
+                            sha256_update(&stopwatch_ctx, (const BYTE *)&time_now, sizeof(time_now));
+                            bit_count_dice += 8;
+                            last_input_len = 0;
+                            if (bit_count_dice >= target) {
+                                uint8_t hash[SHA256_BLOCK_SIZE];
+                                sha256_final(&stopwatch_ctx, hash);
+                                memzero(data_array_256b, sizeof(data_array_256b));
+                                memcpy(data_array_256b, hash, (size_t)target / 8u);
+                                memzero(hash, sizeof(hash));
+                                memzero(&stopwatch_ctx, sizeof(stopwatch_ctx));
+                            }
+                        } else {
+                            last_input_len = 16;
+                            for (int i = 15; i >= 0; i--) {
+                                int bit_i = (int)((time_now >> i) & 1u);
+                                set_bit(data_array_256b, bit_count_dice, bit_i);
+                                bit_count_dice+=1;
+                            }
                         }
                         draw_hex16(dice_x_pointer, dice_y_pointer, time_now, 1, ST7735_WHITE, ST7735_BLACK, 1);
                         dice_xy_pointer_line_adjust();
@@ -13025,9 +13048,6 @@ int SSS_N = 9;
                     }
                     else if (settings_pointer == cSETTINGS_MCU_SERIAL) {
                         print_mcu_serial_screen();
-#if BOOT_LOCK_TEST
-                        boot_lock_test();
-#endif
                         estado = SHOW_MCU_SERIAL;
                     }
                     else if (settings_pointer == cSETTINGS_UPDATE_FW) {

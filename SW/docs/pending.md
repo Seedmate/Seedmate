@@ -3,13 +3,13 @@
 The open work list, kept up to date with every change (Claude updates it when
 a task is done, decided or added). Last update: 2026-11-10.
 
-Memory today: flash 211.4 KB of 238 KB (88.8%, about 26.6 KB free); RAM
+Memory today: flash 212.5 KB of 238 KB (89.3%, about 25.5 KB free); RAM
 23.7 KB of 32 KB (about 11.5 KB of stack).
 
 ## 0. Security audit of 2026-11-09
 
 Findings and fixes in `docs/security-audit.md`. Fixed on 2026-11-11 (host
-tests pass, device test pending): C1, H1, M1, M2, M4, M5, M6, L1, L2, L5, L6, and in the
+tests pass, device test pending): C1, H1, M1, M2, M3, M4, M5, M6, L1, L2, L4, L5, L6, L9, L11, and in the
 bootloader H2 and L10.
 Device test of those fixes: load seeds from QR, SD and keyboard, an XOR and
 a Shamir merge, a descriptor by QR, sign a PSBT, UNLOAD and AUTO UNLOAD,
@@ -18,9 +18,7 @@ UPDATE FIRMWARE, QR READER on a Compact SeedQR, BIP85 PASSWORD with index 10.
 | Id | Still open |
 |---|---|
 | H2 | Done in code on 2026-11-11 (release key, flash lock); `CP` stays off and there is no version check, both decided. Device test pending |
-| M3 | Vault: nonce that survives a rolled back header (new format version) |
-| L3 | Cap the iterations of an imported KEF QR? |
-| L4, L7-L11 | Low: see the document |
+| L4, L9 | Done on 2026-11-11, device test pending: STOPWATCH hashes its samples (twice the presses); POKER CARDS explains first that each card goes back into the deck (`card_intro()`); a PSBT without previous transactions gets a red "PREVIOUS TX MISSING" screen and can still be signed |
 
 ## 1. Before shipping v2.0
 
@@ -31,15 +29,16 @@ UPDATE FIRMWARE, QR READER on a Compact SeedQR, BIP85 PASSWORD with index 10.
 | Thorough device test pass | Everything since the vault: vault notes and descriptors, descriptor QR (Sparrow PDF), DERIVE (passwords, Nostr), transcript check, start screen, settings defaults, key repeat |
 | Firmware signature: test on the device | The bootloader is built, not tried on a board: signed and unsigned update, bad signature, the warning at boot, time of "VERIFYING SIGNATURE". Needs the PICkit once: the 12 KB layout refuses old apps, and old bootloaders refuse new apps |
 | Firmware signature: real key | Done on 2026-11-11: release public key in `bootloader/src/boot_lms.c`, indexes recorded in `SIGNATURES.md` (one index per file, each language variant too). Device test with the "Firmware signature: test on the device" row |
-| Bootloader write protection | Done on 2026-11-11, PC build only (bootloader 10,128 B of 10,224, 96 B free; BOOT 1.0 kept): `JumpToApp()` protects the flash below 0x1D003000 and the boot flash pages and locks both registers until the next reset. Flash `bootloader.production.unified.hex` with the PICkit. Device test: updates still work (signed, unsigned, forced with OK + BACK), the app starts, settings still save; a write below 0x1D003000 from the app must fail: TEMPORARY `BOOT_LOCK_TEST` in `main.c` (SETTINGS > MCU SERIAL NUMBER shows PWP / BWP LOCKED and tries a write at 0x1D0027E8, a blank spot of the bootloader); remove it after the test (+592 B) |
+| Bootloader write protection | Done on 2026-11-11 (bootloader 10,128 B of 10,224, 96 B free; BOOT 1.0 kept): `JumpToApp()` protects the flash below 0x1D003000 and the boot flash pages and locks both registers until the next reset. Checked on the board on 2026-11-11 with a temporary test in the app (registers locked, a write into the bootloader refused), then the test was removed. Still to try: updates from the SD (signed, unsigned, forced with OK + BACK) with the new bootloader, and that the settings still save |
 | Firmware rollback | Decided on 2026-11-11: no version check. Older firmware installs like any other (signed: "OFFICIAL"), and the bootloader has no room to spare |
 | Bootloader updates without a PICkit | A signed bootloader package that the current bootloader verifies and writes itself from RAM; it can carry a new public key signed by the old one. Power loss during the write needs the PICkit |
 | FAT32 in the bootloader | Cards over 32 GB: today only a small FAT16 partition works. The bootloader has 136 B free in its code area, so it needs savings first |
 | Stack measurement | Stack watermark, before Taproot |
-| PSBT and AUTO UNLOAD: device test | Built on 2026-11-08, not tried on the board. HIGH FEE on the flow and on the confirmation (fee over 1/4 of what is sent, change excluded, or at least 1/10 of the inputs); BURNS BTC and "THIS AMOUNT IS BURNED" for an OP_RETURN with an amount. SETTINGS > AUTO UNLOAD (never, 5, 10, 20, 30 minutes, never by default): try it inside a deep flow (editor, vault, PSBT review, QR scan, words on screen) and check that it wipes, says why and returns to the main menu; the keys pressed and long operations must restart the time |
+| PSBT and AUTO UNLOAD: device test | Built on 2026-11-08, not tried on the board. HIGH FEE on the flow and on the confirmation (fee over 1/4 of what is sent, change excluded, or at least 1/10 of the inputs); BURNS BTC and "THIS AMOUNT IS BURNED" for an OP_RETURN with an amount. SETTINGS > AUTO UNLOAD (never, 5, 10, 20, 30 minutes; 10 minutes from the factory since 2026-11-11): try it inside a deep flow (editor, vault, PSBT review, QR scan, words on screen) and check that it wipes, says why and returns to the main menu; the keys pressed and long operations must restart the time |
 | Compiler options `-mmemcpy -G 1024`: device test | Applied on 2026-11-10 (flash -11,513 B, RAM +36 B), not tried on the board. The whole binary changed: load a seed, sign a PSBT, SD read and write, vault, QR in and out. `memcpy` copies byte by byte, so time the KEF derivation (44 s before at 100,000 iterations) and LOADING WALLET. If slower than acceptable, build `kdf.c` and `kef.c` without `-mmemcpy` |
 | CREATE > MIX ENTROPY: device test | Done on 2026-11-11: the XOR flow from CREATE, titled "MIX ENTROPY - XOR" (2, 3, 4 INPUTS). Try BACK from every step (XOR menu to CREATE, source menu to the XOR menu, size, word entry, SD list, QR scan), the result asking the transcript before WALLET, and UNLOAD returning to the main menu; SEED WORD XOR in OPSEC must still return to OPSEC |
 | KEF ITERATIONS setting: device test | Done on 2026-11-11: SETTINGS > KEF ITERATIONS, 10,000 (default) to 300,000 in steps of 10,000, permanent, with the process time and the protection level. The export uses it (plus up to 10%); the notice, confirmation and import screens were lightened (import shows the estimated time). Try: change it, power off and on, export at 10,000 and 300,000, read both in the Krux, check that the time shown is close to the real one |
+| Vault nonce (audit M3): device test | Done on 2026-11-11: the nonce of a new record is HMAC-SHA256(key, counter, header, text), stored in the record. Try: open a vault saved with the previous firmware (its entries must still open), add, edit and delete entries |
 | Text editor DEL held: device test | Done on 2026-11-11: held, BACK / DEL deletes again after 500 ms and then every 120 ms (the UP / DOWN pace), in the title and the text. Check the pace feels right |
 | Packed word lists: device test | Done on 2026-11-08, saved 11.1 KB, PC tests only. On the device: word entry and its keyboard (should not feel slower), showing 24 words, seeds from QR and SD, EFF PASSWORD |
 | Try it all with real PSBTs | On the device with PSBTs made by real wallets (Sparrow, Nunchuk, single sig and multisig, by SD and by QR): the new review, HIGH FEE, the stricter parser (nothing valid may be refused: the PC tests use generated files, and a real wallet may add fields they lack), AUTO UNLOAD during a signing. Nothing from those wallets goes into the repo (rule 5) |

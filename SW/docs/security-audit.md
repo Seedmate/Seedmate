@@ -51,11 +51,27 @@ write protection of the bootloader flash before the jump to the app (`CP`
 stays off and there is no version check, both decided); L10 every record
 checked again in the programming pass.
 
-Open: M3 (vault nonce, needs a new record
-format), L3 (an iteration cap for imported KEF QR codes; the time is now
-shown before the key is asked. Clearing the key press pool after the IV is
-not done on purpose: the pool also feeds the next Shamir split, and the IV
-and the coefficients are separate hashes of it), L4, L7, L8, L9, L11.
+Vault, 2026-11-11: M3 the record nonce is the first 12 bytes of
+HMAC-SHA256(key, counter, plain header, text), so an old header put back
+repeats a nonce only for the very same text. No new format was needed: the
+nonce is stored in every record, so older records open as before (tested).
+
+Decided on 2026-11-11: L11 AUTO UNLOAD is 10 minutes from the factory (done).
+Left as they are on purpose: L3 (no cap; the time is shown before the key is
+asked and BACK cancels), L7 (SD slots stay XOR: losing the keys is a far more
+likely risk than a physical attack), L8 (the fingerprint shown when the wallet
+is loaded already tells a wrong merge). Clearing the key press pool after the
+KEF IV is not done on purpose: the pool also feeds the next Shamir split, and
+the IV and the coefficients are separate hashes of it.
+
+L4 and L9, 2026-11-11: STOPWATCH counts each timer sample as 8 bits (twice
+the presses) and the seed is the SHA-256 of all of them; POKER CARDS says
+first that each card goes back into the deck and the deck is shuffled; a PSBT
+without previous transactions gets a red "PREVIOUS TX MISSING / CHECK INPUT
+AMOUNTS MANUALLY" screen and can still be signed (the user decided not to
+refuse it).
+
+Nothing is open any more apart from the device tests.
 
 ## 2. Summary
 
