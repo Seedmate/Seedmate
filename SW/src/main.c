@@ -2221,12 +2221,16 @@ static bool get_current_bip84_result(uint32_t chain, uint32_t address_index, Bit
     HDNode node = (chain == 0) ? bip84_receive_node_cache : bip84_change_node_cache;
 
     // FAST DERIVATION: Derive only the final specific address index
-    if (!hdnode_private_ckd(&node, address_index)) return false; 
+    if (!hdnode_private_ckd(&node, address_index)) {
+        memzero(&node, sizeof(node));
+        return false;
+    }
     // ------------------------------------------------------------------
 
     // HEAVY MATH: Secp256k1 Elliptic Curve Scalar Multiplication
     // This is computationally intensive but unavoidable for each new address
     hdnode_fill_public_key(&node);
+    memzero(node.private_key, sizeof(node.private_key));   // Only the public key is needed now
 
     // 4. HASHING & ENCODING
     uint8_t sha256_pub[32];
@@ -3590,9 +3594,12 @@ static int load_and_verify_sd_slot(int absolute_slot) {
             data_array_256b[i] = buffer[i] ^ XOR_SD;
             checksum_SD += buffer[i];
         }
-        if (checksum_SD == buffer[cSD_CHECKSUM_ADDR]) {
+        // The size byte comes from the card too: anything but 12 or 24 words
+        // would be used as a length
+        if (checksum_SD == buffer[cSD_CHECKSUM_ADDR] && buffer[cSD_SIZE_ADDR] <= cSIZE_24) {
             return 0; // Success
         }
+        memzero(data_array_256b, sizeof(data_array_256b));
         return 2; // Checksum Error
     }
     return 1; // SD Error
@@ -3810,8 +3817,15 @@ void tc_fault_handler(const char *msg) {
     while (1) { SYS_Tasks(); }
 }
 
-void transition_to_main(void) {
-    black_screen();
+// Every secret of the session: the seed and what derives from it
+// (session_wipe(), with the share buffers of main() registered there), the
+// keys and the passphrase. Run whenever the main menu is reached.
+static uint8_t **wipe_shares, **wipe_shares_input, *wipe_sss_result;
+static void session_wipe(uint8_t **shares, uint8_t **shares_input, uint8_t *sss_result, size_t len);
+static void stack_wipe(void);
+
+static void secrets_wipe(void) {
+    if (wipe_shares != NULL) session_wipe(wipe_shares, wipe_shares_input, wipe_sss_result, 32);
     memzero(word_ring, sizeof(word_ring));
     memzero(&wallet_root, sizeof(wallet_root));
     memzero(wallet_root_tag, sizeof(wallet_root_tag));
@@ -3838,6 +3852,11 @@ void transition_to_main(void) {
     memzero(&ms_receive_node_cache, sizeof(ms_receive_node_cache));
     memzero(&ms_change_node_cache, sizeof(ms_change_node_cache));
     memzero(vault_key, sizeof(vault_key));
+}
+
+void transition_to_main(void) {
+    black_screen();
+    secrets_wipe();
     if (xor_from_create) {                  // MIX ENTROPY is a CREATE function
         xor_from_create = false;
         main_pointer = cMAIN_create;
@@ -4333,14 +4352,6 @@ static void fast_itoa(uint32_t val, char* buf) {
 }
 
 
-// Helper to convert byte to a 2-character hex string
-static void byte_to_hex(uint8_t val, char *out_str) {
-    const char hex_chars[] = "0123456789ABCDEF";
-    out_str[0] = hex_chars[(val >> 4) & 0x0F];
-    out_str[1] = hex_chars[val & 0x0F];
-    out_str[2] = '\0';
-}
-
 // Helper to read CBOR integer and advance cursor
 static uint32_t read_cbor_int(const uint8_t *buf, uint32_t *idx) {
     uint8_t v = buf[(*idx)++] & 0x1F;
@@ -4467,8 +4478,10 @@ static bool psbt_fp_is_mine(uint32_t fingerprint) {
 // m/84'/0'/account'/chain/index with chain 0 (receive) or 1 (change), any
 // account (returned in *account)
 static bool psbt_bip84_path(const psbt_keypath_t *kp, uint32_t *account) {
+    *account = 0;
+    if (kp->path == NULL || kp->path_len != 5) return false;
     *account = psbt_path_element(kp, 2) & ~PSBT_HARDENED;
-    return kp->path_len == 5 &&
+    return
            psbt_path_element(kp, 0) == (84 | PSBT_HARDENED) &&
            psbt_path_element(kp, 1) == PSBT_HARDENED &&
            (psbt_path_element(kp, 2) & PSBT_HARDENED) &&
@@ -4478,8 +4491,10 @@ static bool psbt_bip84_path(const psbt_keypath_t *kp, uint32_t *account) {
 
 // m/48'/0'/account'/2'/chain/index with chain 0 or 1 (BIP48 P2WSH multisig)
 static bool psbt_multisig_path(const psbt_keypath_t *kp, uint32_t *account) {
+    *account = 0;
+    if (kp->path == NULL || kp->path_len != 6) return false;
     *account = psbt_path_element(kp, 2) & ~PSBT_HARDENED;
-    return kp->path_len == 6 &&
+    return
            psbt_path_element(kp, 0) == (48 | PSBT_HARDENED) &&
            psbt_path_element(kp, 1) == PSBT_HARDENED &&
            (psbt_path_element(kp, 2) & PSBT_HARDENED) &&
@@ -4959,7 +4974,7 @@ static uint16_t flow_input_color(psbt_owner_t owner) {
 static void psbt_view_flow(const psbt_t *psbt) {
     flow_block_t ins[FLOW_BLOCKS], outs[FLOW_BLOCKS];
     char label[FLOW_BLOCKS][10];
-    char amount[FLOW_BLOCKS][14];
+    char amount[FLOW_BLOCKS][20];
     uint8_t top[FLOW_BLOCKS], bot[FLOW_BLOCKS];
     char text[16];
     char num[12];
@@ -5895,6 +5910,7 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
     uint32_t max_index = 0;                     // Highest address index among our inputs
 
     for (uint32_t i = 0; i < psbt->input_count; i++) {
+        memset(&kp, 0, sizeof(kp));             // An input without derivation leaves it empty
         psbt_count_label("INPUT ", i, psbt->input_count, label);
         psbt_progress_step(label, NULL, "PREV TX, AMOUNT, KEYS", i, checks);
         if (!psbt_get_input(psbt, i, &in)) {
@@ -6012,7 +6028,7 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
 
 static bool psbt_confirm_signing(const psbt_t *psbt, const psbt_sign_plan_t *plan) {
     char line[40];
-    char rate[16];
+    char rate[24];
     char num[12];
     char addr[PSBT_ADDRESS_MAX_LEN];
     psbt_output_t out;
@@ -6859,55 +6875,10 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
                                             expected_msg_len = cbor_msg_len; 
                                             break; // Break the URXDA loop
                                         } else {
-                                            // HALT ON ERROR SO WE CAN READ THE EXACT VALUES
-                                            rectan(5, 62, 159, 103, BLACK);
-                                            drawtext(5, 62, "CRC FAIL! (PAUSED)", ST7735_RED, ST7735_BLACK, 1);
-                                            
-                                            char hex_dbg[24];
-                                            drawtext(5, 74, "CALC:", ST7735_WHITE, ST7735_BLACK, 1);
-                                            u16_to_hex4((crc >> 16) & 0xFFFF, hex_dbg);
-                                            u16_to_hex4(crc & 0xFFFF, &hex_dbg[4]);
-                                            drawtext(40, 74, hex_dbg, ST7735_YELLOW, ST7735_BLACK, 1);
-
-                                            drawtext(5, 86, "CBOR:", ST7735_WHITE, ST7735_BLACK, 1);
-                                            u16_to_hex4((cbor_checksum >> 16) & 0xFFFF, hex_dbg);
-                                            u16_to_hex4(cbor_checksum & 0xFFFF, &hex_dbg[4]);
-                                            drawtext(40, 86, hex_dbg, ST7735_CYAN, ST7735_BLACK, 1);
-
-                                            // Extract and display the first byte of up to 6 parts (P0-P5) to check for XOR corruption
-                                            drawtext(5, 96, "P0-P5:", ST7735_WHITE, ST7735_BLACK, 1);
-                                            memset(hex_dbg, 0, sizeof(hex_dbg));
-                                            for (int i = 0; i < cbor_total && i < 6; i++) {
-                                                uint8_t *p = fountain_get_part(i);
-                                                if (p) {
-                                                    char b_hex[3];
-                                                    byte_to_hex(p[0], b_hex);
-                                                    strcat(hex_dbg, b_hex);
-                                                } else {
-                                                    strcat(hex_dbg, "--");
-                                                }
-                                            }
-                                            drawtext(45, 96, hex_dbg, ST7735_ORANGE, ST7735_BLACK, 1);
-                                            
-                                            // Force override option
-                                            grid_confirm("USE");    // OK uses the data anyway
-
-                                            // Wait for button press
-                                            while (BT1 == 1 && BT_OK == 1 && !idle_expired()) SYS_Tasks();
-                                            
-                                            if (BT_OK == 0) {
-                                                psbt_recovered = true;
-                                                expected_msg_len = cbor_msg_len;
-                                                while (BT_OK == 0) SYS_Tasks(); // Wait for release
-                                                break; 
-                                            }
-
-                                            if (BT1 == 0 || idle_expired()) break;
-                                            rectan(5, 62, 159, 103, BLACK);
-                                            rectan(GRID_X, 105, GRID_X + 90, 125, BLACK);
-                                            grid_back_only();
-                                            rectan(9, 92, 151, 97, WHITE);     // Restart the progress bar
-                                            rectan(10, 93, 150, 96, BLACK);
+                                            // The parts joined do not give the message checksum: never used,
+                                            // the scan starts again
+                                            scan_notice("UR CHECKSUM FAILED");
+                                            rectan(10, 93, 150, 96, BLACK);     // Empty progress bar
                                             fountain_init();
                                         }
                                     }
@@ -8211,7 +8182,7 @@ static void reader_draw_pages(const char *ok_label) {
 }
 
 static void print_reader_screen(void) {
-    char text[24];
+    char text[32];
     char num[12];
     const char *kind;
     uint16_t color = ST7735_CYAN;
@@ -8301,7 +8272,7 @@ static void print_reader_screen(void) {
     size_t prog_len = 0;
     if (reader_hex) {
         if (reader_len == 16 || reader_len == 32) {
-            kind = "LOOKS LIKE A COMPACT SEEDQR";
+            kind = "LOOKS LIKE COMPACT SEEDQR";
             color = ST7735_YELLOW;
         } else {
             kind = "BINARY, ";
@@ -9451,7 +9422,7 @@ static void print_password_config(void) {
 // from, the password in groups of 4; OK shows its QR
 static void bip85_password_show(void) {
     char pwd[BIP85_PWD64_MAX + 1];
-    char text[26];
+    char text[40];
     char num[12];
     HDNode root;
 
@@ -9469,7 +9440,7 @@ static void bip85_password_show(void) {
         strcpy(text, (pwd_format == BIP85_PWD_BASE64) ? "BASE64, " : "BASE85, ");
         fast_itoa(pwd_len, num);
         strcat(text, num);
-        strcat(text, " CHARS, INDEX ");
+        strcat(text, " CHARS, IDX ");
         fast_itoa(pwd_index, num);
         strcat(text, num);
         drawtext(1, 12, text, ST7735_CYAN, ST7735_BLACK, 1);
@@ -10062,7 +10033,7 @@ static void session_wipe(uint8_t **shares, uint8_t **shares_input, uint8_t *sss_
 // Zeroes the stack below the caller: the frames of the flow that was left
 // never ran their own wipes
 extern char _splim[];
-static void __attribute__((noinline)) stack_wipe(void) {
+static __attribute__((noinline)) void stack_wipe(void) {
     volatile uint32_t *p = (volatile uint32_t *)(((uintptr_t)_splim + 3u) & ~3u);
     volatile uint32_t *end = (volatile uint32_t *)__builtin_frame_address(0) - 8;
     while (p < end) *p++ = 0;
@@ -10509,6 +10480,9 @@ int SSS_N = 9;
     // Buffers used while reconstructing shares.
     uint8_t *shares_input[cN_MAX] = {sh1, sh2, sh3, sh4, sh5, sh6, sh7, sh8, sh9};
     uint8_t share_indices[cK_MAX] = { 1, 2,0,0,0,0 };
+    wipe_shares = shares;                       // For secrets_wipe()
+    wipe_shares_input = shares_input;
+    wipe_sss_result = SSS_result;
 
     if (setjmp(idle_jump) != 0) {               // AUTO UNLOAD, from any wait of any flow
         idle_recover(shares, shares_input, SSS_result, LEN);
@@ -11154,6 +11128,7 @@ int SSS_N = 9;
             case CONFIRM_UNLOAD:
                 if (pulsed_bt == OK_BT) {
                     session_wipe(shares, shares_input, SSS_result, LEN);
+                    stack_wipe();                   // What the flows left below main()
                     black_screen();
                     drawtext(5, 50, "SEED UNLOADED", ST7735_GREEN, ST7735_BLACK, 1);
                     delay_ms(800);
@@ -13371,7 +13346,10 @@ int SSS_N = 9;
             case WARNING_UPDATE_FW:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        // Trigger Bootloader Update Sequence
+                        // Trigger Bootloader Update Sequence. A software reset keeps
+                        // the RAM: nothing secret may be left in it
+                        secrets_wipe();
+                        stack_wipe();
                         black_screen();
                         drawtext(20, 50, "REBOOTING TO", ST7735_CYAN, ST7735_BLACK, 1);
                         drawtext(20, 65, "BOOTLOADER...", ST7735_CYAN, ST7735_BLACK, 1);
@@ -13425,12 +13403,15 @@ int SSS_N = 9;
                         
                         drawtext(10, 30, "SCANNING...    ", ST7735_CYAN, ST7735_BLACK, 1);
                         
-                        uint8_t rx_buf[2048];
+                        // Into the fountain buffer: a stack copy would outlive the seed
+                        uint32_t rx_cap;
+                        uint8_t *rx_buf = fountain_scratch_buffer(&rx_cap);
+                        if (rx_cap > 2048) rx_cap = 2048;
                         int rx_len = 0;
                         uint32_t timeout = 100000;
 
                         // 3. Wait for the response
-                        while (timeout > 0 && rx_len < sizeof(rx_buf) - 1) {
+                        while (timeout > 0 && rx_len < (int)rx_cap - 1) {
                             if (U2STAbits.URXDA) {               
                                 rx_buf[rx_len++] = U2RXREG; 
                                 
@@ -13506,6 +13487,7 @@ int SSS_N = 9;
                                 // Execute validation
                                 kef_load_t kef_result = kef_load_from_qr((const char *)&rx_buf[data_start], payload_len);
                                 if (kef_result == KEF_LOAD_CANCELLED) {
+                                    memzero(rx_buf, rx_cap);
                                     black_screen();
                                     show_qr_ready(SSS_K);
                                     pulsed_bt = NONE;
@@ -13580,6 +13562,7 @@ int SSS_N = 9;
                             drawtext(10, 40, "NO RESPONSE FROM SENSOR", ST7735_RED, ST7735_BLACK, 1);
                         }
 
+                        memzero(rx_buf, rx_cap);             // The QR text: the seed, in clear
                         // 5. Keep the debug info on screen for 5 seconds before clearing
                         if (!success) {
                             delay_ms(1000); 

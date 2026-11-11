@@ -337,9 +337,9 @@ ENC-06.v2_outpoint_conflict	multi+desc	PARSE UNSUPPORTED (V2?)
 ENC-07.duplicate_conflicting_utxo	single	PARSE BAD FORMAT
 ENC-07.duplicate_conflicting_utxo	multi	PARSE BAD FORMAT
 ENC-07.duplicate_conflicting_utxo	multi+desc	PARSE BAD FORMAT
-ENC-08.nonminimal_keylen	single	SIGN 1/1 ours=1 send=99500 change=99500 fee=1000 AMOUNTS_UNVERIFIED
-ENC-08.nonminimal_keylen	multi	REFUSE SWITCH TO SINGLE SIG
-ENC-08.nonminimal_keylen	multi+desc	REFUSE SWITCH TO SINGLE SIG
+ENC-08.nonminimal_keylen	single	PARSE TRUNCATED
+ENC-08.nonminimal_keylen	multi	PARSE TRUNCATED
+ENC-08.nonminimal_keylen	multi+desc	PARSE TRUNCATED
 ENC-09.v2_prevtxid_in_v0	single	REFUSE PREV TX MISMATCH
 ENC-09.v2_prevtxid_in_v0	multi	REFUSE PREV TX MISMATCH
 ENC-09.v2_prevtxid_in_v0	multi+desc	REFUSE PREV TX MISMATCH

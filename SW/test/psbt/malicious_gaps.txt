@@ -25,4 +25,3 @@ ENC-01.v2_keys_in_v0	v2 fields in a v0 PSBT are ignored: what is shown and signe
 ENC-02.v2_sequence_in_v0	v2 fields in a v0 PSBT are ignored: what is shown and signed is the global tx.
 ENC-04.scope_beyond_tx	v2 fields in a v0 PSBT are ignored: what is shown and signed is the global tx.
 ENC-10.v2_global_locktime_in_v0	v2 fields in a v0 PSBT are ignored: what is shown and signed is the global tx.
-ENC-08.nonminimal_keylen	Non-minimal length read correctly; no effect on what is shown.

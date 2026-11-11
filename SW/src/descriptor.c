@@ -496,6 +496,7 @@ static desc_result_t parse_cbor_output(const uint8_t *data, uint32_t len, desc_w
             if (!cbor_expect(&c, CBOR_UINT, &m)) return DESC_ERR_FORMAT;
         } else if (key == 2) {
             if (!cbor_expect(&c, CBOR_ARRAY, &count)) return DESC_ERR_FORMAT;
+            if (w->key_count != 0) return DESC_ERR_FORMAT;     // A second key array: never two
             if (count > DESC_MAX_KEYS) return DESC_ERR_TOO_MANY;
             for (uint32_t i = 0; i < count; i++) {
                 desc_result_t r = cbor_hdkey(&c, &w->keys[w->key_count]);

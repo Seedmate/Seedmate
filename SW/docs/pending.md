@@ -3,8 +3,23 @@
 The open work list, kept up to date with every change (Claude updates it when
 a task is done, decided or added). Last update: 2026-11-10.
 
-Memory today: flash 211.8 KB of 238 KB (89.0%, about 26.2 KB free); RAM
+Memory today: flash 211.4 KB of 238 KB (88.8%, about 26.6 KB free); RAM
 23.7 KB of 32 KB (about 11.5 KB of stack).
+
+## 0. Security audit of 2026-11-09
+
+Findings and fixes in `docs/security-audit.md`. Fixed on 2026-11-11 (host
+tests pass, device test pending): C1, H1, M1, M2, M4, M5, M6, L1, L2, L5, L6.
+Device test of those fixes: load seeds from QR, SD and keyboard, an XOR and
+a Shamir merge, a descriptor by QR, sign a PSBT, UNLOAD and AUTO UNLOAD,
+UPDATE FIRMWARE, QR READER on a Compact SeedQR, BIP85 PASSWORD with index 10.
+
+| Id | Still open |
+|---|---|
+| H2 | Firmware signature: real key, flash lock, `CP = ON` (section 1) |
+| M3 | Vault: nonce that survives a rolled back header (new format version) |
+| L3 | Cap the iterations of an imported KEF QR? |
+| L4, L7-L11 | Low: see the document |
 
 ## 1. Before shipping v2.0
 

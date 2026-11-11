@@ -83,15 +83,24 @@ static uint64_t rd_le64(reader_t *r) {
     return (uint64_t)lo | ((uint64_t)hi << 32);
 }
 
-// Bitcoin CompactSize. 64-bit values are rejected: they can never fit in RAM.
+// Bitcoin CompactSize, in its shortest form only (as Bitcoin Core): a longer
+// form of a small value is an error, so every length has one encoding.
+// 64-bit values are rejected: they can never fit in RAM.
 static uint32_t rd_varint(reader_t *r) {
     uint8_t b = rd_u8(r);
+    uint32_t v;
     if (b < 0xFD) return b;
     if (b == 0xFD) {
-        const uint8_t *v = rd_bytes(r, 2);
-        return v ? ((uint32_t)v[0] | ((uint32_t)v[1] << 8)) : 0;
+        const uint8_t *p = rd_bytes(r, 2);
+        v = p ? ((uint32_t)p[0] | ((uint32_t)p[1] << 8)) : 0;
+        if (v < 0xFD) r->err = true;
+        return v;
     }
-    if (b == 0xFE) return rd_le32(r);
+    if (b == 0xFE) {
+        v = rd_le32(r);
+        if (v <= 0xFFFF) r->err = true;
+        return v;
+    }
     r->err = true;
     return 0;
 }

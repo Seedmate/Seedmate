@@ -3,6 +3,7 @@
 // private BIP32 derivation in Python.
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 #include "descriptor.h"
 #include "psbt_sign.h"
 #include "descriptor_vectors.h"
@@ -105,7 +106,52 @@ static void test_crypto_output(void) {
     CHECK(desc_parse_cbor(copy, len, &w) == DESC_OK, "restored copy parses");
 }
 
+// A crypto-output map that repeats the key array (two arrays of 7 keys) wrote
+// past desc_wallet_t (security audit C1): it must be refused, the wallet left
+// empty and nothing written after it
+static uint8_t rep_cbor[2048];
+static uint32_t rep_n;
+static void rep_put(uint8_t b) { rep_cbor[rep_n++] = b; }
+static void rep_head(uint8_t major, uint32_t v) {
+    if (v < 24) rep_put((uint8_t)(major << 5 | v));
+    else if (v < 256) { rep_put((uint8_t)(major << 5 | 24)); rep_put((uint8_t)v); }
+    else { rep_put((uint8_t)(major << 5 | 25)); rep_put((uint8_t)(v >> 8)); rep_put((uint8_t)v); }
+}
+
+static void check_repeated_key_array(void) {
+    struct { desc_wallet_t w; uint8_t canary[1024]; } s;
+    rep_n = 0;
+    rep_head(6, 401);                       // wsh
+    rep_head(6, 407);                       // sortedmulti
+    rep_head(5, 3);                         // threshold, keys, keys again
+    rep_head(0, 1);
+    rep_head(0, 2);
+    for (int rep = 0; rep < 2; rep++) {
+        rep_head(0, 2);
+        rep_head(4, 7);
+        for (int k = 0; k < 7; k++) {
+            rep_head(6, 303);
+            rep_head(5, 2);
+            rep_head(0, 3);
+            rep_head(2, 33);
+            rep_put(0x02);
+            for (int i = 0; i < 32; i++) rep_put((uint8_t)(0x41 + rep * 7 + k));
+            rep_head(0, 4);
+            rep_head(2, 32);
+            for (int i = 0; i < 32; i++) rep_put((uint8_t)(0x41 + rep * 7 + k));
+        }
+    }
+    memset(&s, 0, sizeof(s));
+    memset(s.canary, 0xEE, sizeof(s.canary));
+    CHECK(desc_parse_cbor(rep_cbor, rep_n, &s.w) == DESC_ERR_FORMAT && s.w.key_count == 0,
+          "repeated key array refused");
+    bool intact = true;
+    for (uint32_t i = 0; i < sizeof(s.canary); i++) intact = intact && s.canary[i] == 0xEE;
+    CHECK(intact, "nothing written past the wallet");
+}
+
 int main(void) {
+    check_repeated_key_array();
     desc_wallet_t w;
     uint8_t script[3 + 34 * DESC_MAX_KEYS];
     static const int abc[3] = {0, 1, 2}, cab[3] = {2, 0, 1};

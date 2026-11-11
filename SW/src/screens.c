@@ -397,7 +397,7 @@ void u16_to_hex4(uint16_t value, char *buf) {
 
 // Minimal base-10 itoa without dependencies
 size_t u16_to_str(unsigned int n, char *buf) {
-    char tmp[6]; // Enough for 65535
+    char tmp[11];   // Any 32 bit value
     int i = 0;
     do {
         tmp[i++] = (char)('0' + (n % 10));
@@ -413,7 +413,7 @@ size_t u16_to_str(unsigned int n, char *buf) {
 }
 
 size_t u16_to_str_pad(unsigned int n, char *buf, unsigned int width) {
-    char tmp[6];
+    char tmp[11];
     unsigned int i = 0;
     unsigned int j = 0;
 
