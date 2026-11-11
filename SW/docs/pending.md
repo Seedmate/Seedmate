@@ -9,14 +9,15 @@ Memory today: flash 211.4 KB of 238 KB (88.8%, about 26.6 KB free); RAM
 ## 0. Security audit of 2026-11-09
 
 Findings and fixes in `docs/security-audit.md`. Fixed on 2026-11-11 (host
-tests pass, device test pending): C1, H1, M1, M2, M4, M5, M6, L1, L2, L5, L6.
+tests pass, device test pending): C1, H1, M1, M2, M4, M5, M6, L1, L2, L5, L6, and in the
+bootloader H2 and L10.
 Device test of those fixes: load seeds from QR, SD and keyboard, an XOR and
 a Shamir merge, a descriptor by QR, sign a PSBT, UNLOAD and AUTO UNLOAD,
 UPDATE FIRMWARE, QR READER on a Compact SeedQR, BIP85 PASSWORD with index 10.
 
 | Id | Still open |
 |---|---|
-| H2 | Firmware signature: real key, flash lock, `CP = ON` (section 1) |
+| H2 | Done in code on 2026-11-11 (release key, flash lock); `CP` stays off and there is no version check, both decided. Device test pending |
 | M3 | Vault: nonce that survives a rolled back header (new format version) |
 | L3 | Cap the iterations of an imported KEF QR? |
 | L4, L7-L11 | Low: see the document |
@@ -29,9 +30,9 @@ UPDATE FIRMWARE, QR READER on a Compact SeedQR, BIP85 PASSWORD with index 10.
 | PSBT review: device test | Partly done on 2026-11-07: `abandon multisig.psbt` reviewed and signed on the device, its 3 signatures verified on the PC; the diagram moved up 10 px after that (not seen yet). "TYPE NOT SUPPORTED" not tried (needs a PSBT with only taproot or nested inputs). New review: checks first (progress bar), then the flow diagram (inputs, outputs and fee as blocks in proportion), one page per output (SEND / CHANGE / TO YOU n OF m, amount, whole address in groups of 4, path), inputs, DETAILS; OK is NEXT until every destination was shown, then SIGN; new confirmation with the address, the fee in sats and ~sat/vB. Amounts: under 100 000 sats in SAT, otherwise BTC with grouped decimals. Try: the Sparrow test PSBTs (1, 3 and 12 inputs), multisig with and without descriptor (`test/psbt/abandon multisig.psbt`: 3 inputs, a send over and one under 100 000 sats, change, with `MSDESC.TXT`), REVIEW PSBT. Cost +5.6 KB flash: candidate for savings (the diagram code, the per-kind count) |
 | Thorough device test pass | Everything since the vault: vault notes and descriptors, descriptor QR (Sparrow PDF), DERIVE (passwords, Nostr), transcript check, start screen, settings defaults, key repeat |
 | Firmware signature: test on the device | The bootloader is built, not tried on a board: signed and unsigned update, bad signature, the warning at boot, time of "VERIFYING SIGNATURE". Needs the PICkit once: the 12 KB layout refuses old apps, and old bootloaders refuse new apps |
-| Firmware signature: real key | The bootloader has a TEST public key (`boot_lms.c`). Choose the signing words (12 or 24; 24 keeps the post-quantum margin), replace the key, start `SIGNATURES.md` with every index used |
-| Bootloader write protection | Today a running app can rewrite the bootloader. The bootloader must lock `NVMPWP` / `NVMBWP` (`PWPULOCK` / `BWPULOCK`) before it jumps to the app, up to 0x9D003000 so it covers its state page too: until then a running app can fake "official". Production: `CP = ON`, JTAG off (already), programming pads covered |
-| Firmware rollback | A signature stays valid forever, so an old signed firmware with a known bug can be installed. Decide whether the bootloader warns or refuses (would need a version inside the signed data) |
+| Firmware signature: real key | Done on 2026-11-11: release public key in `bootloader/src/boot_lms.c`, indexes recorded in `SIGNATURES.md` (one index per file, each language variant too). Device test with the "Firmware signature: test on the device" row |
+| Bootloader write protection | Done on 2026-11-11, PC build only (bootloader 10,128 B of 10,224, 96 B free; BOOT 1.0 kept): `JumpToApp()` protects the flash below 0x1D003000 and the boot flash pages and locks both registers until the next reset. Flash `bootloader.production.unified.hex` with the PICkit. Device test: updates still work (signed, unsigned, forced with OK + BACK), the app starts, settings still save; a write below 0x1D003000 from the app must fail: TEMPORARY `BOOT_LOCK_TEST` in `main.c` (SETTINGS > MCU SERIAL NUMBER shows PWP / BWP LOCKED and tries a write at 0x1D0027E8, a blank spot of the bootloader); remove it after the test (+592 B) |
+| Firmware rollback | Decided on 2026-11-11: no version check. Older firmware installs like any other (signed: "OFFICIAL"), and the bootloader has no room to spare |
 | Bootloader updates without a PICkit | A signed bootloader package that the current bootloader verifies and writes itself from RAM; it can carry a new public key signed by the old one. Power loss during the write needs the PICkit |
 | FAT32 in the bootloader | Cards over 32 GB: today only a small FAT16 partition works. The bootloader has 136 B free in its code area, so it needs savings first |
 | Stack measurement | Stack watermark, before Taproot |

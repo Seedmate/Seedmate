@@ -46,7 +46,12 @@ Fixed in the firmware, host tests passing, not yet tried on the board:
 | L5 | `rd_varint()` refuses non canonical CompactSize values (as Bitcoin Core); the corpus vector `ENC-08.nonminimal_keylen` is now refused and left the gaps list |
 | L6 | `u16_to_str()` and `u16_to_str_pad()` take any 32 bit value |
 
-Open: H2 and L10 (bootloader), M3 (vault nonce, needs a new record
+Bootloader, 2026-11-11 (built, not yet on the board): H2 release public key and
+write protection of the bootloader flash before the jump to the app (`CP`
+stays off and there is no version check, both decided); L10 every record
+checked again in the programming pass.
+
+Open: M3 (vault nonce, needs a new record
 format), L3 (an iteration cap for imported KEF QR codes; the time is now
 shown before the key is asked. Clearing the key press pool after the IV is
 not done on purpose: the pool also feeds the next Shamir split, and the IV
@@ -117,7 +122,9 @@ Fix: in `load_and_verify_sd_slot()` return "NO SEED" unless the byte is
 Already in `pending.md`, listed here because they decide what the signature is
 worth: the bootloader holds a TEST public key; the flash is not locked, so a
 running app can rewrite the bootloader and its "official" record; `CP = OFF`,
-so flash and RAM can be read through the programming pads of a powered device;
+so flash and RAM can be read through the programming pads of a powered device
+(kept on purpose, decided on 2026-11-11: no secrets in flash, and anyone can
+verify the installed firmware);
 no version in the signed data, so an old signed firmware installs. Until the
 lock is in, an unofficial firmware installed with OK + BACK can remove its own
 warning.

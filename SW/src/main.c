@@ -7403,6 +7403,55 @@ static void idle_setting_run(void) {
     }
 }
 
+// ============================================================================
+// TEMPORARY (BOOT_LOCK_TEST): checks the write protection the bootloader sets
+// before it starts the app. Shown on SETTINGS > MCU SERIAL NUMBER. Remove it
+// once the bootloader has been tried on the board.
+// ============================================================================
+#define BOOT_LOCK_TEST 1
+#if BOOT_LOCK_TEST
+#define BOOT_LOCK_TEST_ADDR 0x1D0027E8u    // Blank and unused, just before the bootloader tag
+
+static uint32_t boot_lock_nvm_op(uint32_t op) {
+    NVMCON = 0x4000u | op;                  // WREN + operation
+    __builtin_disable_interrupts();
+    NVMKEY = 0xAA996655;
+    NVMKEY = 0x556699AA;
+    NVMCONSET = 0x8000;                     // WR
+    while (NVMCONbits.WR);
+    NVMCONCLR = 0x4000;
+    __builtin_enable_interrupts();
+    return NVMCON & 0x3000u;                // WRERR / LVDERR
+}
+
+static void boot_lock_line(int y, const char *name, uint32_t value, bool ok) {
+    char text[24];
+    strcpy(text, name);
+    u16_to_hex4((uint16_t)(value >> 16), &text[strlen(text)]);
+    u16_to_hex4((uint16_t)value, &text[strlen(text)]);
+    strcat(text, ok ? " LOCKED" : " OPEN");
+    drawtext(5, y, text, ok ? ST7735_GREEN : ST7735_RED, ST7735_BLACK, 1);
+}
+
+static void boot_lock_test(void) {
+    uint32_t pwp = NVMPWP, bwp = NVMBWP;
+    boot_lock_line(40, "PWP ", pwp, (pwp & 0x80000000u) == 0 && (pwp & 0x00FFFFFFu) == 0x3000u);
+    boot_lock_line(52, "BWP ", bwp, (bwp & 0x00008000u) == 0 && (bwp & 0x00000700u) == 0x700u);
+
+    // A real write of zeros into a blank, unused double-word of the bootloader:
+    // refused if the protection works; if not, only that unused spot changes
+    NVMADDR = BOOT_LOCK_TEST_ADDR;
+    NVMDATA0 = 0;
+    NVMDATA1 = 0;
+    uint32_t err = boot_lock_nvm_op(0x2);
+    const volatile uint32_t *p = (const volatile uint32_t *)(0xA0000000u | BOOT_LOCK_TEST_ADDR);
+    bool written = p[0] != 0xFFFFFFFFu || p[1] != 0xFFFFFFFFu;
+    (void)boot_lock_nvm_op(0x0);            // NOP: clears the error flags for the settings writes
+    drawtext(5, 68, written ? "WRITE DONE: NOT PROTECTED" : (err ? "WRITE REFUSED (ERROR)" : "WRITE REFUSED"),
+             written ? ST7735_RED : ST7735_GREEN, ST7735_BLACK, 1);
+}
+#endif
+
 // "PROCESS TIME: 44 SEC": the KEF key derivation on this device, measured at
 // 44 s for 100,000 iterations (2026-11-08, before -mmemcpy)
 static void kef_time_text(uint32_t iterations, char *out) {
@@ -12976,6 +13025,9 @@ int SSS_N = 9;
                     }
                     else if (settings_pointer == cSETTINGS_MCU_SERIAL) {
                         print_mcu_serial_screen();
+#if BOOT_LOCK_TEST
+                        boot_lock_test();
+#endif
                         estado = SHOW_MCU_SERIAL;
                     }
                     else if (settings_pointer == cSETTINGS_UPDATE_FW) {

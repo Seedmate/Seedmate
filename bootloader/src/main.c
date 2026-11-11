@@ -80,6 +80,16 @@ void ConvertAsciiToHex(uint8_t* asciiRec, uint8_t* hexRec);
 // BASIC HARDWARE CONTROL FUNCTIONS
 // =========================================================================
 
+// Writes a flash protection register (NVMPWP or NVMBWP) after the unlock
+// sequence. A lock bit written as 0 stays 0 until the next reset.
+__attribute__((noinline)) static void nvm_protect(volatile uint32_t *reg, uint32_t value) {
+    NVMCONCLR = _NVMCON_WREN_MASK;
+    NVMKEY = 0;
+    NVMKEY = 0xAA996655;
+    NVMKEY = 0x556699AA;
+    *reg = value;
+}
+
 void JumpToApp(void)
 {
     // 1. Disable bootloader interrupts to avoid crashing the main app
@@ -88,6 +98,15 @@ void JumpToApp(void)
     // 2. Shut down peripherals used by Bootloader
     LATBbits.LATB5 = 1;
     SPI3CON = 0; 
+
+    // Write protection until the next reset, which always starts the
+    // bootloader again: its 12 KB (with the state page that says "official")
+    // and the boot flash pages (code and configuration words). A running app
+    // can no longer rewrite them. Each register is set, then locked.
+    nvm_protect(&NVMBWP, _NVMBWP_BWP0_MASK | _NVMBWP_BWP1_MASK | _NVMBWP_BWP2_MASK | _NVMBWP_BWPULOCK_MASK);
+    nvm_protect(&NVMBWP, _NVMBWP_BWP0_MASK | _NVMBWP_BWP1_MASK | _NVMBWP_BWP2_MASK);
+    nvm_protect(&NVMPWP, (HEXFLASH_APP_PHYS_BASE & _NVMPWP_PWP_MASK) | _NVMPWP_PWPULOCK_MASK);
+    nvm_protect(&NVMPWP, HEXFLASH_APP_PHYS_BASE & _NVMPWP_PWP_MASK);
     
     // 3. Turn off LED before leaving
     LED = 0;
@@ -226,11 +245,12 @@ static int process_hex_file(bool program) {
                             if (hexRec[3] == END_OF_FILE_RECORD) {
                                 end_of_file_found = true;
                             }
-                            if (program) {
+                            // Both passes: the card could answer differently the second time
+                            if (!record_is_valid(hexRec, record.len - 1)) {
+                                return HEXFLASH_ERR_RECORD;
+                            } else if (program) {
                                 hexflash_status_t st = hexflash_write_record(hexRec);
                                 if (st != HEXFLASH_OK) return st;
-                            } else if (!record_is_valid(hexRec, record.len - 1)) {
-                                return HEXFLASH_ERR_RECORD;
                             } else {
                                 hexflash_status_t st = hexflash_check_record(hexRec);
                                 if (st != HEXFLASH_OK) return st;
