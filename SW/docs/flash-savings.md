@@ -92,6 +92,13 @@ Tried and discarded: `-Os` (the free license builds 240,201 B, worse),
 `-mno-check-zero-division` (120 B), `-fipa-icf`, `-fmerge-all-constants`,
 `-fno-jump-tables`, `-fno-ivopts`, `-fno-if-conversion` (nothing or worse).
 
+Measured again on 2026-11-12 with cryptography and long running files left
+out (hashes, PBKDF2, KEF, curve, BIP32, signing, AES/GCM, vault, BIP85,
+Shamir, UR decoder, QR encoder, FAT, display, SPI, UART, interrupts): B gives
+3,644 B, B with `-fno-move-loop-invariants -fno-tree-loop-im` 5,432 B (applied),
+and `-fno-inline` on top makes it worse (4,904 B). They are per-file options
+in `configurations.xml`.
+
 Proposal, in two steps so each can be tested alone on the board:
 1. Set A (11.5 KB). The whole device test pass afterwards: timing of the LCD,
    the scanner and the SD does not depend on these, but the binary changes
@@ -183,7 +190,7 @@ crypto-account QR about 0.6 KB, Nostr 0.5 KB, triple and obfuscation 1.6 KB.
 |---|---|---|
 | Today | - | 16.4 KB |
 | Options A (`-mmemcpy -G 1024`), applied on 2026-11-10 | 11,513 B measured | 27.6 KB |
-| Options B or C on the interface files | 5 to 7 KB measured | 33 to 35 KB |
+| Options B + loop flags on the interface files only, applied on 2026-11-12 | 5,432 B measured | 30.8 KB |
 | Changes 2, 5, 6, 8, 9 (small and safe) | about 3 to 4 KB | 36 to 39 KB |
 | Changes 1, 3, 7 | about 3 to 5 KB | 39 to 44 KB |
 | Change 4 and the rest | when needed | |

@@ -1,9 +1,9 @@
 # Seedmate firmware - pending work
 
 The open work list, kept up to date with every change (Claude updates it when
-a task is done, decided or added). Last update: 2026-11-10.
+a task is done, decided or added). Last update: 2026-11-13.
 
-Memory today: flash 212.5 KB of 238 KB (89.3%, about 25.5 KB free); RAM
+Memory today: flash 207.2 KB of 238 KB (87.1%, about 30.8 KB free); RAM
 23.7 KB of 32 KB (about 11.5 KB of stack).
 
 ## 0. Security audit of 2026-11-09
@@ -41,6 +41,7 @@ UPDATE FIRMWARE, QR READER on a Compact SeedQR, BIP85 PASSWORD with index 10.
 | Vault nonce (audit M3): device test | Done on 2026-11-11: the nonce of a new record is HMAC-SHA256(key, counter, header, text), stored in the record. Try: open a vault saved with the previous firmware (its entries must still open), add, edit and delete entries |
 | Text editor DEL held: device test | Done on 2026-11-11: held, BACK / DEL deletes again after 500 ms and then every 120 ms (the UP / DOWN pace), in the title and the text. Check the pace feels right |
 | Packed word lists: device test | Done on 2026-11-08, saved 11.1 KB, PC tests only. On the device: word entry and its keyboard (should not feel slower), showing 24 words, seeds from QR and SD, EFF PASSWORD |
+| Animated QR scan: device test with the animator | Made on 2026-11-13: `tools/ur_psbt_animator.html`, an offline page that shows a PSBT as an animated `UR:CRYPTO-PSBT` QR like Sparrow (pure parts, then mixed parts), with test PSBTs of the abandon seed built in. Host test `test/ur_anim/` (its frames decode with the firmware code). On the device: SIGN > FROM QR with fragments of 60, 100, 150 and 250 bytes, frame times from 100 to 500 ms, "Mixed parts only", "Start at part" and 30-50 % "Drop frames" (the fountain decoder must still finish), a single part PSBT, over 35 parts (must refuse). Animated PSBT scan and signing tried on 2026-11-13 and working; the loss and limit cases not yet. Test PSBTs to paste: `tools/ur_psbt_test_vectors.txt` |
 | Try it all with real PSBTs | On the device with PSBTs made by real wallets (Sparrow, Nunchuk, single sig and multisig, by SD and by QR): the new review, HIGH FEE, the stricter parser (nothing valid may be refused: the PC tests use generated files, and a real wallet may add fields they lack), AUTO UNLOAD during a signing. Nothing from those wallets goes into the repo (rule 5) |
 | PSBT hardening: device test | Done on 2026-11-08, PC tests only. The parser refuses duplicate keys and known fields with a key of the wrong form (all 20 invalid BIP174 vectors refused now); outputs without an address are yellow; HIGH CHANGE INDEX is relative to the inputs (over the highest input index + 100). Try the Sparrow PSBTs again to confirm nothing valid is refused. What is still accepted on purpose, with the reason: `test/psbt/malicious_gaps.txt` |
 | Skewed dice warning | Maybe (2026-11-08): a count per face, no floating point, about 400 B |
@@ -60,6 +61,7 @@ UPDATE FIRMWARE, QR READER on a Compact SeedQR, BIP85 PASSWORD with index 10.
 | BBQr reading | 1-3 KB | Sparrow / Coldcard "B$" frames; the Z encoding needs raw inflate (shared with KEF v21) |
 | Nostr event signing | ~2-3 KB | Shares Taproot's Schnorr; under SIGN |
 | SCAN ADDRESS in multisig | Not measured | Today single sig only: the multisig menu has IMPORT DESCRIPTOR instead of ADDRESSES. With a descriptor loaded, check a scanned address against the receive and change scripts of the wallet (`psbt_public_ckd()`, `desc_witness_script()`, as the change check when signing) |
+| Miniscript: the common templates | 3-5 KB (estimate) | Decided on 2026-11-12: the simple, most used policies only, not the whole language. First the Liana style recovery wallet in P2WSH: "my key, or after N blocks a recovery key" (`or_d(pk(A), and_v(v:pkh(B), older(N)))`), then its multisig variant ("2 of 3, or after N blocks 1 of 3"). Needs: the descriptor parsed for those shapes only, the witness script rebuilt from the keys at each index (change check, as `desc_witness_script()` does for multisig), a clear review screen (primary keys, recovery keys, "AFTER n BLOCKS" with the time it means), a vault format for it, and test vectors from Liana / Bitcoin Core. Full miniscript (10-15 KB, no recursion allowed, hard to show on 160x128) and taproot branches (after Taproot) stay out |
 
 ## 3. Other features
 
@@ -113,7 +115,7 @@ Full analysis of 2026-11-10 in `docs/flash-savings.md` (measuring scripts in
 
 | Option | Saves | Risk |
 |---|---|---|
-| More size options on the interface files | 5 to 7 KB (measured build) | Low: check the derivation times |
+| More size options on the interface files | Done on 2026-11-12: 5,432 B (measured), per-file options on the 15 interface files only; cryptography and long operations untouched | Device test on 2026-11-13, looks right: QR, animated PSBT scan, SD read and write, signing. Not tried yet: the rest of the menus |
 | Small code changes (drawtext wrapper, unused SPI drivers, one scanner read, debug screen) | 3 to 4 KB (estimate) | Low |
 | Text formatter, lines in one call, key helpers | 3 to 5 KB (estimate) | Low |
 | One GCM authentication path (header and data) | ~0.7 KB | Low |

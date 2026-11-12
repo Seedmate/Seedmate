@@ -61,6 +61,15 @@ def run(tag, opt, extra, per_file=None, link_extra=''):
     sys.stdout.flush()
     return fl
 
+# Kept with the project options in the per-file variants: cryptography and
+# anything that runs for long (hashes, PBKDF2, curve, AES, UR decoding, QR
+# encoding, FAT, display and SPI drivers)
+HOT_FILES = ('sha256.o', 'sha512.o', 'kdf.o', 'kef.o', 'bignum.o', 'ecdsa.o', 'secp256k1.o', 'bip32.o',
+             'ripemd160.o', 'aescrypt.o', 'aeskey.o', 'aestab.o', 'aesgcm.o', 'gf128mul.o', 'consteq.o',
+             'psbt_sign.o', 'bip85.o', 'vault.o', 'shamir.o', 'memzero.o', 'segwit_addr.o', 'fountain.o',
+             'sampler.o', 'prng.o', 'bytewords.o', 'qrcode.o', 'ff.o', 'ffunicode.o', 'sd_files.o', 'TFT.o',
+             'SPI.o', 'plib_spi1_master.o', 'plib_spi3_master.o', 'plib_uart2.o', 'interrupts.o')
+
 variants = {
     'base':        ('-O1', ''),
     'Os':          ('-Os', ''),
@@ -85,7 +94,5 @@ for t in want:
         opt, extra = parts[0], parts[1]
         hot = None
         if len(parts) > 2:      # Speed critical files keep their own flags
-            hot = {n: parts[2] for n in ('sha256.o', 'sha512.o', 'bignum.o', 'ecdsa.o', 'kdf.o', 'kef.o', 'secp256k1.o',
-                                         'ripemd160.o', 'aescrypt.o', 'aesgcm.o', 'gf128mul.o', 'aeskey.o', 'bip32.o',
-                                         'psbt_sign.o', 'shamir.o', 'fountain.o', 'sampler.o', 'prng.o', 'TFT.o', 'SPI.o')}
+            hot = {n: parts[2] for n in HOT_FILES}
         run('V%d' % want.index(t), opt, extra, hot)

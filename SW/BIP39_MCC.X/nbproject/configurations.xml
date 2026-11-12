@@ -223,6 +223,267 @@
         <makeCustomizationEnableLongLines>false</makeCustomizationEnableLongLines>
         <makeCustomizationNormalizeHexFile>false</makeCustomizationNormalizeHexFile>
       </makeCustomizationType>
+      <item path="../src/EFF_short.c" ex="false" overriding="true">
+        <C32>
+          <appendMe value="-mmemcpy -G 1024 -fcrossjumping -foptimize-sibling-calls -fcode-hoisting -ftree-tail-merge -fno-tree-ch -fno-move-loop-invariants -fno-tree-loop-im"/>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
+      </item>
+      <item path="../src/config/v2/exceptions.c" ex="false" overriding="true">
+        <C32>
+          <appendMe value="-mmemcpy -G 1024 -fcrossjumping -foptimize-sibling-calls -fcode-hoisting -ftree-tail-merge -fno-tree-ch -fno-move-loop-invariants -fno-tree-loop-im"/>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
+      </item>
+      <item path="../src/config/v2/initialization.c" ex="false" overriding="true">
+        <C32>
+          <appendMe value="-mmemcpy -G 1024 -fcrossjumping -foptimize-sibling-calls -fcode-hoisting -ftree-tail-merge -fno-tree-ch -fno-move-loop-invariants -fno-tree-loop-im"/>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
+      </item>
+      <item path="../src/config/v2/peripheral/clk/plib_clk.c"
+            ex="false"
+            overriding="true">
+        <C32>
+          <appendMe value="-mmemcpy -G 1024 -fcrossjumping -foptimize-sibling-calls -fcode-hoisting -ftree-tail-merge -fno-tree-ch -fno-move-loop-invariants -fno-tree-loop-im"/>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
+      </item>
+      <item path="../src/config/v2/peripheral/evic/plib_evic.c"
+            ex="false"
+            overriding="true">
+        <C32>
+          <appendMe value="-mmemcpy -G 1024 -fcrossjumping -foptimize-sibling-calls -fcode-hoisting -ftree-tail-merge -fno-tree-ch -fno-move-loop-invariants -fno-tree-loop-im"/>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
+      </item>
+      <item path="../src/config/v2/peripheral/gpio/plib_gpio.c"
+            ex="false"
+            overriding="true">
+        <C32>
+          <appendMe value="-mmemcpy -G 1024 -fcrossjumping -foptimize-sibling-calls -fcode-hoisting -ftree-tail-merge -fno-tree-ch -fno-move-loop-invariants -fno-tree-loop-im"/>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
+      </item>
+      <item path="../src/config/v2/stdio/xc32_monitor.c" ex="false" overriding="true">
+        <C32>
+          <appendMe value="-mmemcpy -G 1024 -fcrossjumping -foptimize-sibling-calls -fcode-hoisting -ftree-tail-merge -fno-tree-ch -fno-move-loop-invariants -fno-tree-loop-im"/>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
+      </item>
+      <item path="../src/descriptor.c" ex="false" overriding="true">
+        <C32>
+          <appendMe value="-mmemcpy -G 1024 -fcrossjumping -foptimize-sibling-calls -fcode-hoisting -ftree-tail-merge -fno-tree-ch -fno-move-loop-invariants -fno-tree-loop-im"/>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
+      </item>
+      <item path="../src/main.c" ex="false" overriding="true">
+        <C32>
+          <appendMe value="-mmemcpy -G 1024 -fcrossjumping -foptimize-sibling-calls -fcode-hoisting -ftree-tail-merge -fno-tree-ch -fno-move-loop-invariants -fno-tree-loop-im"/>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
+      </item>
+      <item path="../src/nostr.c" ex="false" overriding="true">
+        <C32>
+          <appendMe value="-mmemcpy -G 1024 -fcrossjumping -foptimize-sibling-calls -fcode-hoisting -ftree-tail-merge -fno-tree-ch -fno-move-loop-invariants -fno-tree-loop-im"/>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
+      </item>
+      <item path="../src/psbt.c" ex="false" overriding="true">
+        <C32>
+          <appendMe value="-mmemcpy -G 1024 -fcrossjumping -foptimize-sibling-calls -fcode-hoisting -ftree-tail-merge -fno-tree-ch -fno-move-loop-invariants -fno-tree-loop-im"/>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
+      </item>
+      <item path="../src/screens.c" ex="false" overriding="true">
+        <C32>
+          <appendMe value="-mmemcpy -G 1024 -fcrossjumping -foptimize-sibling-calls -fcode-hoisting -ftree-tail-merge -fno-tree-ch -fno-move-loop-invariants -fno-tree-loop-im"/>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
+      </item>
+      <item path="../src/settings.c" ex="false" overriding="true">
+        <C32>
+          <appendMe value="-mmemcpy -G 1024 -fcrossjumping -foptimize-sibling-calls -fcode-hoisting -ftree-tail-merge -fno-tree-ch -fno-move-loop-invariants -fno-tree-loop-im"/>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
+      </item>
+      <item path="../src/snake.c" ex="false" overriding="true">
+        <C32>
+          <appendMe value="-mmemcpy -G 1024 -fcrossjumping -foptimize-sibling-calls -fcode-hoisting -ftree-tail-merge -fno-tree-ch -fno-move-loop-invariants -fno-tree-loop-im"/>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
+      </item>
+      <item path="../src/ur_encode.c" ex="false" overriding="true">
+        <C32>
+          <appendMe value="-mmemcpy -G 1024 -fcrossjumping -foptimize-sibling-calls -fcode-hoisting -ftree-tail-merge -fno-tree-ch -fno-move-loop-invariants -fno-tree-loop-im"/>
+        </C32>
+        <C32-AR>
+        </C32-AR>
+        <C32-AS>
+        </C32-AS>
+        <C32-CO>
+        </C32-CO>
+        <C32-LD>
+        </C32-LD>
+        <C32CPP>
+        </C32CPP>
+        <C32Global>
+        </C32Global>
+      </item>
       <C32>
         <property key="additional-warnings" value="true"/>
         <property key="addresss-attribute-use" value="false"/>

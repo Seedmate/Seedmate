@@ -1,0 +1,795 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- This page can reach nothing: no network, no external file of any kind -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<title>Seedmate UR PSBT animator</title>
+<style>
+:root {
+  --bg: #111418; --panel: #1b2026; --line: #39414b; --text: #eef1f4; --dim: #9aa5b1;
+  --red: #ff6b6b; --green: #4cd97b; --yellow: #ffd24d; --cyan: #5ad7e6; --orange: #ff9a3d;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, sans-serif; }
+main { max-width: 980px; margin: 0 auto; padding: 24px 16px 60px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+.sub { color: var(--dim); margin: 0 0 20px; }
+.cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 820px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 14px; }
+h2 { font-size: 15px; margin: 0 0 10px; }
+label { display: block; margin: 8px 0 4px; color: var(--dim); }
+label.inline { display: inline-flex; gap: 6px; align-items: center; color: var(--text); margin-right: 14px; }
+textarea, input[type=number], select {
+  background: var(--bg); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 8px; font: 14px/1.4 ui-monospace, Consolas, monospace;
+}
+textarea { width: 100%; height: 90px; resize: vertical; }
+input[type=number] { width: 110px; }
+button {
+  background: #2b333c; color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+  padding: 8px 13px; font: inherit; cursor: pointer; margin: 6px 6px 0 0;
+}
+button:hover:not(:disabled) { border-color: var(--dim); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.main { background: #1f6f43; border-color: #2b9159; font-weight: 600; }
+#drop {
+  border: 2px dashed var(--line); border-radius: 8px; padding: 18px 12px; text-align: center;
+  color: var(--dim); cursor: pointer;
+}
+#drop.over { border-color: var(--cyan); color: var(--text); }
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; overflow-wrap: anywhere; }
+.err { color: var(--red); }
+.warn { color: var(--yellow); }
+.ok { color: var(--green); }
+.info { color: var(--cyan); }
+table.kv { border-collapse: collapse; width: 100%; }
+table.kv td { padding: 2px 6px 2px 0; vertical-align: top; }
+table.kv td:first-child { color: var(--dim); white-space: nowrap; width: 1%; }
+#qrbox { background: #fff; border-radius: 6px; display: flex; justify-content: center; padding: 8px; }
+#qr { image-rendering: pixelated; max-width: 100%; height: auto; }
+#frame { margin-top: 8px; max-height: 120px; overflow: auto; }
+.row { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: end; }
+</style>
+</head>
+<body>
+<main>
+<h1>UR PSBT animator</h1>
+<p class="sub">Test tool: shows a PSBT as an animated <span class="mono">UR:CRYPTO-PSBT</span> QR, the way Sparrow does
+(pure parts first, then fountain mixed parts without end). Offline, nothing leaves the page.
+Use test PSBTs only.</p>
+
+<div class="cols">
+<div>
+<section>
+  <h2>1. PSBT</h2>
+  <div id="drop">Drop a .psbt file (binary or base64) or click to choose</div>
+  <input type="file" id="file" hidden>
+  <label for="text">or paste base64 / hex</label>
+  <textarea id="text" spellcheck="false" placeholder="cHNidP8B..."></textarea>
+  <button id="load">Load text</button>
+  <div style="margin-top:6px">Test PSBTs of the "abandon x11 about" seed:<br>
+    <button data-preset="send">Send, 1 input</button>
+    <button data-preset="send3">Send, 3 inputs</button>
+    <button data-preset="big">Big (4.5 KB)</button>
+  </div>
+  <p id="loadmsg" class="mono"></p>
+</section>
+
+<section>
+  <h2>2. Animation</h2>
+  <div class="row">
+    <div><label for="frag">Max fragment (bytes)</label><input type="number" id="frag" min="10" max="1000" value="100"></div>
+    <div><label for="ms">Frame time (ms)</label><input type="number" id="ms" min="30" max="5000" value="250"></div>
+    <div><label for="ecc">Error correction</label>
+      <select id="ecc"><option value="0" selected>L</option><option value="1">M</option><option value="2">Q</option><option value="3">H</option></select></div>
+    <div><label for="px">Module size (px)</label><input type="number" id="px" min="1" max="20" value="5"></div>
+  </div>
+  <div class="row" style="margin-top:6px">
+    <div><label for="start">Start at part</label><input type="number" id="start" min="1" value="1"></div>
+    <div><label for="drop_pct">Drop frames (%)</label><input type="number" id="drop_pct" min="0" max="90" value="0"></div>
+  </div>
+  <div style="margin-top:10px">
+    <label class="inline"><input type="checkbox" id="mixedonly"> Mixed parts only (skip the pure ones)</label>
+    <label class="inline"><input type="checkbox" id="lower"> Lower case (byte mode, bigger QR)</label>
+  </div>
+  <p class="sub" style="margin:8px 0 0">"Start at part", "Mixed parts only" and "Drop frames" test the fountain decoder:
+  the device must still finish from the mixed parts.</p>
+</section>
+
+<section>
+  <h2>Message</h2>
+  <table class="kv mono" id="summary"><tr><td>-</td><td>no PSBT loaded</td></tr></table>
+  <p id="limits" class="mono"></p>
+</section>
+</div>
+
+<div>
+<section>
+  <h2>3. QR</h2>
+  <div id="qrbox"><canvas id="qr" width="1" height="1"></canvas></div>
+  <div>
+    <button id="play" class="main" disabled>Play</button>
+    <button id="prev" disabled>&#9664; Step</button>
+    <button id="next" disabled>Step &#9654;</button>
+    <button id="restart" disabled>Restart</button>
+  </div>
+  <p id="status" class="mono"></p>
+  <div id="frame" class="mono"></div>
+  <button id="dump" disabled>List the first frames as text</button>
+  <textarea id="dumpout" class="mono" spellcheck="false" style="display:none;height:160px;margin-top:6px"></textarea>
+</section>
+</div>
+</div>
+</main>
+
+<script id="core">
+"use strict";
+// Pure functions, no page access (test/ur_anim/test_ur_anim.js runs this same script).
+
+// ---- SHA-256 (seed of the fountain PRNG) ----
+const SHA_K = new Uint32Array([
+  0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+  0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+  0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+  0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+  0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+  0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+  0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+  0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2]);
+
+function sha256(data) {
+  const len = data.length, total = ((len + 9 + 63) >> 6) << 6;
+  const m = new Uint8Array(total);
+  m.set(data);
+  m[len] = 0x80;
+  const bits = len * 8;
+  m[total - 4] = bits >>> 24; m[total - 3] = bits >>> 16; m[total - 2] = bits >>> 8; m[total - 1] = bits;
+  m[total - 5] = Math.floor(bits / 0x100000000);
+  const h = new Uint32Array([0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19]);
+  const w = new Uint32Array(64);
+  const rotr = (x, n) => (x >>> n) | (x << (32 - n));
+  for (let o = 0; o < total; o += 64) {
+    for (let i = 0; i < 16; i++) w[i] = (m[o+4*i] << 24) | (m[o+4*i+1] << 16) | (m[o+4*i+2] << 8) | m[o+4*i+3];
+    for (let i = 16; i < 64; i++) {
+      const s0 = rotr(w[i-15], 7) ^ rotr(w[i-15], 18) ^ (w[i-15] >>> 3);
+      const s1 = rotr(w[i-2], 17) ^ rotr(w[i-2], 19) ^ (w[i-2] >>> 10);
+      w[i] = w[i-16] + s0 + w[i-7] + s1;
+    }
+    let [a, b, c, d, e, f, g, k] = h;
+    for (let i = 0; i < 64; i++) {
+      const t1 = (k + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + SHA_K[i] + w[i]) >>> 0;
+      const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
+      k = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+    }
+    h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e; h[5] += f; h[6] += g; h[7] += k;
+  }
+  const out = new Uint8Array(32);
+  for (let i = 0; i < 8; i++) { out[4*i] = h[i] >>> 24; out[4*i+1] = h[i] >>> 16; out[4*i+2] = h[i] >>> 8; out[4*i+3] = h[i]; }
+  return out;
+}
+
+// ---- CRC32 (as ur_crc32_update() in ur_encode.c) ----
+function crc32(data) {
+  let crc = 0xFFFFFFFF;
+  for (const b of data) {
+    crc ^= b;
+    for (let j = 0; j < 8; j++) crc = (crc & 1) ? (crc >>> 1) ^ 0xEDB88320 : crc >>> 1;
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+// ---- Minimal Bytewords: first and last letter of each word, upper case ----
+const BYTEWORDS =
+  "AEADAOAXAAAHAMATAYASBKBDBNBTBABSBEBYBGBWBBBZCMCHCSCFCYCWCECACKCT" +
+  "CXCLCPCNDKDADSDIDEDTDRDNDWDPDMDLDYEHEYEOEEECENEMETESFTFRFNFSFMFH" +
+  "FZFPFWFXFYFEFGFLFDGAGEGRGSGTGLGWGDGYGMGUGHGOHFHGHDHKHTHPHHHLHYHE" +
+  "HNHSIDIAIEIHIYIOISINIMJEJZJNJTJLJOJSJPJKJYKPKOKTKSKKKNKGKEKIKBLB" +
+  "LALYLFLSLRLPLNLTLOLDLELULKLGMNMYMHMEMOMUMWMDMTMSMKNLNYNDNSNTNNNE" +
+  "NBOYOEOTOXONOLOSPDPTPKPYPSPMPLPEPFPAPRQDQZRERPRLRORHRDRKRFRYRNRS" +
+  "RTSESASRSSSKSWSTSPSOSGSBSFSNTOTKTITTTDTETYTLTBTSTPTATNUYUOUTUEUR" +
+  "VTVYVOVLVEVWVAVDVSWLWDWMWPWEWYWSWTWNWZWFWKYKYNYLYAYTZSZOZTZCZEZM";
+
+function bytewords(data) {
+  let s = "";
+  for (const b of data) s += BYTEWORDS.substr(2 * b, 2);
+  return s;
+}
+
+// ---- CBOR heads ----
+function cborHead(major, v) {
+  if (v < 24) return [major | v];
+  if (v < 0x100) return [major | 24, v];
+  if (v < 0x10000) return [major | 25, v >> 8, v & 0xFF];
+  return [major | 26, v >>> 24, (v >>> 16) & 0xFF, (v >>> 8) & 0xFF, v & 0xFF];
+}
+
+// ---- Xoshiro256** as the BC-UR reference (prng.c) ----
+const M64 = (1n << 64n) - 1n;
+function rotl64(x, k) { return ((x << BigInt(k)) | (x >> BigInt(64 - k))) & M64; }
+
+class Xoshiro {
+  constructor(seq, checksum) {
+    const seed = new Uint8Array([seq >>> 24, seq >>> 16, seq >>> 8, seq, checksum >>> 24, checksum >>> 16, checksum >>> 8, checksum]);
+    const h = sha256(seed);
+    this.s = [0n, 0n, 0n, 0n];
+    for (let i = 0; i < 4; i++) {
+      let v = 0n;
+      for (let j = 0; j < 8; j++) v = (v << 8n) | BigInt(h[8 * i + j]);
+      this.s[i] = v;
+    }
+  }
+  next() {
+    const s = this.s;
+    const result = (rotl64((s[1] * 5n) & M64, 7) * 9n) & M64;
+    const t = (s[1] << 17n) & M64;
+    s[2] ^= s[0]; s[3] ^= s[1]; s[1] ^= s[2]; s[0] ^= s[3];
+    s[2] ^= t;
+    s[3] = rotl64(s[3], 45);
+    return result;
+  }
+  nextDouble() { return Number(this.next()) / 18446744073709551616; }
+  nextInt(low, high) { return Math.floor(low + this.nextDouble() * (high - low + 1)); }
+}
+
+// Vose alias table of the weights 1/1 .. 1/n, in the order of sampler.c
+function aliasTable(n) {
+  const probs = [];
+  let sum = 0;
+  for (let i = 0; i < n; i++) { probs.push(1 / (i + 1)); sum += probs[i]; }
+  const P = probs.map(p => (p * n) / sum);
+  const S = [], L = [], prob = new Array(n).fill(0), alias = new Array(n).fill(0);
+  for (let i = n - 1; i >= 0; i--) (P[i] < 1 ? S : L).push(i);
+  while (S.length && L.length) {
+    const a = S.pop(), g = L.pop();
+    prob[a] = P[a];
+    alias[a] = g;
+    P[g] = (P[g] + P[a]) - 1;
+    (P[g] < 1 ? S : L).push(g);
+  }
+  while (L.length) prob[L.pop()] = 1;
+  while (S.length) prob[S.pop()] = 1;
+  return { prob, alias };
+}
+
+// Fragment indexes (0 based) XORed into part 'seq'
+function chooseFragments(seq, seqLen, checksum, table) {
+  if (seq <= seqLen) return [seq - 1];
+  const rng = new Xoshiro(seq, checksum);
+  const c = rng.nextInt(0, seqLen - 1);
+  const d = rng.nextDouble();
+  const degree = d < table.prob[c] ? c + 1 : table.alias[c] + 1;
+  const remaining = [];
+  for (let i = 0; i < seqLen; i++) remaining.push(i);
+  const out = [];
+  for (let i = 0; i < degree; i++) {
+    const k = rng.nextInt(0, remaining.length - 1);
+    out.push(remaining.splice(k, 1)[0]);
+  }
+  return out;
+}
+
+// Encoder of one PSBT; part(seq) gives the QR text of any part number >= 1
+function urEncoder(psbt, maxFragment, type) {
+  type = type || "CRYPTO-PSBT";
+  if (psbt.length === 0 || psbt.length > 0xFFFFFFF) throw new Error("bad PSBT length");
+  if (maxFragment < 10) throw new Error("fragment under 10 bytes");
+  const hdr = cborHead(0x40, psbt.length);
+  const msg = new Uint8Array(hdr.length + psbt.length);
+  msg.set(hdr); msg.set(psbt, hdr.length);
+  const checksum = crc32(msg);
+  // Fewest parts of equal size that fit maxFragment (UR reference)
+  let maxCount = Math.max(1, Math.floor(msg.length / 10)), fragLen = msg.length;
+  for (let count = 1; count <= maxCount; count++) {
+    fragLen = Math.ceil(msg.length / count);
+    if (fragLen <= maxFragment) break;
+  }
+  const seqLen = Math.ceil(msg.length / fragLen);
+  const frags = [];
+  for (let i = 0; i < seqLen; i++) {
+    const f = new Uint8Array(fragLen);
+    f.set(msg.subarray(i * fragLen, Math.min(msg.length, (i + 1) * fragLen)));
+    frags.push(f);
+  }
+  const table = seqLen > 1 ? aliasTable(seqLen) : null;
+  function partInfo(seq) {
+    const idx = chooseFragments(seq, seqLen, checksum, table);
+    const data = new Uint8Array(fragLen);
+    for (const i of idx) for (let j = 0; j < fragLen; j++) data[j] ^= frags[i][j];
+    const cbor = [0x85, ...cborHead(0, seq), ...cborHead(0, seqLen), ...cborHead(0, msg.length),
+                  ...cborHead(0, checksum), ...cborHead(0x40, fragLen), ...data];
+    const body = new Uint8Array(cbor.length + 4);
+    body.set(cbor);
+    const c = crc32(body.subarray(0, cbor.length));
+    body.set([c >>> 24, (c >>> 16) & 0xFF, (c >>> 8) & 0xFF, c & 0xFF], cbor.length);
+    return { idx, text: "UR:" + type + "/" + seq + "-" + seqLen + "/" + bytewords(body) };
+  }
+  // A message that fits one fragment is a single part UR, as Sparrow shows it
+  function single() {
+    const body = new Uint8Array(msg.length + 4);
+    body.set(msg);
+    const c = crc32(msg);
+    body.set([c >>> 24, (c >>> 16) & 0xFF, (c >>> 8) & 0xFF, c & 0xFF], msg.length);
+    return "UR:" + type + "/" + bytewords(body);
+  }
+  return { msgLen: msg.length, checksum, fragLen, seqLen, partInfo, single,
+           part: seq => seqLen === 1 ? single() : partInfo(seq).text };
+}
+
+// ---- QR encoder: port of the firmware's library (src/QRCode-master/src/qrcode.c) ----
+// ecc: 0 L, 1 M, 2 Q, 3 H (the library's ECC_LOW .. ECC_HIGH). Rows below by format bits: M, L, H, Q.
+const QR_ECC_CODEWORDS = [
+  [10,16,26,36,48,64,72,88,110,130,150,176,198,216,240,280,308,338,364,416,442,476,504,560,588,644,700,728,784,812,868,924,980,1036,1064,1120,1204,1260,1316,1372],
+  [7,10,15,20,26,36,40,48,60,72,80,96,104,120,132,144,168,180,196,224,224,252,270,300,312,336,360,390,420,450,480,510,540,570,570,600,630,660,720,750],
+  [17,28,44,64,88,112,130,156,192,224,264,308,352,384,432,480,532,588,650,700,750,816,900,960,1050,1110,1200,1260,1350,1440,1530,1620,1710,1800,1890,1980,2100,2220,2310,2430],
+  [13,22,36,52,72,96,108,132,160,192,224,260,288,320,360,408,448,504,546,600,644,690,750,810,870,952,1020,1050,1140,1200,1290,1350,1440,1530,1590,1680,1770,1860,1950,2040]];
+const QR_ECC_BLOCKS = [
+  [1,1,1,2,2,4,4,4,5,5,5,8,9,9,10,10,11,13,14,16,17,17,18,20,21,23,25,26,28,29,31,33,35,37,38,40,43,45,47,49],
+  [1,1,1,1,1,2,2,2,2,4,4,4,4,4,6,6,6,6,7,8,8,9,9,10,12,12,12,13,14,15,16,17,18,19,19,20,21,22,24,25],
+  [1,1,2,4,4,4,5,6,8,8,11,11,16,16,18,16,19,21,25,25,25,34,30,32,35,37,40,42,45,48,51,54,57,60,63,66,70,74,77,81],
+  [1,1,2,2,4,4,6,6,8,8,8,10,12,16,12,17,16,18,21,20,23,23,25,27,29,34,34,35,38,40,43,45,48,51,53,56,59,62,65,68]];
+const QR_RAW_MODULES = [208,359,567,807,1079,1383,1568,1936,2336,2768,3232,3728,4256,4651,5243,5867,6523,
+  7211,7931,8683,9252,10068,10916,11796,12708,13652,14628,15371,16411,17483,18587,19723,20891,22091,23008,24272,25568,26896,28256,29648];
+const QR_ALNUM = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+
+function qrFormatEcc(ecc) { return (0xB1 >> (2 * ecc)) & 3; }
+function qrMode(text) {
+  if (/^[0-9]*$/.test(text)) return 0;
+  for (const ch of text) if (QR_ALNUM.indexOf(ch) < 0) return 2;
+  return 1;
+}
+function qrCountBits(version, mode) {
+  const t = version <= 9 ? [10, 9, 8] : version <= 26 ? [12, 11, 16] : [14, 13, 16];
+  return t[mode];
+}
+function qrDataBits(text, version) {
+  const mode = qrMode(text), n = text.length;
+  let bits = 4 + qrCountBits(version, mode);
+  if (mode === 0) bits += 10 * Math.floor(n / 3) + [0, 4, 7][n % 3];
+  else if (mode === 1) bits += 11 * Math.floor(n / 2) + 6 * (n % 2);
+  else bits += 8 * n;
+  return bits;
+}
+function qrCapacityBits(version, ecc) {
+  const f = qrFormatEcc(ecc);
+  return (Math.floor(QR_RAW_MODULES[version - 1] / 8) - QR_ECC_CODEWORDS[f][version - 1]) * 8;
+}
+function qrSmallestVersion(text, ecc) {
+  for (let v = 1; v <= 40; v++) {
+    if (qrDataBits(text, v) <= qrCapacityBits(v, ecc) && (qrMode(text) !== 2 || text.length < 65536)) return v;
+  }
+  return 0;
+}
+
+function rsMul(x, y) {
+  let z = 0;
+  for (let i = 7; i >= 0; i--) {
+    z = ((z << 1) ^ ((z >> 7) * 0x11D)) & 0xFFFF;
+    z ^= ((y >> i) & 1) * x;
+  }
+  return z & 0xFF;
+}
+function rsGenerator(degree) {
+  const coeff = new Array(degree).fill(0);
+  coeff[degree - 1] = 1;
+  let root = 1;
+  for (let i = 0; i < degree; i++) {
+    for (let j = 0; j < degree; j++) {
+      coeff[j] = rsMul(coeff[j], root);
+      if (j + 1 < degree) coeff[j] ^= coeff[j + 1];
+    }
+    root = ((root << 1) ^ ((root >> 7) * 0x11D)) & 0xFF;
+  }
+  return coeff;
+}
+function rsRemainder(coeff, data) {
+  const degree = coeff.length, result = new Array(degree).fill(0);
+  for (const b of data) {
+    const factor = b ^ result[0];
+    result.shift(); result.push(0);
+    for (let j = 0; j < degree; j++) result[j] ^= rsMul(coeff[j], factor);
+  }
+  return result;
+}
+
+// Returns { version, size, mask, modules: Array of rows of 0/1 } or throws if it does not fit
+function qrEncode(text, version, ecc) {
+  const f = qrFormatEcc(ecc);
+  const size = version * 4 + 17;
+  const moduleCount = QR_RAW_MODULES[version - 1];
+  const dataCapacity = Math.floor(moduleCount / 8) - QR_ECC_CODEWORDS[f][version - 1];
+  if (qrDataBits(text, version) > dataCapacity * 8) throw new Error("text does not fit QR version " + version);
+
+  // Data bits
+  const bits = [];
+  const put = (v, n) => { for (let i = n - 1; i >= 0; i--) bits.push((v >>> i) & 1); };
+  const mode = qrMode(text);
+  put(1 << mode, 4);
+  put(text.length, qrCountBits(version, mode));
+  if (mode === 0) {
+    for (let i = 0; i < text.length; i += 3) {
+      const chunk = text.substr(i, 3);
+      put(parseInt(chunk, 10), chunk.length * 3 + 1);
+    }
+  } else if (mode === 1) {
+    for (let i = 0; i < text.length; i += 2) {
+      if (i + 1 < text.length) put(QR_ALNUM.indexOf(text[i]) * 45 + QR_ALNUM.indexOf(text[i + 1]), 11);
+      else put(QR_ALNUM.indexOf(text[i]), 6);
+    }
+  } else {
+    for (let i = 0; i < text.length; i++) put(text.charCodeAt(i) & 0xFF, 8);
+  }
+  put(0, Math.min(4, dataCapacity * 8 - bits.length));
+  put(0, (8 - bits.length % 8) % 8);
+  for (let pad = 0xEC; bits.length < dataCapacity * 8; pad ^= 0xEC ^ 0x11) put(pad, 8);
+  const data = [];
+  for (let i = 0; i < bits.length; i += 8) {
+    let b = 0;
+    for (let j = 0; j < 8; j++) b = (b << 1) | bits[i + j];
+    data.push(b);
+  }
+
+  // Blocks and error correction, interleaved
+  const numBlocks = QR_ECC_BLOCKS[f][version - 1];
+  const blockEccLen = QR_ECC_CODEWORDS[f][version - 1] / numBlocks;
+  const numShort = numBlocks - Math.floor(moduleCount / 8) % numBlocks;
+  const shortDataLen = Math.floor(moduleCount / 8 / numBlocks) - blockEccLen;
+  const gen = rsGenerator(blockEccLen);
+  const blocks = [];
+  for (let b = 0, k = 0; b < numBlocks; b++) {
+    const len = shortDataLen + (b < numShort ? 0 : 1);
+    blocks.push(data.slice(k, k + len));
+    k += len;
+  }
+  const codewords = [];
+  for (let i = 0; i <= shortDataLen; i++) {
+    for (let b = 0; b < numBlocks; b++) if (i < blocks[b].length) codewords.push(blocks[b][i]);
+  }
+  const eccs = blocks.map(bl => rsRemainder(gen, bl));
+  for (let i = 0; i < blockEccLen; i++) for (let b = 0; b < numBlocks; b++) codewords.push(eccs[b][i]);
+
+  // Function patterns
+  const mod = [], fn = [];
+  for (let y = 0; y < size; y++) { mod.push(new Array(size).fill(0)); fn.push(new Array(size).fill(0)); }
+  const setF = (x, y, on) => { mod[y][x] = on ? 1 : 0; fn[y][x] = 1; };
+  for (let i = 0; i < size; i++) { setF(6, i, i % 2 === 0); setF(i, 6, i % 2 === 0); }
+  const finder = (cx, cy) => {
+    for (let i = -4; i <= 4; i++) for (let j = -4; j <= 4; j++) {
+      const dist = Math.max(Math.abs(i), Math.abs(j)), xx = cx + j, yy = cy + i;
+      if (xx >= 0 && xx < size && yy >= 0 && yy < size) setF(xx, yy, dist !== 2 && dist !== 4);
+    }
+  };
+  finder(3, 3); finder(size - 4, 3); finder(3, size - 4);
+  if (version > 1) {
+    const count = Math.floor(version / 7) + 2;
+    const step = version === 32 ? 26 : Math.floor((version * 4 + count * 2 + 1) / (2 * count - 2)) * 2;
+    const pos = new Array(count);
+    pos[0] = 6;
+    for (let i = 0, p = size - 7; i < count - 1; i++, p -= step) pos[count - 1 - i] = p;
+    for (let i = 0; i < count; i++) for (let j = 0; j < count; j++) {
+      if ((i === 0 && j === 0) || (i === 0 && j === count - 1) || (i === count - 1 && j === 0)) continue;
+      for (let a = -2; a <= 2; a++) for (let b = -2; b <= 2; b++) setF(pos[i] + b, pos[j] + a, Math.max(Math.abs(a), Math.abs(b)) !== 1);
+    }
+  }
+  const formatBits = (mask) => {
+    let d = (f << 3) | mask, rem = d;
+    for (let i = 0; i < 10; i++) rem = (rem << 1) ^ ((rem >> 9) * 0x537);
+    d = ((d << 10) | rem) ^ 0x5412;
+    for (let i = 0; i <= 5; i++) setF(8, i, (d >> i) & 1);
+    setF(8, 7, (d >> 6) & 1); setF(8, 8, (d >> 7) & 1); setF(7, 8, (d >> 8) & 1);
+    for (let i = 9; i < 15; i++) setF(14 - i, 8, (d >> i) & 1);
+    for (let i = 0; i <= 7; i++) setF(size - 1 - i, 8, (d >> i) & 1);
+    for (let i = 8; i < 15; i++) setF(8, size - 15 + i, (d >> i) & 1);
+    setF(8, size - 8, 1);
+  };
+  formatBits(0);
+  if (version >= 7) {
+    let rem = version;
+    for (let i = 0; i < 12; i++) rem = (rem << 1) ^ ((rem >> 11) * 0x1F25);
+    const d = (version << 12) | rem;
+    for (let i = 0; i < 18; i++) {
+      const bit = (d >> i) & 1, a = size - 11 + i % 3, b = Math.floor(i / 3);
+      setF(a, b, bit); setF(b, a, bit);
+    }
+  }
+
+  // Codewords in the zigzag
+  const bitLength = moduleCount;
+  let i = 0;
+  for (let right = size - 1; right >= 1; right -= 2) {
+    if (right === 6) right = 5;
+    for (let vert = 0; vert < size; vert++) {
+      for (let j = 0; j < 2; j++) {
+        const x = right - j;
+        const up = ((right & 2) === 0) !== (x < 6);
+        const y = up ? size - 1 - vert : vert;
+        if (!fn[y][x] && i < bitLength) {
+          mod[y][x] = i < codewords.length * 8 ? (codewords[i >> 3] >> (7 - (i & 7))) & 1 : 0;
+          i++;
+        }
+      }
+    }
+  }
+
+  // Masks and the library's penalty score
+  const applyMask = (m) => {
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+      if (fn[y][x]) continue;
+      let inv;
+      switch (m) {
+        case 0: inv = (x + y) % 2 === 0; break;
+        case 1: inv = y % 2 === 0; break;
+        case 2: inv = x % 3 === 0; break;
+        case 3: inv = (x + y) % 3 === 0; break;
+        case 4: inv = (Math.floor(x / 3) + Math.floor(y / 2)) % 2 === 0; break;
+        case 5: inv = x * y % 2 + x * y % 3 === 0; break;
+        case 6: inv = (x * y % 2 + x * y % 3) % 2 === 0; break;
+        default: inv = ((x + y) % 2 + x * y % 3) % 2 === 0;
+      }
+      if (inv) mod[y][x] ^= 1;
+    }
+  };
+  const penalty = () => {
+    let r = 0;
+    for (let y = 0; y < size; y++) {
+      let c = mod[y][0], run = 1;
+      for (let x = 1; x < size; x++) {
+        if (mod[y][x] !== c) { c = mod[y][x]; run = 1; }
+        else { run++; if (run === 5) r += 3; else if (run > 5) r++; }
+      }
+    }
+    for (let x = 0; x < size; x++) {
+      let c = mod[0][x], run = 1;
+      for (let y = 1; y < size; y++) {
+        if (mod[y][x] !== c) { c = mod[y][x]; run = 1; }
+        else { run++; if (run === 5) r += 3; else if (run > 5) r++; }
+      }
+    }
+    let black = 0;
+    for (let y = 0; y < size; y++) {
+      let row = 0, col = 0;
+      for (let x = 0; x < size; x++) {
+        const c = mod[y][x];
+        if (x > 0 && y > 0 && c === mod[y-1][x-1] && c === mod[y-1][x] && c === mod[y][x-1]) r += 3;
+        row = ((row << 1) & 0x7FF) | c;
+        col = ((col << 1) & 0x7FF) | mod[x][y];
+        if (x >= 10) {
+          if (row === 0x05D || row === 0x5D0) r += 40;
+          if (col === 0x05D || col === 0x5D0) r += 40;
+        }
+        if (c) black++;
+      }
+    }
+    const total = size * size;
+    for (let k = 0; black * 20 < (9 - k) * total || black * 20 > (11 + k) * total; k++) r += 10;
+    return r;
+  };
+  let best = 0, min = Infinity;
+  for (let m = 0; m < 8; m++) {
+    formatBits(m);
+    applyMask(m);
+    const p = penalty();
+    if (p < min) { min = p; best = m; }
+    applyMask(m);
+  }
+  formatBits(best);
+  applyMask(best);
+  return { version, size, mask: best, modules: mod };
+}
+</script>
+
+<script>
+"use strict";
+const PRESETS = {
+  send: { name: "abandon send.psbt", b64:
+    "cHNidP8BAHECAAAAAYcJ6Z3U3Q1W/66lVlz7dPprmWG2FN1rEfgYDNEIoakAAAAAAAD9////AiibAAAAAAAAFgAUPjSYXcpv3cn7NplA5MfY4oc/Upxg6gAAAAAAABYAFHUedugZkZbUVJQcRdGzoyPxQzvW6EYNAE8BBIiyHgN+8yvbgAAAAEpToKshudyVhpxOkqFhGU4DwO8/9QFKxpL0M8R2VJD8AnB6Yv2swm6ptjscGXkG9W7gGA0Lzxlm4aLaNPXzoJqbEHPF2gpUAACAAAAAgAAAAIAAAQDeAgAAAAABAZKZuojOWCrHq9Gau2NS/rDVePjpEOUpTBapEGf5qyLOAAAAAAD9////AqCGAQAAAAAAFgAUwM681sPTyox13F7GLr5VMw75EOJA4gEAAAAAABYAFHUedugZkZbUVJQcRdGzoyPxQzvWAkcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC2Rg0AAQEfoIYBAAAAAAAWABTAzrzWw9PKjHXcXsYuvlUzDvkQ4iIGAzDVT9DdQgpuX402JPXzSCyuNQ951fB1O/W+75wtka88GHPF2gpUAACAAAAAgAAAAIAAAAAAAAAAAAAiAgMCUySIjkKauOPbrx94AmSLnNAem0GEhcX6TBubVwDhphhzxdoKVAAAgAAAAIAAAACAAQAAAAAAAAAAAA==" },
+  send3: { name: "abandon send 3 inputs.psbt", b64:
+    "cHNidP8BAO4CAAAAAwwe6L0TbQXjUw8BigmJXAEh3o6baIoOjpmWCMurStAdAAAAAAD9////ba1tYbPATu/jirVYnnNR6AKUyoDymD43nAmTDLlDFyAAAAAAAP3///+nw0B7q3souTcr6M4lnCAbYvBGVX7eoOzZlnd4kxxXzQAAAAAA/f///wNADQMAAAAAABYAFHUedugZkZbUVJQcRdGzoyPxQzvW7MIAAAAAAAAWABRCJ9g08arpUnPwyHSV9P8Ms2ZUUsDUAQAAAAAAIlEgeb5mfvncu6xVoGKVzocLBwKb/NstzijZWfKBWxb4F5joRg0ATwEEiLIeA37zK9uAAAAASlOgqyG53JWGnE6SoWEZTgPA7z/1AUrGkvQzxHZUkPwCcHpi/azCbqm2OxwZeQb1buAYDQvPGWbhoto09fOgmpsQc8XaClQAAIAAAACAAAAAgAABAN4CAAAAAAEBbQX/qFtox1Eo7BFMV2VREmaPYy7EMrRd4chgjeYTYIYAAAAAAP3///8CkNADAAAAAAAWABSckPk06lH6D2UEF3BD4JCNppKZg0DiAQAAAAAAFgAUdR526BmRltRUlBxF0bOjI/FDO9YCRwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAALZGDQABAR+Q0AMAAAAAABYAFJyQ+TTqUfoPZQQXcEPgkI2mkpmDIgYD53X9UfDfuM2GXZ/xzKKhWM9lH+mX/cn+6cHTtemV6ncYc8XaClQAAIAAAACAAAAAgAAAAAABAAAAAAEA3gIAAAAAAQHBTwOwmSRCJsXTwPiZhJrLw/nFgr5wGh/93usHzrCHuQEAAAAA/f///wKAOAEAAAAAABYAFA0KTFhV7mmK5ShyoUckjBif3/fDQeIBAAAAAAAWABR1HnboGZGW1FSUHEXRs6Mj8UM71gJHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAhAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAtUYNAAEBH4A4AQAAAAAAFgAUDQpMWFXuaYrlKHKhRySMGJ/f98MiBgOP/qk2st92vzEiDr1Wo0swxrhvQNO9kmZOL1+YSI3d+hhzxdoKVAAAgAAAAIAAAACAAAAAAAIAAAAAAQDeAgAAAAABAeuPNhHYI16wCssHEFyr+/kpElXxEBdGoOcwzpPRvKMiAgAAAAD9////AiigAAAAAAAAFgAUPjSYXcpv3cn7NplA5MfY4oc/UpxC4gEAAAAAABYAFHUedugZkZbUVJQcRdGzoyPxQzvWAkcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC0Rg0AAQEfKKAAAAAAAAAWABQ+NJhdym/dyfs2mUDkx9jihz9SnCIGAwJTJIiOQpq449uvH3gCZIuc0B6bQYSFxfpMG5tXAOGmGHPF2gpUAACAAAAAgAAAAIABAAAAAAAAAAAAIgID3Pcd9xx1Wzr0b36EtBguYpHOxajGMPd1Y4pznaKa3LYYc8XaClQAAIAAAACAAAAAgAEAAAABAAAAAAA=" },
+  big: { name: "abandon big.psbt", b64:
+    "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" }
+};
+const $ = id => document.getElementById(id);
+
+let psbt = null, psbtName = "";
+let enc = null, qrVersion = 0;
+let seq = 1, timer = null, history = [];
+
+function b64decode(s) {
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function isPsbt(b) {
+  return b.length > 5 && b[0] === 0x70 && b[1] === 0x73 && b[2] === 0x62 && b[3] === 0x74 && b[4] === 0xFF;
+}
+function bytesFromText(t) {
+  t = t.replace(/\s+/g, "");
+  if (/^[0-9a-fA-F]+$/.test(t) && t.length % 2 === 0) {
+    const out = new Uint8Array(t.length / 2);
+    for (let i = 0; i < out.length; i++) out[i] = parseInt(t.substr(2 * i, 2), 16);
+    if (isPsbt(out)) return out;
+  }
+  return b64decode(t);
+}
+
+function setPsbt(bytes, name) {
+  const msg = $("loadmsg");
+  if (!isPsbt(bytes)) {
+    msg.className = "mono err";
+    msg.textContent = "Not a PSBT (no \"psbt\\xff\" magic).";
+    return;
+  }
+  psbt = bytes;
+  psbtName = name;
+  msg.className = "mono ok";
+  msg.textContent = name + ": " + bytes.length + " bytes loaded.";
+  rebuild(true);
+}
+
+function loadText() {
+  const t = $("text").value.trim();
+  if (!t) return;
+  try { setPsbt(bytesFromText(t), "pasted text"); }
+  catch (e) { $("loadmsg").className = "mono err"; $("loadmsg").textContent = "Not base64 or hex: " + e.message; }
+}
+
+function loadFile(file) {
+  file.arrayBuffer().then(buf => {
+    let b = new Uint8Array(buf);
+    if (!isPsbt(b)) {
+      try { b = bytesFromText(new TextDecoder().decode(b)); } catch (e) { /* reported by setPsbt */ }
+    }
+    setPsbt(b, file.name);
+  });
+}
+
+function hex32(v) { return (v >>> 0).toString(16).padStart(8, "0"); }
+
+// Smallest QR version that holds the longest part text, so the size does not jump
+function pickVersion() {
+  const ecc = +$("ecc").value;
+  let longest = "";
+  const n = enc.seqLen === 1 ? 1 : Math.min(enc.seqLen + 40, 400);
+  for (let s = 1; s <= n; s++) {
+    let t = enc.part(s);
+    if ($("lower").checked) t = t.toLowerCase();
+    if (t.length > longest.length) longest = t;
+  }
+  return qrSmallestVersion(longest, ecc);
+}
+
+function rebuild(resetSeq) {
+  if (!psbt) return;
+  stop();
+  let frag = Math.max(10, Math.min(1000, +$("frag").value || 100));
+  enc = urEncoder(psbt, frag);
+  qrVersion = pickVersion();
+  const ecc = "LMQH"[+$("ecc").value];
+  const rows = [
+    ["File", psbtName],
+    ["PSBT", psbt.length + " bytes"],
+    ["Message", enc.msgLen + " bytes (CBOR byte string)"],
+    ["Checksum", hex32(enc.checksum) + " (CRC32)"],
+    ["Fragment", enc.fragLen + " bytes"],
+    ["Parts", enc.seqLen === 1 ? "1: single part UR, not animated" : enc.seqLen + " pure, then mixed without end"],
+    ["QR", qrVersion ? "version " + qrVersion + " (" + (qrVersion * 4 + 17) + " modules), ECC " + ecc : "too big for any QR version"],
+  ];
+  $("summary").innerHTML = "";
+  for (const [k, v] of rows) {
+    const tr = document.createElement("tr");
+    const a = document.createElement("td"), b = document.createElement("td");
+    a.textContent = k; b.textContent = v;
+    tr.append(a, b);
+    $("summary").append(tr);
+  }
+  // The device decoder's limits (fountain.h, sampler.h, main.c)
+  const lim = [];
+  if (enc.seqLen > 35) lim.push("More than 35 parts: over the Seedmate decoder (MAX_FOUNTAIN_PARTS 35). Raise the fragment size.");
+  if (enc.fragLen > 250) lim.push("Fragment over 250 bytes: over the Seedmate decoder (MAX_PAYLOAD_LEN 250).");
+  if (enc.seqLen > 1 && enc.part(1).length > 850) lim.push("Part text over 850 characters: over the scan buffer (MAX_UR_PAYLOAD_LEN 400 x 2 + 50).");
+  $("limits").className = "mono " + (lim.length ? "warn" : "ok");
+  $("limits").textContent = lim.length ? lim.join("\n") : "Within the Seedmate decoder limits (35 parts, 250 B per fragment).";
+  $("limits").style.whiteSpace = "pre-line";
+  for (const id of ["play", "prev", "next", "restart", "dump"]) $(id).disabled = !qrVersion;
+  if (resetSeq) restart(); else show(seq);
+}
+
+function firstSeq() {
+  let s = Math.max(1, +$("start").value || 1);
+  if ($("mixedonly").checked && s <= enc.seqLen) s = enc.seqLen + 1;
+  return s;
+}
+
+function show(s) {
+  if (!enc || !qrVersion) return;
+  seq = s;
+  let text = enc.part(s);
+  if ($("lower").checked) text = text.toLowerCase();
+  const ecc = +$("ecc").value;
+  let v = qrVersion;
+  if (qrDataBits(text, v) > qrCapacityBits(v, ecc)) v = qrSmallestVersion(text, ecc);
+  const q = qrEncode(text, v, ecc);
+  const px = Math.max(1, Math.min(20, +$("px").value || 5));
+  const quiet = 4, dim = (q.size + 2 * quiet) * px;
+  const cv = $("qr");
+  cv.width = dim; cv.height = dim;
+  const g = cv.getContext("2d");
+  g.fillStyle = "#fff"; g.fillRect(0, 0, dim, dim);
+  g.fillStyle = "#000";
+  for (let y = 0; y < q.size; y++) for (let x = 0; x < q.size; x++) {
+    if (q.modules[y][x]) g.fillRect((x + quiet) * px, (y + quiet) * px, px, px);
+  }
+  let st;
+  if (enc.seqLen === 1) st = "Single part";
+  else {
+    const info = enc.partInfo(s);
+    st = "Part " + s + " of " + enc.seqLen + (s <= enc.seqLen ? " (pure)" :
+         " (mixed, degree " + info.idx.length + ": " + info.idx.map(i => i + 1).sort((a, b) => a - b).join(", ") + ")");
+  }
+  $("status").textContent = st + " | " + text.length + " chars | QR v" + v + " mask " + q.mask;
+  $("frame").textContent = text;
+}
+
+function advance() {
+  if (enc.seqLen === 1) return;
+  const drop = Math.max(0, Math.min(90, +$("drop_pct").value || 0));
+  let s = seq + 1;
+  while (drop && Math.random() * 100 < drop) s++;   // Simulated missed frames
+  history.push(seq);
+  show(s);
+}
+
+function play() {
+  if (timer) { stop(); return; }
+  $("play").textContent = "Pause";
+  const ms = Math.max(30, Math.min(5000, +$("ms").value || 250));
+  timer = setInterval(advance, ms);
+}
+function stop() {
+  if (timer) clearInterval(timer);
+  timer = null;
+  $("play").textContent = "Play";
+}
+function restart() { history = []; show(firstSeq()); }
+
+function dump() {
+  const out = [];
+  const from = firstSeq(), n = enc.seqLen === 1 ? 1 : enc.seqLen + 20;
+  for (let s = from; s < from + n; s++) {
+    let t = enc.part(s);
+    if ($("lower").checked) t = t.toLowerCase();
+    out.push(t);
+  }
+  $("dumpout").style.display = "block";
+  $("dumpout").value = out.join("\n");
+}
+
+$("drop").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+$("drop").addEventListener("dragover", e => { e.preventDefault(); $("drop").classList.add("over"); });
+$("drop").addEventListener("dragleave", () => $("drop").classList.remove("over"));
+$("drop").addEventListener("drop", e => {
+  e.preventDefault();
+  $("drop").classList.remove("over");
+  if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+});
+$("load").addEventListener("click", loadText);
+document.querySelectorAll("[data-preset]").forEach(b => b.addEventListener("click", () => {
+  const p = PRESETS[b.dataset.preset];
+  setPsbt(b64decode(p.b64), p.name);
+}));
+for (const id of ["frag", "ecc", "lower"]) $(id).addEventListener("change", () => rebuild(false));
+for (const id of ["start", "mixedonly"]) $(id).addEventListener("change", () => { if (enc) restart(); });
+$("px").addEventListener("change", () => show(seq));
+$("ms").addEventListener("change", () => { if (timer) { stop(); play(); } });
+$("play").addEventListener("click", play);
+$("next").addEventListener("click", () => { stop(); advance(); });
+$("prev").addEventListener("click", () => { stop(); if (history.length) show(history.pop()); });
+$("restart").addEventListener("click", () => { stop(); restart(); });
+$("dump").addEventListener("click", dump);
+</script>
+</body>
+</html>
