@@ -7,7 +7,10 @@
 #include "descriptor.h"
 #include "psbt_sign.h"
 #include "descriptor_vectors.h"
+#include "ms_nested_vectors.h"
 #include "ur_encode.h"
+#include "sha256.h"
+#include "crypto/ripemd160.h"
 
 static int failures = 0;
 
@@ -150,8 +153,64 @@ static void check_repeated_key_array(void) {
     CHECK(intact, "nothing written past the wallet");
 }
 
+// Nested multisig (sh(wsh()), m/48h/0h/0h/1h) from gen_ms_nested.py: the
+// descriptor, the Coldcard file with Ypub keys and the UR CBOR give the same
+// wallet, flagged nested, whose change script and P2SH output match Python's
+static void check_nested_wallet(const desc_wallet_t *w, const char *name) {
+    char what[64];
+    uint8_t script[3 + 34 * DESC_MAX_KEYS], sha[32], redeem[34], hash[20];
+    SHA256_CTX ctx;
+
+    snprintf(what, sizeof(what), "%s: nested 2 of 3 sortedmulti", name);
+    CHECK(w->nested && w->sorted && w->threshold == 2 && w->key_count == 3, what);
+    for (int i = 0; i < 3 && i < w->key_count; i++) {
+        snprintf(what, sizeof(what), "%s key %d", name, i);
+        CHECK(memcmp(w->keys[i].fingerprint, msn_fp[i], 4) == 0 && memcmp(w->keys[i].chain_code, msn_chain[i], 32) == 0 &&
+              memcmp(w->keys[i].public_key, msn_pub[i], 33) == 0 && w->keys[i].origin_len == 4 &&
+              w->keys[i].origin[3] == (1 | 0x80000000u), what);
+    }
+    uint32_t len = wallet_script(w, MSN_CHANGE, MSN_INDEX, script);
+    snprintf(what, sizeof(what), "%s change script", name);
+    CHECK(len == sizeof(msn_change_ws) && memcmp(script, msn_change_ws, len) == 0, what);
+    // P2SH of OP_0 <sha256(ws)>, as ms_script_matches() in main.c builds it
+    sha256_init(&ctx);
+    sha256_update(&ctx, script, len);
+    sha256_final(&ctx, &redeem[2]);
+    redeem[0] = 0x00;
+    redeem[1] = 0x20;
+    sha256_init(&ctx);
+    sha256_update(&ctx, redeem, sizeof(redeem));
+    sha256_final(&ctx, sha);
+    ripemd160(sha, 32, hash);
+    snprintf(what, sizeof(what), "%s change P2SH output", name);
+    CHECK(memcmp(hash, &msn_change_spk[2], 20) == 0, what);
+}
+
+static void test_nested_multisig(void) {
+    desc_wallet_t w, w2;
+    uint8_t blob[DESC_PACK_MAX];
+
+    CHECK(desc_parse(msn_desc_text, (uint32_t)strlen(msn_desc_text), &w) == DESC_OK, "nested descriptor parses");
+    CHECK(w.has_checksum, "nested descriptor checksum");
+    check_nested_wallet(&w, "nested descriptor");
+    uint32_t n = desc_pack(&w, blob);
+    CHECK(desc_unpack(blob, n, &w2) && w2.nested, "nested flag kept in the vault copy");
+    check_nested_wallet(&w2, "nested unpacked");
+
+    CHECK(desc_parse(msn_cold_text, (uint32_t)strlen(msn_cold_text), &w) == DESC_OK, "nested coldcard file parses");
+    check_nested_wallet(&w, "nested coldcard (Ypub)");
+
+    CHECK(desc_parse_cbor(msn_output_cbor, sizeof(msn_output_cbor), &w) == DESC_OK, "nested crypto-output parses");
+    check_nested_wallet(&w, "nested crypto-output");
+
+    // The native descriptor of gen_descriptor.py is not nested
+    CHECK(desc_parse(desc_text, (uint32_t)strlen(desc_text), &w) == DESC_OK && !w.nested, "native is not nested");
+    printf("nested multisig: descriptor, Coldcard and CBOR agree\n");
+}
+
 int main(void) {
     check_repeated_key_array();
+    test_nested_multisig();
     desc_wallet_t w;
     uint8_t script[3 + 34 * DESC_MAX_KEYS];
     static const int abc[3] = {0, 1, 2}, cab[3] = {2, 0, 1};
@@ -228,7 +287,7 @@ int main(void) {
         CHECK(!desc_unpack(blob, n, &w2), "threshold 0 refused");
         blob[1] = 4;
         CHECK(!desc_unpack(blob, n, &w2), "threshold above keys refused");
-        blob[1] = 2; blob[3] = 4;
+        blob[1] = 2; blob[3] = 8;
         CHECK(!desc_unpack(blob, n, &w2), "unknown flag refused");
         blob[3] = 3; blob[DESC_PACK_HEADER + 4 + 1 + 16 + 32] = 0x04;
         CHECK(!desc_unpack(blob, n, &w2), "uncompressed key refused");

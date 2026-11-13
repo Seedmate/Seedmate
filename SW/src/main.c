@@ -279,8 +279,8 @@ uint32_t bip84_account_parent_fingerprint = 0;
 static bool bip84_multisig_mode = false;
 
 // Script type of the wallet, chosen in CONFIG for the session. NATIVE SEGWIT
-// and single sig NESTED SEGWIT work; the others show where they will go and
-// say "NOT AVAILABLE YET".
+// and NESTED SEGWIT work, single and multi sig; the others show where they
+// will go and say "NOT AVAILABLE YET".
 #define SCRIPT_LEGACY   0       // m/44', 1... addresses
 #define SCRIPT_NESTED   1       // m/49', 3... (multisig P2SH-P2WSH, m/48'/0'/n'/1')
 #define SCRIPT_NATIVE   2       // m/84', bc1q... (multisig P2WSH, m/48'/0'/n'/2')
@@ -291,7 +291,7 @@ static const char *const script_key[4] = {"LEG", "NEST", "NATV", "TAPR"};      /
 static const char *const script_prefix[4] = {"1...", "3...", "BC1Q...", "BC1P..."};
 
 static bool script_ready(void) {
-    return bip84_script == SCRIPT_NATIVE || (bip84_script == SCRIPT_NESTED && !bip84_multisig_mode);
+    return bip84_script == SCRIPT_NATIVE || bip84_script == SCRIPT_NESTED;
 }
 
 // Single sig account: m/49' (P2SH-P2WPKH, 3...) for NESTED SEGWIT, otherwise
@@ -302,6 +302,12 @@ static bool single_nested(void) {
 
 static uint32_t single_purpose(void) {
     return single_nested() ? 49 : 84;
+}
+
+// BIP48 script type of the multisig account: 1' P2SH-P2WSH for NESTED
+// SEGWIT, otherwise 2' P2WSH
+static uint32_t ms_script_index(void) {
+    return single_nested() ? 1 : 2;
 }
 
 // Hash160 (RIPEMD160 of SHA256) of 'data'
@@ -318,6 +324,26 @@ static void hash160_of(const uint8_t *data, uint32_t len, uint8_t out[20]) {
 // The 20 bytes a single sig output pays to for compressed key 'pub': the key
 // hash of P2WPKH, or for nested the script hash of its redeem script
 // OP_0 <20 byte key hash>
+static void single_script_hash(const uint8_t pub[33], bool nested, uint8_t out[20]);
+
+// True if 'script' pays to witness script 'ws': P2WSH, or for nested the P2SH
+// of OP_0 <sha256(ws)>
+static bool ms_script_matches(const uint8_t *script, uint32_t script_len,
+                              const uint8_t *ws, uint32_t ws_len, bool nested) {
+    if (!nested) return psbt_p2wsh_matches(script, script_len, ws, ws_len);
+    uint8_t redeem[34];
+    uint8_t hash[20];
+    SHA256_CTX ctx;
+    if (script_len != 23 || script[0] != 0xA9 || script[1] != 0x14 || script[22] != 0x87) return false;
+    redeem[0] = 0x00;
+    redeem[1] = 0x20;
+    sha256_init(&ctx);
+    sha256_update(&ctx, ws, ws_len);
+    sha256_final(&ctx, &redeem[2]);
+    hash160_of(redeem, sizeof(redeem), hash);
+    return memcmp(hash, &script[2], 20) == 0;
+}
+
 static void single_script_hash(const uint8_t pub[33], bool nested, uint8_t out[20]) {
     uint8_t redeem[22];
     hash160_of(pub, 33, &redeem[2]);
@@ -342,6 +368,7 @@ static uint32_t bip84_account_index = 0;
 static HDNode bip84_coin_node;          // m/84'/0', or m/49'/0' for nested
 static uint32_t bip84_coin_purpose;     // 84 or 49: the purpose bip84_coin_node is for
 static HDNode ms_coin_node;             // m/48'/0'
+static uint32_t ms_coin_script;         // 1 or 2: the BIP48 script type ms_account_node is for
 
 // Multisig wallet (cosigner xpubs) from IMPORT DESCRIPTOR, for this session
 // only: it applies only to the seed and account it was checked against
@@ -1983,14 +2010,16 @@ static bool derive_root_pbkdf2(HDNode *root, bool cancellable) {
     return ok;
 }
 
-// m/48'/0'/account'/2' (BIP48 P2WSH multisig) from the cached m/48'/0',
-// and its receive/change branches. Two public keys.
+// m/48'/0'/account'/2' (BIP48 P2WSH multisig), or /1' (P2SH-P2WSH) for
+// nested, from the cached m/48'/0', and its receive/change branches. Two
+// public keys.
 static void derive_multisig_from_coin(void) {
+    ms_coin_script = ms_script_index();
     ms_account_node = ms_coin_node;
     hdnode_private_ckd(&ms_account_node, bip84_account_index | 0x80000000);
     ms_account_parent_fingerprint = hdnode_fingerprint(&ms_account_node);
     key_progress_step();
-    hdnode_private_ckd(&ms_account_node, 2 | 0x80000000);
+    hdnode_private_ckd(&ms_account_node, ms_coin_script | 0x80000000);
     hdnode_fill_public_key(&ms_account_node);
     key_progress_step();
 
@@ -2146,7 +2175,7 @@ static bool precompute_multisig_account(void) {
     strcpy(text, "m/48'/0'/");
     fast_itoa(bip84_account_index, num);
     strcat(text, num);
-    strcat(text, "'/2'");
+    strcat(text, single_nested() ? "'/1'" : "'/2'");
     drawtext(5, 35, text, ST7735_CYAN, ST7735_BLACK, 1);
     grid_back_only();
 
@@ -2174,10 +2203,12 @@ static void account_key_text(bool zpub, char *out) {
     strcat(out, bip84_multisig_mode ? "/48h/0h/" : single_nested() ? "/49h/0h/" : "/84h/0h/");
     fast_itoa(bip84_account_index, num);
     strcat(out, num);
-    strcat(out, bip84_multisig_mode ? "h/2h]" : "h]");
+    strcat(out, bip84_multisig_mode ? (single_nested() ? "h/1h]" : "h/2h]") : "h]");
     if (bip84_multisig_mode) {
+        // Ypub (P2SH-P2WSH) or Zpub (P2WSH), as Coldcard writes them
         hdnode_serialize_public(&ms_account_node, ms_account_parent_fingerprint,
-                                zpub ? 0x02AA7ED3 : 0x0488B21E, &out[strlen(out)], 115);
+                                zpub ? (single_nested() ? 0x0295B43F : 0x02AA7ED3) : 0x0488B21E,
+                                &out[strlen(out)], 115);
     } else {
         strcat(out, zpub ? bip84_cached_zpub : bip84_cached_xpub);
     }
@@ -2212,6 +2243,15 @@ static bool single_purpose_refresh(void) {
     memzero(&root, sizeof(root));
     while (BT1 == 0) SYS_Tasks();       // Do not let BACK reach the state machine
     return ok;
+}
+
+// The multisig account follows the script type too: from the cached m/48'/0'
+static void ms_script_refresh(void) {
+    if (!ms_account_cached || ms_coin_script == ms_script_index()) return;
+    black_screen();
+    draw_title("LOADING MULTISIG", ST7735_LIGHTGREY);
+    key_progress_phase("PUBLIC KEYS", 2);
+    derive_multisig_from_coin();
 }
 
 // Applies a new account index: one hardened step from the cached coin nodes
@@ -2252,7 +2292,7 @@ static void show_account_qr(void) {
     path[0] = (bip84_multisig_mode ? 48 : single_purpose()) | 0x80000000;
     path[1] = 0x80000000;
     path[2] = bip84_account_index | 0x80000000;
-    path[3] = 2 | 0x80000000;
+    path[3] = ms_script_index() | 0x80000000;
     key.master_fingerprint = bip84_master_fingerprint;
     key.parent_fingerprint = bip84_multisig_mode ? ms_account_parent_fingerprint : bip84_account_parent_fingerprint;
     key.public_key = node->public_key;
@@ -2260,7 +2300,7 @@ static void show_account_qr(void) {
     key.path = path;
     key.path_len = bip84_multisig_mode ? 4 : 3;
     key.multisig = bip84_multisig_mode;
-    key.nested = !bip84_multisig_mode && single_nested();
+    key.nested = single_nested();
 
     white_screen();
     if (!xpub_qr_ur) {
@@ -2488,7 +2528,7 @@ static void print_bip84_info_screen(void)
         // Origin + key from the cached account (no derivation here)
         account_key_text(bip84_extended_key_page != 0, ms_key);
         if (bip84_multisig_mode) {
-            title = (bip84_extended_key_page == 0) ? "MULTISIG XPUB" : "MULTISIG ZPUB";
+            title = (bip84_extended_key_page == 0) ? "MULTISIG XPUB" : single_nested() ? "MULTISIG YPUB" : "MULTISIG ZPUB";
         } else {
             title = (bip84_extended_key_page == 0) ? "XPUB" : single_nested() ? "YPUB" : "ZPUB";
         }
@@ -2500,7 +2540,7 @@ static void print_bip84_info_screen(void)
         grid_pager("QR");                   // UP / DOWN: address index
     } else {                                // XPUB: LEFT / RIGHT the other format
         grid_labels("BACK", NULL, "QR", bip84_extended_key_page ? "XPUB" : NULL, NULL,
-                    bip84_extended_key_page ? NULL : (!bip84_multisig_mode && single_nested()) ? "YPUB" : "ZPUB");
+                    bip84_extended_key_page ? NULL : single_nested() ? "YPUB" : "ZPUB");
     }
     estado = SHOW_BIP84_INFO;
 }
@@ -4561,7 +4601,8 @@ static bool psbt_bip84_path(const psbt_keypath_t *kp, uint32_t *account) {
            psbt_path_element(kp, 4) < PSBT_HARDENED;
 }
 
-// m/48'/0'/account'/2'/chain/index with chain 0 or 1 (BIP48 P2WSH multisig)
+// m/48'/0'/account'/2'/chain/index (BIP48 P2WSH multisig) or /1'/ (P2SH-P2WSH)
+// with chain 0 or 1
 static bool psbt_multisig_path(const psbt_keypath_t *kp, uint32_t *account) {
     *account = 0;
     if (kp->path == NULL || kp->path_len != 6) return false;
@@ -4570,14 +4611,16 @@ static bool psbt_multisig_path(const psbt_keypath_t *kp, uint32_t *account) {
            psbt_path_element(kp, 0) == (48 | PSBT_HARDENED) &&
            psbt_path_element(kp, 1) == PSBT_HARDENED &&
            (psbt_path_element(kp, 2) & PSBT_HARDENED) &&
-           psbt_path_element(kp, 3) == (2 | PSBT_HARDENED) &&
+           (psbt_path_element(kp, 3) == (2 | PSBT_HARDENED) || psbt_path_element(kp, 3) == (1 | PSBT_HARDENED)) &&
            psbt_path_element(kp, 4) <= 1 &&
            psbt_path_element(kp, 5) < PSBT_HARDENED;
 }
 
-// A single sig path of the other script type (m/49' while native, m/84' while nested)
+// A path of the other script type: single sig m/49' while native or m/84'
+// while nested, multisig .../1'/ while native or .../2'/ while nested
 static bool psbt_other_single_script(const psbt_keypath_t *kp) {
     uint32_t account;
+    if (psbt_multisig_path(kp, &account)) return psbt_path_element(kp, 3) != (ms_script_index() | PSBT_HARDENED);
     return psbt_bip84_path(kp, &account) && psbt_path_element(kp, 0) != (single_purpose() | PSBT_HARDENED);
 }
 
@@ -4612,16 +4655,16 @@ static bool psbt_bip84_key_matches(const psbt_keypath_t *kp, const uint8_t *scri
 
 static bool psbt_is_multisig_path(const psbt_keypath_t *kp) {
     uint32_t account;
-    return psbt_multisig_path(kp, &account) && account == bip84_account_index;
+    return psbt_multisig_path(kp, &account) && account == bip84_account_index && !psbt_other_single_script(kp);
 }
 
 // Derives the path's key from the cached multisig account and checks that it
 // is the PSBT key, that it is one of the witness script keys, and that the
-// script being spent is the P2WSH of that witness script
+// script being spent is the P2WSH (P2SH-P2WSH for nested) of that witness script
 static bool psbt_multisig_key_matches(const psbt_keypath_t *kp, const uint8_t *script, uint32_t script_len,
                                       const uint8_t *witness_script, uint32_t witness_len) {
-    if (kp->key_len != 33 ||
-        !psbt_p2wsh_matches(script, script_len, witness_script, witness_len) ||
+    if (kp->key_len != 33 || witness_script == NULL ||
+        !ms_script_matches(script, script_len, witness_script, witness_len, single_nested()) ||
         !psbt_multisig_has_key(witness_script, witness_len, kp->key)) {
         return false;
     }
@@ -4641,9 +4684,10 @@ static uint32_t desc_key_fingerprint(const desc_key_t *k) {
            (uint32_t)k->fingerprint[2] << 8 | k->fingerprint[3];
 }
 
-// The loaded multisig wallet applies to the seed and account on screen
+// The loaded multisig wallet applies to the seed, account and script type on screen
 static bool ms_wallet_active(void) {
     return ms_wallet_loaded && ms_account_cached && ms_wallet_account == bip84_account_index &&
+           ms_wallet.nested == single_nested() &&
            memcmp(ms_wallet_seed_tag, bip84_seed_tag, sizeof(ms_wallet_seed_tag)) == 0;
 }
 
@@ -4665,7 +4709,7 @@ static uint32_t ms_wallet_script(const desc_wallet_t *w, uint32_t change, uint32
 static bool ms_wallet_matches(const psbt_keypath_t *kp, const uint8_t *script, uint32_t script_len) {
     uint8_t ws[3 + 34 * DESC_MAX_KEYS];
     uint32_t len = ms_wallet_script(&ms_wallet, psbt_path_element(kp, 4), psbt_path_element(kp, 5), ws);
-    return len > 0 && psbt_p2wsh_matches(script, script_len, ws, len);
+    return len > 0 && ms_script_matches(script, script_len, ws, len, ms_wallet.nested);
 }
 
 // Classifies an input (is_input) or output and returns in 'shown' the
@@ -4777,7 +4821,7 @@ static uint16_t psbt_owner_text(psbt_owner_t owner, const psbt_keypath_t *kp, bo
             uint32_t account;
             bool single = psbt_bip84_path(kp, &account);
             bool multi = !single && psbt_multisig_path(kp, &account);
-            if (single && psbt_other_single_script(kp)) {
+            if ((single || multi) && psbt_other_single_script(kp)) {
                 strcpy(text, "MY FP, OTHER SCRIPT TYPE");
             } else if ((single || multi) && account != bip84_account_index) {
                 strcpy(text, "MY FP, OTHER ACCOUNT");
@@ -5538,12 +5582,13 @@ static uint32_t psbt_sd_load(const char *name, uint32_t file_size, uint8_t *buf,
     return len;
 }
 
-// One row of the SD file list: name and size, orange when selected
-static void sd_pick_row(uint32_t index, uint32_t first, bool selected,
+// One row of the SD file list (position 'index', directory entry 'entry'):
+// name and size, orange when selected. False if the card cannot be read.
+static bool sd_pick_row(uint32_t index, uint32_t entry, uint32_t first, bool selected,
                         const char *const *exts, uint32_t ext_count, char *name, uint32_t *size) {
     char line[32];
     char num[12];
-    if (!sd_files_find(index, exts, ext_count, name, size)) return;
+    if (!sd_files_find(entry, exts, ext_count, name, size)) return false;
     fast_itoa(*size, num);
     size_t room = 25 - 1 - strlen(num) - 1;         // Name, space, size, "B" in 25 characters
     size_t n = strlen(name);
@@ -5557,16 +5602,20 @@ static void sd_pick_row(uint32_t index, uint32_t first, bool selected,
     strcat(line, num);
     strcat(line, "B");
     drawtext(5, 17 + (int)(index - first) * 10, line, selected ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+    return true;
 }
 
-// Lists the files of the SD root with one of 'exts', with their sizes.
-// UP/DOWN move, OK picks the file (name, size and *sel set, true), BACK
-// returns false. No card or no file is explained on screen.
+// Lists the files of the SD root with one of 'exts', with their sizes, in
+// alphabetical order (case ignored). UP/DOWN move, OK picks the file (name,
+// size and *sel set, true), BACK returns false. No card, no file and a card
+// taken out while the list is shown are explained on screen.
 static bool sd_pick_file(const char *title, const char *none_title, const char *none_detail,
                          const char *const *exts, uint32_t ext_count,
                          uint32_t *sel, char *name, uint32_t *size) {
     char line[32];
     char text[24];
+    char prev[SD_FILES_NAME_LEN];
+    uint8_t order[99];                      // Directory entry of each position, sorted by name
     uint32_t count = 0;
 
     black_screen();
@@ -5575,7 +5624,13 @@ static bool sd_pick_file(const char *title, const char *none_title, const char *
         psbt_sd_message("SD CARD ERROR", "NO CARD OR NOT FAT16/32");
         return false;
     }
-    while (count < 99 && sd_files_find(count, exts, ext_count, name, size)) count++;
+    // One pass per file: the next name after the previous one
+    while (count < sizeof(order)) {
+        int32_t entry = sd_files_next_sorted(count ? prev : NULL, exts, ext_count, name);
+        if (entry < 0 || entry >= (int32_t)sizeof(order)) break;
+        order[count++] = (uint8_t)entry;
+        memcpy(prev, name, SD_FILES_NAME_LEN);
+    }
     if (count == 0) {
         strcpy(line, none_title);
         strcpy(text, none_detail);
@@ -5594,26 +5649,31 @@ static bool sd_pick_file(const char *title, const char *none_title, const char *
     uint32_t shown_sel = *sel;
     while (1) {
         uint32_t first = *sel - *sel % PSBT_SD_LIST_ROWS;
+        bool ok = true;
         if (first != shown_first) {
             rectan(0, 17, 159, 14 + PSBT_SD_LIST_ROWS * 10, ST7735_BLACK);    // Rows only: the grid starts at y 105
-            for (uint32_t i = 0; i < PSBT_SD_LIST_ROWS && first + i < count; i++) {
-                sd_pick_row(first + i, first, first + i == *sel, exts, ext_count, name, size);
+            for (uint32_t i = 0; ok && i < PSBT_SD_LIST_ROWS && first + i < count; i++) {
+                ok = sd_pick_row(first + i, order[first + i], first, first + i == *sel, exts, ext_count, name, size);
             }
             shown_first = first;
         } else if (*sel != shown_sel) {
-            sd_pick_row(shown_sel, first, false, exts, ext_count, name, size);
-            sd_pick_row(*sel, first, true, exts, ext_count, name, size);
+            ok = sd_pick_row(shown_sel, order[shown_sel], first, false, exts, ext_count, name, size) &&
+                 sd_pick_row(*sel, order[*sel], first, true, exts, ext_count, name, size);
         }
         shown_sel = *sel;
 
-        int key = psbt_wait_key();
+        int key = ok ? psbt_wait_key() : NONE;
         if (key == BACK_BT) return false;
         if (key == UP_BT) {
             *sel = (*sel == 0) ? count - 1 : *sel - 1;
         } else if (key == DOWN_BT) {
             *sel = (*sel + 1) % count;
-        } else if (sd_files_find(*sel, exts, ext_count, name, size)) {
+        } else if (ok && sd_files_find(order[*sel], exts, ext_count, name, size)) {
             return true;
+        } else if (!ok || key == OK_BT) {
+            // The card no longer answers: taken out or changed
+            psbt_sd_message("SD CARD ERROR", "CARD REMOVED OR CHANGED");
+            return false;
         }
     }
 }
@@ -5668,7 +5728,18 @@ static bool desc_review(const desc_wallet_t *w, int mine, const char *ok_label) 
         sha256_init(&ctx);
         sha256_update(&ctx, ws, len);
         sha256_final(&ctx, prog);
-        addr_ok = segwit_addr_encode(addr, "bc", 0, prog, 32) == 1;
+        if (w->nested) {
+            // 3...: the P2SH of OP_0 <sha256(ws)>
+            uint8_t redeem[34], payload[21];
+            redeem[0] = 0x00;
+            redeem[1] = 0x20;
+            memcpy(&redeem[2], prog, 32);
+            payload[0] = 0x05;
+            hash160_of(redeem, sizeof(redeem), &payload[1]);
+            addr_ok = base58_encode_check(payload, sizeof(payload), addr, sizeof(addr)) > 0;
+        } else {
+            addr_ok = segwit_addr_encode(addr, "bc", 0, prog, 32) == 1;
+        }
     }
     rectan(0, 15, 159, 127, ST7735_BLACK);
 
@@ -5677,6 +5748,7 @@ static bool desc_review(const desc_wallet_t *w, int mine, const char *ok_label) 
     fast_itoa(w->key_count, num);
     strcat(line, num);
     strcat(line, w->sorted ? " SORTEDMULTI" : " MULTI");
+    if (w->nested) strcat(line, " SH");
     drawtext(5, 17, line, ST7735_WHITE, ST7735_BLACK, 1);
     drawtext(5, 27, w->has_checksum ? "CHECKSUM OK" : "NO CHECKSUM",
              w->has_checksum ? ST7735_GREEN : ST7735_YELLOW, ST7735_BLACK, 1);
@@ -5754,7 +5826,13 @@ static bool descriptor_check(const desc_wallet_t *w, const char *ok_label) {
     char text[24];
     char num[12];
 
-    // Our cosigner key: the xpub of m/48'/0'/account'/2' of this seed
+    // The script type of the descriptor must be the one chosen in CONFIG
+    if (w->nested != single_nested()) {
+        psbt_sd_message("DESCRIPTOR REFUSED", w->nested ? "SWITCH TO NESTED SEGWIT" : "SWITCH TO NATIVE SEGWIT");
+        return false;
+    }
+
+    // Our cosigner key: the xpub of m/48'/0'/account'/2' (1' nested) of this seed
     int mine = -1, mine_fp = -1;
     for (int i = 0; i < w->key_count; i++) {
         if (memcmp(w->keys[i].public_key, ms_account_node.public_key, 33) == 0 &&
@@ -5767,7 +5845,7 @@ static bool descriptor_check(const desc_wallet_t *w, const char *ok_label) {
     if (mine < 0) {
         const desc_key_t *k = (mine_fp >= 0) ? &w->keys[mine_fp] : NULL;
         if (k != NULL && k->origin_len == 4 && k->origin[0] == (48 | 0x80000000u) &&
-            k->origin[1] == 0x80000000u && k->origin[3] == (2 | 0x80000000u) &&
+            k->origin[1] == 0x80000000u && k->origin[3] == (ms_script_index() | 0x80000000u) &&
             (k->origin[2] & 0x7FFFFFFFu) != bip84_account_index) {
             strcpy(text, "SWITCH TO ACCOUNT ");
             fast_itoa(k->origin[2] & 0x7FFFFFFFu, num);
@@ -5867,7 +5945,7 @@ typedef struct {
     uint32_t already_signed;    // Our inputs that already carry a signature
     uint32_t foreign;           // Inputs of other keys (cosigners, other wallets)
     uint32_t other_mode;        // Ours, but for the other single/multi sig mode
-    uint32_t other_script;      // Ours, single sig of the other script type (native / nested)
+    uint32_t other_script;      // Ours, of the other script type (native / nested segwit)
     uint32_t other_account;     // Ours, but for another account index
     uint32_t other_account_index;
     char refuse_text[24];       // Built refusal reason (refuse points here)
@@ -6033,7 +6111,7 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
             plan->foreign++;                    // Our fingerprint on a path we do not sign
         } else if (multi_path != bip84_multisig_mode) {
             plan->other_mode++;
-        } else if (single_path && psbt_other_single_script(&kp)) {
+        } else if (psbt_other_single_script(&kp)) {
             plan->other_script++;
         } else if (account != bip84_account_index) {
             plan->other_account++;
@@ -7839,7 +7917,7 @@ static void config_draw(bool full, uint8_t row, uint32_t account, bool multi, ui
     drawtext(1, 64, text, ST7735_CYAN, ST7735_BLACK, 1);
     if (locked) {
         drawtext(1, 78, "SET BY THE DESCRIPTOR", ST7735_CYAN, ST7735_BLACK, 1);
-    } else if (script != SCRIPT_NATIVE && !(script == SCRIPT_NESTED && !multi)) {
+    } else if (script != SCRIPT_NATIVE && script != SCRIPT_NESTED) {
         drawtext(1, 78, "NOT AVAILABLE YET", ST7735_YELLOW, ST7735_BLACK, 1);
     }
 
@@ -7926,6 +8004,7 @@ static void config_run(void) {
         bip84_script = script;
         bip84_address_index = 0;
         if (!single_purpose_refresh()) bip84_script = old;      // Cancelled
+        ms_script_refresh();                                     // The multisig account of that type
     }
 }
 
@@ -8639,7 +8718,10 @@ static vault_status_t vault_load(void) {
     black_screen();
     draw_title(title, ST7735_LIGHTGREY);
     drawtext(5, 25, "READING THE SD CARD...", ST7735_CYAN, ST7735_BLACK, 1);
-    if (!SD_ready) SD_ready = sd_init();
+    // The card may have been changed since the last access (a PSBT card, then
+    // the seed card): start it again, so its type (SDSC / SDHC addressing) is
+    // the one in use. Once more if the first start fails.
+    SD_ready = sd_init() || sd_init();
     if (!SD_ready || !vault_io_read(cSD_MARKER_SECTOR, buffer)) return VAULT_ERR_READ;
     if (!vault_io_marker_valid(buffer)) return VAULT_ERR_NO_MARKER;
     r = vault_open(buffer, vault_bitmap);
@@ -10098,6 +10180,43 @@ static bool sd_slot_in_use(void) {
     return sum == buffer[cSD_CHECKSUM_ADDR];
 }
 
+// Stricter, for counting over any sector: also a known size and every other
+// byte zero, as this firmware and the first one write a seed. A sector of
+// files passes the one byte checksum alone once in 256.
+static bool sd_sector_is_seed(void) {
+    if (!sd_slot_in_use() || buffer[cSD_SIZE_ADDR] >= cSIZE_n_opt) return false;
+    for (int i = 16 + 16 * buffer[cSD_SIZE_ADDR]; i < 512; i++) {
+        if (i != cSD_CHECKSUM_ADDR && i != cSD_SIZE_ADDR && i != cSD_XOR_ADDR && buffer[i] != 0) return false;
+    }
+    return true;
+}
+
+// Seeds in the first 1 MB (sectors 0..2046, where every seed slot lives),
+// counted with the progress on screen under 'title', so INITIALIZE CARD and
+// WIPE ALL CARD can say what they erase (a card of the first Seedmate is not
+// erased by surprise). -1 if the card cannot be read.
+static int sd_count_seeds(const char *title) {
+    char label[24];
+    const uint32_t total = cSD_MARKER_SECTOR;
+    int count = 0;
+
+    psbt_progress_begin(title);
+    for (uint32_t sector = 0; sector < total; sector++) {
+        if ((sector % 64) == 0) {
+            psbt_count_label("SECTOR ", sector, total, label);
+            psbt_progress_step(label, NULL, "LOOKING FOR SEEDS", sector, total);
+        }
+        if (!sd_read_block(sector, buffer) && !(sd_init() && sd_read_block(sector, buffer))) {
+            memzero(buffer, sizeof(buffer));
+            return -1;
+        }
+        if (sd_sector_is_seed()) count++;
+    }
+    psbt_progress_step(NULL, NULL, "DONE", total, total);
+    memzero(buffer, sizeof(buffer));
+    return count;
+}
+
 // Writes the seed on screen to a sector and shows the result beside its slot (list row).
 // The entropy is XORed with a timer byte: obfuscation, not encryption.
 static void sd_write_seed(uint32_t sector, int row) {
@@ -11297,13 +11416,27 @@ int SSS_N = 9;
                                     print_blocked("CARD TOO SMALL", "IT NEEDS AT LEAST 1 MB", "");
                                     estado = END_MODE;
                                 } else {
-                                    print_sd_init_warning();
-                                    estado = CONFIRM_INIT_SD;
+                                    int seeds = sd_count_seeds(menu_erase[cERASE_INIT]);    // Said on the warning
+                                    if (seeds < 0) {
+                                        print_blocked("SD READ ERROR", "CHECK THE SD CARD", "AND TRY AGAIN");
+                                        estado = END_MODE;
+                                    } else {
+                                        print_sd_init_warning((uint32_t)seeds);
+                                        estado = CONFIRM_INIT_SD;
+                                    }
                                 }
                             } else {
                                 wipe_mb_total = wipe_total_sectors / 2048;
-                                print_sd_wipe_warning(wipe_mb_total);
-                                estado = CONFIRM_WIPE_SD;
+                                // Seeds in the first 1 MB (a card under 1 MB has no room for slots to count)
+                                int seeds = (wipe_total_sectors > cSD_MARKER_SECTOR) ?
+                                            sd_count_seeds(menu_erase[cERASE_WIPE]) : 0;
+                                if (seeds < 0) {
+                                    print_blocked("SD READ ERROR", "CHECK THE SD CARD", "AND TRY AGAIN");
+                                    estado = END_MODE;
+                                } else {
+                                    print_sd_wipe_warning(wipe_mb_total, (uint32_t)seeds);
+                                    estado = CONFIRM_WIPE_SD;
+                                }
                             }
                         }
                         break;

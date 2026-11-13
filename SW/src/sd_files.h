@@ -43,6 +43,16 @@ void sd_files_unmount(void);
 bool sd_files_find(uint32_t n, const char *const *exts, uint32_t ext_count,
                    char *name, uint32_t *size);
 
+// Alphabetical order (case ignored): the n of sd_files_find() of the first
+// such file whose name comes after 'after' (NULL: the first of all), its
+// name in 'name' (not the same buffer as 'after'). -1 if there is none or
+// the card cannot be read. One pass over the directory per call.
+int32_t sd_files_next_sorted(const char *after, const char *const *exts, uint32_t ext_count, char *name);
+
+// Directory entries read at most per pass: a card taken out can return
+// garbage, and a garbage cluster chain could make a directory endless
+#define SD_FILES_MAX_ENTRIES 4096u
+
 // Opens a file by name for reading.
 bool sd_files_open(const char *name);
 

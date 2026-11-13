@@ -63,6 +63,7 @@ static uint8_t bip84_script = SCRIPT_NATIVE;    // m/84' keys below (setup_walle
 static HDNode bip84_receive_node_cache, bip84_change_node_cache;
 static HDNode native_receive, native_change, nested_receive, nested_change;    // m/84' and m/49'
 static HDNode ms_receive_node_cache, ms_change_node_cache;
+static HDNode ms2_receive, ms2_change, ms1_receive, ms1_change;     // m/48'/0'/0'/2' and /1'
 static bool ms_account_cached = true;
 static bool ms_wallet_loaded = false;
 static desc_wallet_t ms_wallet;
@@ -119,11 +120,17 @@ static void setup_wallet(void) {
     hdnode_private_ckd(&n, 48 | H);
     hdnode_private_ckd(&n, 0 | H);
     hdnode_private_ckd(&n, 0 | H);
+    HDNode n1 = n;                              // m/48'/0'/0'/1' for nested multisig
     hdnode_private_ckd(&n, 2 | H);
-    ms_receive_node_cache = n;
-    hdnode_private_ckd(&ms_receive_node_cache, 0);
-    ms_change_node_cache = n;
-    hdnode_private_ckd(&ms_change_node_cache, 1);
+    ms2_receive = n;
+    hdnode_private_ckd(&ms2_receive, 0);
+    ms2_change = n;
+    hdnode_private_ckd(&ms2_change, 1);
+    hdnode_private_ckd(&n1, 1 | H);
+    ms1_receive = n1;
+    hdnode_private_ckd(&ms1_receive, 0);
+    ms1_change = n1;
+    hdnode_private_ckd(&ms1_change, 1);
 
     if (desc_parse(MS_DESCRIPTOR, (uint32_t)strlen(MS_DESCRIPTOR), &ms_wallet) != DESC_OK) {
         printf("cannot parse the corpus descriptor\n");
@@ -132,8 +139,10 @@ static void setup_wallet(void) {
 }
 
 // --- One run ---------------------------------------------------------------------
-enum { MODE_SINGLE, MODE_MULTI, MODE_MULTI_DESC, MODE_NESTED, MODE_COUNT };
-static const char *mode_name[MODE_COUNT] = {"single", "multi", "multi+desc", "nested"};
+enum { MODE_SINGLE, MODE_MULTI, MODE_MULTI_DESC, MODE_NESTED, MODE_NMULTI, MODE_NMULTI_DESC, MODE_COUNT };
+static const char *mode_name[MODE_COUNT] = {"single", "multi", "multi+desc", "nested", "nmulti", "nmulti+desc"};
+
+static bool mode_desc(int mode) { return mode == MODE_MULTI_DESC || mode == MODE_NMULTI_DESC; }
 
 typedef struct {
     char text[160];     // The outcome, as compared with malicious_expected.txt
@@ -148,11 +157,14 @@ static void run(const uint8_t *data, uint32_t len, int mode, outcome_t *r) {
     psbt_sign_plan_t plan;
 
     memcpy(buf, data, len);
-    bip84_multisig_mode = mode == MODE_MULTI || mode == MODE_MULTI_DESC;
-    bip84_script = (mode == MODE_NESTED) ? SCRIPT_NESTED : SCRIPT_NATIVE;     // Single sig nested segwit
-    bip84_receive_node_cache = (mode == MODE_NESTED) ? nested_receive : native_receive;
-    bip84_change_node_cache = (mode == MODE_NESTED) ? nested_change : native_change;
-    ms_wallet_loaded = mode == MODE_MULTI_DESC;
+    bool nested = mode == MODE_NESTED || mode == MODE_NMULTI || mode == MODE_NMULTI_DESC;
+    bip84_multisig_mode = mode == MODE_MULTI || mode == MODE_MULTI_DESC || mode == MODE_NMULTI || mode == MODE_NMULTI_DESC;
+    bip84_script = nested ? SCRIPT_NESTED : SCRIPT_NATIVE;    // Nested segwit, single and multi sig
+    bip84_receive_node_cache = nested ? nested_receive : native_receive;
+    bip84_change_node_cache = nested ? nested_change : native_change;
+    ms_receive_node_cache = nested ? ms1_receive : ms2_receive;
+    ms_change_node_cache = nested ? ms1_change : ms2_change;
+    ms_wallet_loaded = mode_desc(mode);
 
     r->ours = 0;
     r->refused = true;
@@ -265,7 +277,7 @@ static int run_corpus(const char *gaps) {
             check_line(line);
             if (!r.refused) any_signs = true;
             // A loaded descriptor can prove change the PSBT alone cannot
-            if (mode != MODE_MULTI_DESC && r.ours > max_ours) max_ours = r.ours;
+            if (!mode_desc(mode) && r.ours > max_ours) max_ours = r.ours;
         }
 
         // The corpus' truth. "ours" must never exceed what is really ours.
@@ -336,17 +348,23 @@ int main(int argc, char **argv) {
     bool report = argc > 1 && strcmp(argv[1], "--report") == 0;
 
     setup_wallet();
-    // test_malicious --file x.psbt: the outcome of one file in every mode
+    // test_malicious --file x.psbt [descriptor.txt]: the outcome of one file in
+    // every mode, the "+desc" modes with that descriptor instead of the corpus one
     if (argc > 2 && strcmp(argv[1], "--file") == 0) {
+        static uint8_t data[32768];
+        if (argc > 3) {
+            uint32_t n = read_file(argv[3]);
+            memcpy(data, file_buf, n);
+            if (desc_parse((const char *)data, n, &ms_wallet) != DESC_OK) { printf("bad descriptor %s\n", argv[3]); return 1; }
+        }
         FILE *f = fopen(argv[2], "rb");
         if (!f) { printf("cannot open %s\n", argv[2]); return 1; }
-        static uint8_t data[32768];
         uint32_t len = (uint32_t)fread(data, 1, sizeof(data), f);
         fclose(f);
         for (int m = 0; m < MODE_COUNT; m++) {
             outcome_t r;
             run(data, len, m, &r);
-            printf("%-10s %s\n", mode_name[m], r.text);
+            printf("%-12s %s\n", mode_name[m], r.text);
         }
         return 0;
     }

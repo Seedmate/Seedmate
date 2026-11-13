@@ -110,7 +110,7 @@ def bad(text):
 neg = [
     (desc_sorted[:-1] + ('q' if desc_sorted[-1] != 'q' else 'p'), 'DESC_ERR_CHECKSUM'),
     (descriptor(keys=[key_expr(co, co.tpub) for co in cosigners]), 'DESC_ERR_NETWORK'),
-    (descsum_create('sh(wsh(sortedmulti(2,%s)))' % ','.join(key_expr(co) for co in cosigners)), 'DESC_ERR_SCRIPT'),
+    (descsum_create('sh(sortedmulti(2,%s))' % ','.join(key_expr(co) for co in cosigners)), 'DESC_ERR_SCRIPT'),   # Legacy P2SH
     (descsum_create('wpkh(%s)' % key_expr(A)), 'DESC_ERR_SCRIPT'),
     (descriptor(m=4), 'DESC_ERR_THRESHOLD'),
     (descriptor(m=0), 'DESC_ERR_THRESHOLD'),

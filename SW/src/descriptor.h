@@ -21,7 +21,9 @@
  *     Children paths are not stored: branches 0 and 1 are assumed, and a
  *     wallet that used others would simply never match a PSBT.
  *
- *   Only mainnet P2WSH is accepted: the signer only signs P2WSH inputs.
+ *   Only mainnet P2WSH and P2SH-P2WSH (sh(wsh()), Coldcard "Format:
+ *   P2SH-P2WSH", Ypub keys; 'nested' is set) are accepted: the multisig
+ *   types the signer signs.
  *   No elliptic curve code here: keys are stored as given and derived by
  *   the caller (psbt_public_ckd() in psbt_sign.c). Host tests in
  *   ../test/psbt/test_descriptor.c.
@@ -31,6 +33,7 @@
 
 // Accepted texts:
 //   wsh(sortedmulti(2,[b0b0b0b0/48h/0h/0h/2h]xpub.../<0;1>/*,...))#checksum
+//   sh(wsh(sortedmulti(2,[b0b0b0b0/48h/0h/0h/1h]xpub.../<0;1>/*,...)))#checksum
 //   keys ending in /<0;1>/*, /0/* or /1/*
 //
 //   Policy: 2 of 3
@@ -60,13 +63,14 @@ typedef struct {
     uint8_t key_count;          // n
     bool sorted;                // sortedmulti (BIP67 key order) instead of multi
     bool has_checksum;          // A descriptor checksum was present (and matched)
+    bool nested;                // sh(wsh(...)): P2SH-P2WSH, BIP48 script type 1'
     desc_key_t keys[DESC_MAX_KEYS];
 } desc_wallet_t;
 
 typedef enum {
     DESC_OK = 0,
     DESC_ERR_FORMAT,            // Not a descriptor / setup file we understand
-    DESC_ERR_SCRIPT,            // Not wsh() multisig (sh, wpkh, tr, nested...)
+    DESC_ERR_SCRIPT,            // Not wsh() or sh(wsh()) multisig (sh, wpkh, tr...)
     DESC_ERR_CHECKSUM,          // Descriptor checksum does not match
     DESC_ERR_KEY,               // Bad xpub (base58 checksum, length, prefix)
     DESC_ERR_NETWORK,           // Testnet key
@@ -92,7 +96,8 @@ const char *desc_error_text(desc_result_t r);
 uint32_t desc_witness_script(const uint8_t keys[][33], uint8_t n, uint8_t m, bool sorted, uint8_t *out);
 
 // Compact binary copy of a wallet, for the vault: format (1), threshold (1),
-// key count (1), flags (1: bit 0 sorted, bit 1 had a checksum), then per key
+// key count (1), flags (1: bit 0 sorted, bit 1 had a checksum, bit 2 nested
+// sh(wsh())), then per key
 // fingerprint (4), origin_len (1), origin (4 x 4, big endian), chain code
 // (32), public key (33). Returns its length (DESC_PACK_LEN(key_count)).
 #define DESC_PACK_HEADER    4u

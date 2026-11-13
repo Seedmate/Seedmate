@@ -1551,9 +1551,22 @@ void print_slot_in_use(int slot) {
     grid_confirm("OVER");
 }
 
+// The seeds found on a card about to be erased: red "n SEEDS WILL BE ERASED",
+// or white "NO SEEDS FOUND ON IT"
+static void draw_seeds_found(int y, uint32_t seeds) {
+    char text[28];
+    if (seeds == 0) {
+        drawtext(1, y, "NO SEEDS FOUND ON IT", ST7735_WHITE, ST7735_BLACK, 1);
+        return;
+    }
+    u16_to_str((unsigned int)seeds, text);
+    strcat(text, (seeds == 1) ? " SEED WILL BE ERASED" : " SEEDS WILL BE ERASED");
+    drawtext(1, y, text, ST7735_RED, ST7735_BLACK, 1);
+}
+
 // Red warning before the first 1 MB of the card is erased and it is marked as
-// ready for seeds (INITIALIZE CARD); BACK cancels
-void print_sd_init_warning(void) {
+// ready for seeds (INITIALIZE CARD), with the seeds found on it; BACK cancels
+void print_sd_init_warning(uint32_t seeds) {
     black_screen();
     draw_title((char*)menu_erase[cERASE_INIT], ST7735_LIGHTGREY);
     drawtext(1, 14, "ERASES THE FIRST 1 MB OF", ST7735_RED, ST7735_BLACK, 1);
@@ -1562,11 +1575,12 @@ void print_sd_init_warning(void) {
     drawtext(1, 44, "(FORMAT). CANNOT BE UNDONE", ST7735_RED, ST7735_BLACK, 1);
     drawtext(1, 62, "THEN THE CARD ACCEPTS", ST7735_WHITE, ST7735_BLACK, 1);
     drawtext(1, 72, "SEEDS FROM THIS DEVICE", ST7735_WHITE, ST7735_BLACK, 1);
+    draw_seeds_found(88, seeds);
     grid_confirm("INIT");
 }
 
 // Red warning before the whole card is overwritten (WIPE ALL CARD); BACK cancels
-void print_sd_wipe_warning(uint32_t mb_total) {
+void print_sd_wipe_warning(uint32_t mb_total, uint32_t seeds) {
     char text[24];
     black_screen();
     draw_title((char*)menu_erase[cERASE_WIPE], ST7735_LIGHTGREY);
@@ -1578,6 +1592,7 @@ void print_sd_wipe_warning(uint32_t mb_total) {
     drawtext(1, 40, "ALL SEEDS, THE VAULT AND", ST7735_RED, ST7735_BLACK, 1);
     drawtext(1, 50, "THE FILE SYSTEM (FORMAT)", ST7735_RED, ST7735_BLACK, 1);
     drawtext(1, 60, "THIS CANNOT BE UNDONE", ST7735_RED, ST7735_BLACK, 1);
+    draw_seeds_found(78, seeds);
     grid_confirm("WIPE");
 }
 

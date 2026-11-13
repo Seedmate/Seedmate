@@ -25,6 +25,34 @@ static FATFS fs;
 static FIL file;                // The one open file
 static bool card_ready;
 
+// Sectors one sd_files_* call may read or write. A card taken out can answer
+// garbage that looks valid, and FatFs then walks a directory of up to 2 MB
+// (4096 sectors, seconds on the device) on every pass: a page of the file
+// list would take minutes. Past the budget every access fails, so every call
+// ends soon. A listing pass needs a few sectors on a real card (the root
+// directory and the FAT entries of its chain); saving a PSBT and reading it
+// back needs well under the file budget.
+#define SD_FILES_LIST_BUDGET 256u
+#define SD_FILES_FILE_BUDGET 4096u
+static uint32_t sector_budget;
+
+static void budget_reset(uint32_t sectors) {
+    sector_budget = sectors;
+}
+
+#ifdef SD_FILES_HOST_TEST
+// The host test formats and fills its RAM cards with FatFs directly
+void sd_files_host_no_budget(void) {
+    sector_budget = 0xFFFFFFFFu;
+}
+#endif
+
+static bool budget_take(void) {
+    if (sector_budget == 0) return false;
+    sector_budget--;
+    return true;
+}
+
 // ============================================================================
 // FatFs disk interface (one drive, 512 byte sectors)
 // ============================================================================
@@ -43,7 +71,7 @@ DSTATUS disk_status(BYTE pdrv) {
 DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count) {
     (void)pdrv;
     for (UINT i = 0; i < count; i++) {
-        if (!sd_read_partial(sector + i, 0, 512, buff + 512u * i)) return RES_ERROR;
+        if (!budget_take() || !sd_read_partial(sector + i, 0, 512, buff + 512u * i)) return RES_ERROR;
     }
     return RES_OK;
 }
@@ -51,7 +79,7 @@ DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count) {
 DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count) {
     (void)pdrv;
     for (UINT i = 0; i < count; i++) {
-        if (!sd_write_block(sector + i, buff + 512u * i)) return RES_ERROR;
+        if (!budget_take() || !sd_write_block(sector + i, buff + 512u * i)) return RES_ERROR;
     }
     return RES_OK;
 }
@@ -73,6 +101,7 @@ DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff) {
 // ============================================================================
 
 bool sd_files_mount(void) {
+    budget_reset(SD_FILES_FILE_BUDGET);
     f_mount(NULL, "", 0);
     card_ready = false;
     return f_mount(&fs, "", 1) == FR_OK;    // Initializes the card and reads the volume now
@@ -99,12 +128,14 @@ static bool has_extension(const char *name, const char *const *exts, uint32_t ex
 
 bool sd_files_find(uint32_t n, const char *const *exts, uint32_t ext_count,
                    char *name, uint32_t *size) {
+    budget_reset(SD_FILES_LIST_BUDGET);
     DIR dir;
     FILINFO info;
     bool found = false;
+    uint32_t seen = 0;
 
     if (f_opendir(&dir, "") != FR_OK) return false;
-    while (f_readdir(&dir, &info) == FR_OK && info.fname[0] != '\0') {
+    while (f_readdir(&dir, &info) == FR_OK && info.fname[0] != '\0' && ++seen <= SD_FILES_MAX_ENTRIES) {
         if (info.fattrib & (AM_DIR | AM_HID | AM_SYS)) continue;
         if (!has_extension(info.fname, exts, ext_count)) continue;
         if (n-- != 0) continue;
@@ -118,12 +149,47 @@ bool sd_files_find(uint32_t n, const char *const *exts, uint32_t ext_count,
     return found;
 }
 
+// Names compared with ASCII letters in upper case, as FAT treats them
+static int name_cmp(const char *a, const char *b) {
+    while (*a != '\0' && *b != '\0') {
+        char x = (*a >= 'a' && *a <= 'z') ? (char)(*a - 32) : *a;
+        char y = (*b >= 'a' && *b <= 'z') ? (char)(*b - 32) : *b;
+        if (x != y) return (int)(uint8_t)x - (int)(uint8_t)y;
+        a++;
+        b++;
+    }
+    return (int)(uint8_t)*a - (int)(uint8_t)*b;
+}
+
+int32_t sd_files_next_sorted(const char *after, const char *const *exts, uint32_t ext_count, char *name) {
+    budget_reset(SD_FILES_LIST_BUDGET);
+    DIR dir;
+    FILINFO info;
+    int32_t best = -1, n = 0;
+    uint32_t seen = 0;
+
+    if (f_opendir(&dir, "") != FR_OK) return -1;
+    while (f_readdir(&dir, &info) == FR_OK && info.fname[0] != '\0' && ++seen <= SD_FILES_MAX_ENTRIES) {
+        if (info.fattrib & (AM_DIR | AM_HID | AM_SYS)) continue;
+        if (!has_extension(info.fname, exts, ext_count)) continue;
+        if ((after == NULL || name_cmp(info.fname, after) > 0) && (best < 0 || name_cmp(info.fname, name) < 0)) {
+            best = n;
+            memcpy(name, info.fname, SD_FILES_NAME_LEN);
+        }
+        n++;
+    }
+    f_closedir(&dir);
+    return best;
+}
+
 bool sd_files_open(const char *name) {
+    budget_reset(SD_FILES_FILE_BUDGET);
     f_close(&file);
     return f_open(&file, name, FA_READ) == FR_OK;
 }
 
 int32_t sd_files_read(void *dst, uint32_t len) {
+    budget_reset(SD_FILES_FILE_BUDGET);
     UINT got = 0;
     if (f_read(&file, dst, (UINT)len, &got) != FR_OK) return -1;
     return (int32_t)got;
@@ -134,6 +200,7 @@ int32_t sd_files_read(void *dst, uint32_t len) {
 // ============================================================================
 
 bool sd_files_new_name(const char *src, char *name) {
+    budget_reset(SD_FILES_FILE_BUDGET);
     static const char suffix[] = "-signed";
     const size_t room = SD_FILES_NAME_LEN - 1 - (sizeof(suffix) - 1) - 2 - 5;     // "-2" ".psbt"
     size_t n = 0;
@@ -169,6 +236,7 @@ bool sd_files_new_name(const char *src, char *name) {
 
 sd_save_t sd_files_save(const char *name, const uint8_t *data, uint32_t len,
                         void (*progress)(bool verifying, uint32_t done, uint32_t total)) {
+    budget_reset(SD_FILES_FILE_BUDGET);
     UINT done;
     uint32_t pos = 0;
     sd_save_t result = SD_SAVE_OK;

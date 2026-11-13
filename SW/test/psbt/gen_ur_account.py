@@ -58,6 +58,7 @@ cases = [
     account([48 | H, 0 | H, 0 | H, 2 | H], True),
     account([48 | H, 0 | H, 255 | H, 2 | H], True),     # Largest account the device allows
     account([49 | H, 0 | H, 0 | H], False, True),        # Nested segwit single sig
+    account([48 | H, 0 | H, 0 | H, 1 | H], True, True),  # Nested segwit multisig
 ]
 
 def arr(name, data, fmt='0x%02x'):

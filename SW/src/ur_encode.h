@@ -66,7 +66,7 @@ typedef struct {
     const uint32_t *path;           // From the master, e.g. {84', 0', 0'} (bit 31 = hardened)
     uint8_t path_len;
     bool multisig;                  // wsh(cosigner(key)) instead of wpkh(key)
-    bool nested;                    // Single sig only: sh(wpkh(key)), BIP49
+    bool nested;                    // Wrapped in sh(): sh(wpkh(key)) BIP49, sh(wsh(cosigner(key))) BIP48 1'
 } ur_account_key_t;
 
 // CBOR of a crypto-account with one output descriptor: wpkh(hdkey) for a

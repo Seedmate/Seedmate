@@ -251,11 +251,11 @@ uint32_t ur_account_cbor(const ur_account_key_t *key, uint8_t *out, uint32_t out
     cbor_head(&w, CBOR_ARRAY, 1);
 
     cbor_head(&w, CBOR_TAG, TAG_OUTPUT);            // crypto-output
+    if (key->nested) cbor_head(&w, CBOR_TAG, TAG_SH);   //   sh(...): nested segwit
     if (key->multisig) {
         cbor_head(&w, CBOR_TAG, TAG_WSH);           //   wsh(cosigner(key))
         cbor_head(&w, CBOR_TAG, TAG_COSIGNER);
     } else {
-        if (key->nested) cbor_head(&w, CBOR_TAG, TAG_SH);  //   sh(wpkh(key))
         cbor_head(&w, CBOR_TAG, TAG_WPKH);          //   wpkh(key)
     }
 

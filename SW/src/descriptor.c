@@ -17,7 +17,7 @@
 // Extended public key versions (SLIP-0132)
 #define VER_XPUB        0x0488B21Eu     // xpub
 #define VER_ZPUB_MS     0x02AA7ED3u     // Zpub: P2WSH multisig (Coldcard files)
-#define VER_YPUB_MS     0x0295B43Fu     // Ypub: P2SH-P2WSH multisig (not signed here)
+#define VER_YPUB_MS     0x0295B43Fu     // Ypub: P2SH-P2WSH multisig (Coldcard files)
 #define VER_TPUB        0x043587CFu     // tpub
 #define VER_VPUB_MS     0x02575483u     // Vpub
 #define VER_UPUB_MS     0x024289EFu     // Upub
@@ -138,8 +138,7 @@ static desc_result_t read_xpub(cursor_t *c, desc_key_t *k) {
 
     uint32_t version = (uint32_t)raw[0] << 24 | (uint32_t)raw[1] << 16 | (uint32_t)raw[2] << 8 | raw[3];
     if (version == VER_TPUB || version == VER_VPUB_MS || version == VER_UPUB_MS) return DESC_ERR_NETWORK;
-    if (version == VER_YPUB_MS) return DESC_ERR_SCRIPT;
-    if (version != VER_XPUB && version != VER_ZPUB_MS) return DESC_ERR_KEY;
+    if (version != VER_XPUB && version != VER_ZPUB_MS && version != VER_YPUB_MS) return DESC_ERR_KEY;
     if (raw[45] != 0x02 && raw[45] != 0x03) return DESC_ERR_KEY;
 
     memcpy(k->chain_code, &raw[13], 32);
@@ -215,8 +214,9 @@ static desc_result_t parse_descriptor(const char *s, uint32_t len, desc_wallet_t
         c.end = hash;
     }
 
+    w->nested = accept_str(&c, "sh(");      // sh(wsh(...)): P2SH-P2WSH
     if (!accept_str(&c, "wsh(")) {
-        // Another script type ("sh(", "wpkh(", "tr("...) or not a descriptor
+        // Another script type ("sh(multi", "wpkh(", "tr("...) or not a descriptor
         const char *p = s;
         while (p < c.end && *p >= 'a' && *p <= 'z') p++;
         return (p > s && p < c.end && *p == '(') ? DESC_ERR_SCRIPT : DESC_ERR_FORMAT;
@@ -234,7 +234,7 @@ static desc_result_t parse_descriptor(const char *s, uint32_t len, desc_wallet_t
         if (r != DESC_OK) return r;
         w->key_count++;
     }
-    if (!accept_str(&c, "))") || c.p != c.end) return DESC_ERR_FORMAT;
+    if (!accept_str(&c, "))") || (w->nested && !accept(&c, ')')) || c.p != c.end) return DESC_ERR_FORMAT;
     if (m == 0 || m > w->key_count) return DESC_ERR_THRESHOLD;
     w->threshold = (uint8_t)m;
     return DESC_OK;
@@ -290,7 +290,13 @@ static desc_result_t parse_coldcard(const char *s, uint32_t len, desc_wallet_t *
             if (!accept(&c, 'm') && !accept(&c, 'M')) return DESC_ERR_FORMAT;
             if (!read_path(&c, &origin) || !is_line_end(&c)) return DESC_ERR_FORMAT;
         } else if (accept_label(&c, "FORMAT:")) {
-            if (!accept_label(&c, "P2WSH") || !is_line_end(&c)) return DESC_ERR_SCRIPT;
+            // P2WSH, or nested: P2SH-P2WSH (P2WSH-P2SH in older Coldcard files)
+            if (accept_label(&c, "P2SH-P2WSH") || accept_label(&c, "P2WSH-P2SH")) {
+                w->nested = true;
+            } else if (!accept_label(&c, "P2WSH")) {
+                return DESC_ERR_SCRIPT;
+            }
+            if (!is_line_end(&c)) return DESC_ERR_SCRIPT;
             p2wsh = true;
         } else {
             // "B0B0B0B0: xpub..."
@@ -321,6 +327,7 @@ static desc_result_t parse_coldcard(const char *s, uint32_t len, desc_wallet_t *
 #define TAG_HDKEY       303
 #define TAG_KEYPATH     304
 #define TAG_COININFO    305
+#define TAG_SH          400
 #define TAG_WSH         401
 #define TAG_MULTI       406
 #define TAG_SORTEDMULTI 407
@@ -485,6 +492,10 @@ static desc_result_t parse_cbor_output(const uint8_t *data, uint32_t len, desc_w
     if (tag == TAG_OUTPUT || tag == TAG_OUTPUT + TAG_V2) {
         if (!cbor_expect(&c, CBOR_TAG, &tag)) return DESC_ERR_FORMAT;
     }
+    if (tag == TAG_SH) {                    // sh(wsh(...)): P2SH-P2WSH
+        w->nested = true;
+        if (!cbor_expect(&c, CBOR_TAG, &tag)) return DESC_ERR_FORMAT;
+    }
     if (tag != TAG_WSH) return DESC_ERR_SCRIPT;
     if (!cbor_expect(&c, CBOR_TAG, &tag) || (tag != TAG_MULTI && tag != TAG_SORTEDMULTI)) return DESC_ERR_SCRIPT;
     w->sorted = (tag == TAG_SORTEDMULTI);
@@ -569,7 +580,7 @@ desc_result_t desc_parse(const char *text, uint32_t len, desc_wallet_t *out) {
 const char *desc_error_text(desc_result_t r) {
     switch (r) {
         case DESC_OK:            return "OK";
-        case DESC_ERR_SCRIPT:    return "ONLY WSH MULTISIG";
+        case DESC_ERR_SCRIPT:    return "ONLY SEGWIT MULTISIG";
         case DESC_ERR_CHECKSUM:  return "BAD CHECKSUM";
         case DESC_ERR_KEY:       return "BAD XPUB";
         case DESC_ERR_NETWORK:   return "TESTNET KEY";
@@ -613,7 +624,7 @@ uint32_t desc_pack(const desc_wallet_t *w, uint8_t *out) {
     *p++ = 1;                               // Format
     *p++ = w->threshold;
     *p++ = w->key_count;
-    *p++ = (uint8_t)((w->sorted ? 1u : 0u) | (w->has_checksum ? 2u : 0u));
+    *p++ = (uint8_t)((w->sorted ? 1u : 0u) | (w->has_checksum ? 2u : 0u) | (w->nested ? 4u : 0u));
     for (int i = 0; i < w->key_count; i++) {
         const desc_key_t *k = &w->keys[i];
         memcpy(p, k->fingerprint, 4);
@@ -633,13 +644,14 @@ uint32_t desc_pack(const desc_wallet_t *w, uint8_t *out) {
 bool desc_unpack(const uint8_t *in, uint32_t len, desc_wallet_t *out) {
     memset(out, 0, sizeof(*out));
     if (len < DESC_PACK_HEADER || in[0] != 1 || in[2] == 0 || in[2] > DESC_MAX_KEYS ||
-        in[1] == 0 || in[1] > in[2] || (in[3] & ~3u) != 0 || len != DESC_PACK_LEN(in[2])) {
+        in[1] == 0 || in[1] > in[2] || (in[3] & ~7u) != 0 || len != DESC_PACK_LEN(in[2])) {
         return false;
     }
     out->threshold = in[1];
     out->key_count = in[2];
     out->sorted = (in[3] & 1u) != 0;
     out->has_checksum = (in[3] & 2u) != 0;
+    out->nested = (in[3] & 4u) != 0;
     const uint8_t *p = in + DESC_PACK_HEADER;
     for (int i = 0; i < out->key_count; i++) {
         desc_key_t *k = &out->keys[i];

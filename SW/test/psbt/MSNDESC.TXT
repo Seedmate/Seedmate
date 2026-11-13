@@ -1,0 +1,2 @@
+# Receive and change descriptor (BIP389), nested segwit multisig:
+sh(wsh(sortedmulti(2,[73c5da0a/48h/0h/0h/1h]xpub6DkFAXWQ2dHxnMKoSBogHrw1rgNJKR4umdbnNVNTYeCGcduxWnNUHgGptqEQWPKRmeW4Zn4FHSbLMBKEWYaMDYu47Ytg6DdFnPNt8hwn5mE/<0;1>/*,[010535a1/48h/0h/0h/1h]xpub6ErTuaYmXVEpG8oyoyAWsHqRmzKC5GXjG9VehHBtaKV3J8gFR9kA5GEJpVs3BHqqsHG6cbaSnSnhvpSnUYfPKAsKEsNRPJTG8PBXexVbZr8/<0;1>/*,[bdc140de/48h/0h/0h/1h]xpub6EcNVfVy8WtHRo2EtrVtHVYmuBxgnyvLPeZRL37rdS8f5S9UfNxo3MHVDLQVgkccnzYbFz4e8J4sdB4CHMdC3r1Y5hLQZm7soP881ppG32T/<0;1>/*)))#8p30phg6
