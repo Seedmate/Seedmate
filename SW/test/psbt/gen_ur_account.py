@@ -31,7 +31,7 @@ def cbor(v):
     if isinstance(v, Tag): return cbor_head(6, v.tag) + cbor(v.value)
     raise TypeError(v)
 
-def account(path, multisig):
+def account(path, multisig, nested=False):
     """Public data of the account key at 'path' (list of indexes)."""
     k, c = master_key(seed)
     master_fp = hash160(ser_pub(point_mul(k)))[:4]
@@ -44,9 +44,11 @@ def account(path, multisig):
     keypath = Tag(304, {1: [x for idx in path for x in (idx & ~H, bool(idx & H))], 2: fp})
     hdkey = Tag(303, {3: pub, 4: c, 6: keypath, 8: int.from_bytes(parent_fp, 'big')})
     script = Tag(401, Tag(410, hdkey)) if multisig else Tag(404, hdkey)
+    if nested:
+        script = Tag(400, script)       # sh(wpkh(key)), BIP49
     return {
         'master_fp': fp, 'parent_fp': int.from_bytes(parent_fp, 'big'), 'pub': pub, 'chain': c,
-        'path': path, 'multisig': multisig,
+        'path': path, 'multisig': multisig, 'nested': nested,
         'cbor': cbor({1: fp, 2: [Tag(308, script)]}),
     }
 
@@ -55,6 +57,7 @@ cases = [
     account([84 | H, 0 | H, 5 | H], False),
     account([48 | H, 0 | H, 0 | H, 2 | H], True),
     account([48 | H, 0 | H, 255 | H, 2 | H], True),     # Largest account the device allows
+    account([49 | H, 0 | H, 0 | H], False, True),        # Nested segwit single sig
 ]
 
 def arr(name, data, fmt='0x%02x'):
@@ -69,11 +72,12 @@ with open('ur_account_vectors.h', 'w', newline='\r\n') as f:
         f.write(arr('acc%d_cbor' % i, a['cbor']))
         f.write('static const uint32_t acc%d_path[%d] = {%s};\n\n' % (i, len(a['path']), ', '.join('0x%08xu' % p for p in a['path'])))
     f.write('typedef struct { uint32_t master_fp, parent_fp; const uint8_t *pub, *chain, *cbor; uint32_t cbor_len;\n'
-            '                 const uint32_t *path; uint8_t path_len; bool multisig; } ur_account_case_t;\n\n')
+            '                 const uint32_t *path; uint8_t path_len; bool multisig, nested; } ur_account_case_t;\n\n')
     f.write('static const ur_account_case_t ur_account_cases[UR_ACCOUNT_CASES] = {\n')
     for i, a in enumerate(cases):
-        f.write('    {0x%08xu, 0x%08xu, acc%d_pub, acc%d_chain, acc%d_cbor, sizeof(acc%d_cbor), acc%d_path, %d, %s},\n'
-                % (a['master_fp'], a['parent_fp'], i, i, i, i, i, len(a['path']), 'true' if a['multisig'] else 'false'))
+        f.write('    {0x%08xu, 0x%08xu, acc%d_pub, acc%d_chain, acc%d_cbor, sizeof(acc%d_cbor), acc%d_path, %d, %s, %s},\n'
+                % (a['master_fp'], a['parent_fp'], i, i, i, i, i, len(a['path']), 'true' if a['multisig'] else 'false',
+                   'true' if a['nested'] else 'false'))
     f.write('};\n')
 for a in cases:
     print('path len %d multisig %-5s CBOR %d bytes' % (len(a['path']), a['multisig'], len(a['cbor'])))

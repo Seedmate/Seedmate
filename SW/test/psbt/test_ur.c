@@ -169,7 +169,7 @@ static void test_account(void) {
 
     for (int i = 0; i < UR_ACCOUNT_CASES; i++) {
         const ur_account_case_t *c = &ur_account_cases[i];
-        ur_account_key_t key = { c->master_fp, c->parent_fp, c->pub, c->chain, c->path, c->path_len, c->multisig };
+        ur_account_key_t key = { c->master_fp, c->parent_fp, c->pub, c->chain, c->path, c->path_len, c->multisig, c->nested };
         uint32_t len = ur_account_cbor(&key, cbor, sizeof(cbor));
         CHECK(len == c->cbor_len && memcmp(cbor, c->cbor, len) == 0);
         CHECK(ur_account_cbor(&key, cbor, len - 1) == 0);       // Too small: refused

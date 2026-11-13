@@ -8,6 +8,9 @@
 #include "psbt_sign.h"
 #include "test_vectors.h"
 #include "ur_test_psbt.h"
+#include "nested_vectors.h"
+#include "sha256.h"
+#include "crypto/ripemd160.h"
 
 static int failures = 0;
 
@@ -146,6 +149,44 @@ static void test_sign_multisig(void) {
     CHECK(!psbt_input_has_sig_from(&p, 0, ur_test_ms_priv_0_0, 33));   // Not a key in the map
 }
 
+// Nested segwit (BIP49, P2SH-P2WPKH): the output is the P2SH of OP_0 <key
+// hash>, the scriptCode the P2PKH of the key hash (as main.c computes them),
+// and the firmware must sign exactly like the Python signer (gen_nested.py)
+static void test_sign_nested(void) {
+    static uint8_t buf[1024];
+    psbt_t p;
+    psbt_input_t in;
+    uint8_t digest[32], sig[PSBT_SIG_MAX_LEN], sha[32], redeem[22], script_hash[20];
+    uint32_t sig_len = 0, len;
+    SHA256_CTX ctx;
+
+    memcpy(buf, nested_psbt, sizeof(nested_psbt));
+    CHECK(psbt_parse(buf, sizeof(nested_psbt), &p) == PSBT_OK);
+    CHECK(psbt_get_input(&p, 0, &in) && in.has_amount && in.amount == 250000);
+    CHECK(psbt_script_type(in.script, in.script_len) == PSBT_SCRIPT_P2SH);
+    CHECK(in.prev_tx != NULL && psbt_prev_tx_matches(&in));
+
+    // Key hash, redeem script and its script hash, from the public key
+    sha256_init(&ctx);
+    sha256_update(&ctx, nested_pub_0_0, 33);
+    sha256_final(&ctx, sha);
+    ripemd160(sha, 32, &redeem[2]);
+    redeem[0] = 0x00;
+    redeem[1] = 0x14;
+    sha256_init(&ctx);
+    sha256_update(&ctx, redeem, sizeof(redeem));
+    sha256_final(&ctx, sha);
+    ripemd160(sha, 32, script_hash);
+    CHECK(memcmp(&in.script[2], script_hash, 20) == 0);
+
+    CHECK(psbt_sighash_p2wpkh(&p, 0, &redeem[2], in.amount, PSBT_SIGHASH_ALL, digest));
+    CHECK(psbt_ecdsa_sign(nested_priv_0_0, nested_pub_0_0, digest, PSBT_SIGHASH_ALL, sig, &sig_len, NULL));
+    len = psbt_add_partial_sig(buf, sizeof(buf), &p, 0, nested_pub_0_0, 33, sig, sig_len);
+    CHECK(len == sizeof(nested_signed_psbt));
+    CHECK(memcmp(buf, nested_signed_psbt, sizeof(nested_signed_psbt)) == 0);
+    printf("Nested segwit: signed PSBT identical to the Python signer (%u bytes)\n", len);
+}
+
 // Low R grinding: same signatures as the reference, including retried ones
 static void test_low_r_grinding(void) {
     uint8_t sig[PSBT_SIG_MAX_LEN];
@@ -169,6 +210,7 @@ int main(void) {
     test_prev_tx();
     test_sign_abandon();
     test_sign_multisig();
+    test_sign_nested();
     test_low_r_grinding();
     printf(failures ? "\n%d FAILURE(S)\n" : "\nALL TESTS PASSED\n", failures);
     return failures != 0;

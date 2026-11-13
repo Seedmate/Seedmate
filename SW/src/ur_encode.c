@@ -183,6 +183,7 @@ uint32_t ur_encoder_part(const ur_encoder_t *e, uint32_t seq, char *out, uint32_
 #define TAG_HDKEY       303
 #define TAG_KEYPATH     304
 #define TAG_OUTPUT      308
+#define TAG_SH          400
 #define TAG_WSH         401
 #define TAG_WPKH        404
 #define TAG_COSIGNER    410
@@ -254,6 +255,7 @@ uint32_t ur_account_cbor(const ur_account_key_t *key, uint8_t *out, uint32_t out
         cbor_head(&w, CBOR_TAG, TAG_WSH);           //   wsh(cosigner(key))
         cbor_head(&w, CBOR_TAG, TAG_COSIGNER);
     } else {
+        if (key->nested) cbor_head(&w, CBOR_TAG, TAG_SH);  //   sh(wpkh(key))
         cbor_head(&w, CBOR_TAG, TAG_WPKH);          //   wpkh(key)
     }
 

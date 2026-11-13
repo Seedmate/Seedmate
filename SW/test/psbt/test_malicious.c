@@ -57,7 +57,11 @@ static bool bip84_account_cached = true;
 static uint32_t bip84_master_fingerprint;
 static uint32_t bip84_account_index = 0;
 static bool bip84_multisig_mode = false;
+#define SCRIPT_NESTED 1
+#define SCRIPT_NATIVE 2
+static uint8_t bip84_script = SCRIPT_NATIVE;    // m/84' keys below (setup_wallet)
 static HDNode bip84_receive_node_cache, bip84_change_node_cache;
+static HDNode native_receive, native_change, nested_receive, nested_change;    // m/84' and m/49'
 static HDNode ms_receive_node_cache, ms_change_node_cache;
 static bool ms_account_cached = true;
 static bool ms_wallet_loaded = false;
@@ -97,10 +101,19 @@ static void setup_wallet(void) {
     hdnode_private_ckd(&n, 84 | H);
     hdnode_private_ckd(&n, 0 | H);
     hdnode_private_ckd(&n, 0 | H);
-    bip84_receive_node_cache = n;
-    hdnode_private_ckd(&bip84_receive_node_cache, 0);
-    bip84_change_node_cache = n;
-    hdnode_private_ckd(&bip84_change_node_cache, 1);
+    native_receive = n;
+    hdnode_private_ckd(&native_receive, 0);
+    native_change = n;
+    hdnode_private_ckd(&native_change, 1);
+
+    n = root;                                   // m/49'/0'/0' for the nested mode
+    hdnode_private_ckd(&n, 49 | H);
+    hdnode_private_ckd(&n, 0 | H);
+    hdnode_private_ckd(&n, 0 | H);
+    nested_receive = n;
+    hdnode_private_ckd(&nested_receive, 0);
+    nested_change = n;
+    hdnode_private_ckd(&nested_change, 1);
 
     n = root;
     hdnode_private_ckd(&n, 48 | H);
@@ -119,8 +132,8 @@ static void setup_wallet(void) {
 }
 
 // --- One run ---------------------------------------------------------------------
-enum { MODE_SINGLE, MODE_MULTI, MODE_MULTI_DESC, MODE_COUNT };
-static const char *mode_name[MODE_COUNT] = {"single", "multi", "multi+desc"};
+enum { MODE_SINGLE, MODE_MULTI, MODE_MULTI_DESC, MODE_NESTED, MODE_COUNT };
+static const char *mode_name[MODE_COUNT] = {"single", "multi", "multi+desc", "nested"};
 
 typedef struct {
     char text[160];     // The outcome, as compared with malicious_expected.txt
@@ -135,7 +148,10 @@ static void run(const uint8_t *data, uint32_t len, int mode, outcome_t *r) {
     psbt_sign_plan_t plan;
 
     memcpy(buf, data, len);
-    bip84_multisig_mode = mode != MODE_SINGLE;
+    bip84_multisig_mode = mode == MODE_MULTI || mode == MODE_MULTI_DESC;
+    bip84_script = (mode == MODE_NESTED) ? SCRIPT_NESTED : SCRIPT_NATIVE;     // Single sig nested segwit
+    bip84_receive_node_cache = (mode == MODE_NESTED) ? nested_receive : native_receive;
+    bip84_change_node_cache = (mode == MODE_NESTED) ? nested_change : native_change;
     ms_wallet_loaded = mode == MODE_MULTI_DESC;
 
     r->ours = 0;
