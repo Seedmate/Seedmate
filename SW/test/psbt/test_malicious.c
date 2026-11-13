@@ -320,6 +320,20 @@ int main(int argc, char **argv) {
     bool report = argc > 1 && strcmp(argv[1], "--report") == 0;
 
     setup_wallet();
+    // test_malicious --file x.psbt: the outcome of one file in every mode
+    if (argc > 2 && strcmp(argv[1], "--file") == 0) {
+        FILE *f = fopen(argv[2], "rb");
+        if (!f) { printf("cannot open %s\n", argv[2]); return 1; }
+        static uint8_t data[32768];
+        uint32_t len = (uint32_t)fread(data, 1, sizeof(data), f);
+        fclose(f);
+        for (int m = 0; m < MODE_COUNT; m++) {
+            outcome_t r;
+            run(data, len, m, &r);
+            printf("%-10s %s\n", mode_name[m], r.text);
+        }
+        return 0;
+    }
     if (do_update || report) {
         update = fopen(do_update ? "malicious_expected.txt" : "malicious_report.txt", "w");
     } else {

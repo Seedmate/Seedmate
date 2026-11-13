@@ -1724,7 +1724,19 @@ void print_mcu_serial_screen(void) {
         drawtext(x_pos, 13, hex_buf, ST7735_CYAN, ST7735_BLACK, 1);
         x_pos += 26; // Advance cursor (4 chars * 6px + 2px spacing)
     }
-    
+
+    // Deepest stack use since power-on, yellow over 7/8 of the stack
+    uint32_t peak = stack_peak_bytes(), size = stack_size_bytes();
+    char line[28] = "STACK PEAK ";
+    size_t n = 11;
+    n += u16_to_str((unsigned int)peak, &line[n]);
+    line[n++] = '/';
+    n += u16_to_str((unsigned int)size, &line[n]);
+    line[n++] = ' ';
+    line[n++] = 'B';
+    line[n] = '\0';
+    drawtext(1, 30, line, peak > size / 8 * 7 ? ST7735_YELLOW : ST7735_CYAN, ST7735_BLACK, 1);
+
     grid_OK_back();                 // Either key returns to SETTINGS
 }
 

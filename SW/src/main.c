@@ -1206,7 +1206,7 @@ static void draw_keyboard_key(int idx, int active_layer, bool is_selected, bool 
             print_up_arrow(27,113,color);
         } else if (idx == 32) {
             uint16_t c = is_selected ? ST7735_ORANGE : ((active_layer == LAYER_NUM || active_layer == LAYER_SYM) ? ST7735_CYAN : ST7735_WHITE);
-            drawtext(43, 106, "#@", c, bg, 1);
+            drawtext(43, 106, "0#", c, bg, 1);
         } else if (idx == 33) {            
             print_left_arrow(8,123,color);
         } else if (idx == 34) {            
@@ -3824,6 +3824,7 @@ void tc_fault_handler(const char *msg) {
 static uint8_t **wipe_shares, **wipe_shares_input, *wipe_sss_result;
 static void session_wipe(uint8_t **shares, uint8_t **shares_input, uint8_t *sss_result, size_t len);
 static void stack_wipe(void);
+static void stack_paint(void);
 
 static void secrets_wipe(void) {
     if (wipe_shares != NULL) session_wipe(wipe_shares, wipe_shares_input, wipe_sss_result, 32);
@@ -9417,30 +9418,50 @@ static void derive_show_qr(const char *text) {
     memzero(buffer, sizeof(buffer));
 }
 
-static void print_password_config(void) {
+// Rows FORMAT, LENGTH and INDEX: 'full' draws the whole screen, otherwise
+// only the values, the bits and the keys change (no flicker)
+static void print_password_config(bool full) {
     char text[26];
     char num[12];
     int bits = (pwd_format == BIP85_PWD_BASE64) ? pwd_len * 6 : pwd_len * 641 / 100;
 
-    black_screen();
-    draw_title((char *)menu_derive[cDERIVE_PASSWORD], ST7735_LIGHTGREY);
-    drawtext(1, 13, "FORMAT:", ST7735_WHITE, ST7735_BLACK, 1);
+    if (full) {
+        black_screen();
+        draw_title((char *)menu_derive[cDERIVE_PASSWORD], ST7735_LIGHTGREY);
+        drawtext(1, 13, "FORMAT:", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(1, 38, "LENGTH:", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(1, 63, "INDEX:", ST7735_WHITE, ST7735_BLACK, 1);
+        drawtext(1, 107, "SAME SEED,", ST7735_CYAN, ST7735_BLACK, 1);    // What makes it come back
+        drawtext(1, 117, "SAME INDEX", ST7735_CYAN, ST7735_BLACK, 1);
+    }
     drawtext(10, 23, (pwd_format == BIP85_PWD_BASE64) ? "BASE64" : "BASE85",
              (pwd_cursor == 0) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(1, 38, "LENGTH:", ST7735_WHITE, ST7735_BLACK, 1);
-    fast_itoa(pwd_len, num);
-    drawtext(10, 48, num, (pwd_cursor == 1) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(1, 63, "INDEX:", ST7735_WHITE, ST7735_BLACK, 1);
-    fast_itoa(pwd_index, num);
-    drawtext(10, 73, num, (pwd_cursor == 2) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+    fast_itoa(pwd_len, text);
+    strcat(text, " ");                      // Clears a digit left by a longer value
+    drawtext(10, 48, text, (pwd_cursor == 1) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
+    fast_itoa(pwd_index, text);
+    while (strlen(text) < 10) strcat(text, " ");
+    drawtext(10, 73, text, (pwd_cursor == 2) ? ST7735_ORANGE : ST7735_WHITE, ST7735_BLACK, 1);
     strcpy(text, "ABOUT ");
     fast_itoa((uint32_t)bits, num);
     strcat(text, num);
-    strcat(text, " BITS");
+    strcat(text, " BITS ");
     drawtext(1, 88, text, ST7735_CYAN, ST7735_BLACK, 1);
-    drawtext(1, 107, "SAME SEED,", ST7735_CYAN, ST7735_BLACK, 1);    // What makes it come back
-    drawtext(1, 117, "SAME INDEX", ST7735_CYAN, ST7735_BLACK, 1);
-    grid_bip85();
+
+    const char *left = NULL, *right = NULL;
+    if (pwd_cursor == 0) {
+        if (pwd_format == BIP85_PWD_BASE64) right = "B85";
+        else left = "B64";
+    } else if (pwd_cursor == 1) {
+        uint8_t lo = (pwd_format == BIP85_PWD_BASE64) ? BIP85_PWD64_MIN : BIP85_PWD85_MIN;
+        uint8_t hi = (pwd_format == BIP85_PWD_BASE64) ? BIP85_PWD64_MAX : BIP85_PWD85_MAX;
+        if (pwd_len > lo) left = "-";
+        if (pwd_len < hi) right = "+";
+    } else {
+        if (pwd_index > 0) left = "-";
+        if (pwd_index < 0x7FFFFFFFu) right = "+";
+    }
+    grid_rows_keys(left, right, "OK");
 }
 
 // The password derived: format, length and index, the fingerprint it comes
@@ -9484,47 +9505,71 @@ static void bip85_password_show(void) {
     wait_keys_released();
 }
 
-// BIP85 PASSWORD: format, length and index (LEFT / RIGHT field, UP / DOWN
-// value), OK derives it, BACK returns to DERIVE
+// LEFT / RIGHT on the row of the cursor. False when the value cannot move.
+static bool password_step(bool right) {
+    uint8_t lo = (pwd_format == BIP85_PWD_BASE64) ? BIP85_PWD64_MIN : BIP85_PWD85_MIN;
+    uint8_t hi = (pwd_format == BIP85_PWD_BASE64) ? BIP85_PWD64_MAX : BIP85_PWD85_MAX;
+    if (pwd_cursor == 0) {
+        uint8_t want = right ? BIP85_PWD_BASE85 : BIP85_PWD_BASE64;
+        if (pwd_format == want) return false;
+        pwd_format = want;
+        lo = (pwd_format == BIP85_PWD_BASE64) ? BIP85_PWD64_MIN : BIP85_PWD85_MIN;
+        hi = (pwd_format == BIP85_PWD_BASE64) ? BIP85_PWD64_MAX : BIP85_PWD85_MAX;
+        if (pwd_len < lo) pwd_len = lo;
+        if (pwd_len > hi) pwd_len = hi;
+    } else if (pwd_cursor == 1) {
+        if (right ? pwd_len >= hi : pwd_len <= lo) return false;
+        pwd_len = right ? pwd_len + 1 : pwd_len - 1;
+    } else {
+        if (right ? pwd_index >= 0x7FFFFFFFu : pwd_index == 0) return false;
+        pwd_index = right ? pwd_index + 1 : pwd_index - 1;
+    }
+    return true;
+}
+
+// BIP85 PASSWORD: format, length and index (UP / DOWN the row, LEFT / RIGHT
+// the value, repeating while held on the numbers), OK derives it, BACK
+// returns to DERIVE
 static void bip85_password_run(void) {
-    print_password_config();
+    print_password_config(true);
     while (1) {
         int bt = wait_any_key();
-        uint8_t lo = (pwd_format == BIP85_PWD_BASE64) ? BIP85_PWD64_MIN : BIP85_PWD85_MIN;
-        uint8_t hi = (pwd_format == BIP85_PWD_BASE64) ? BIP85_PWD64_MAX : BIP85_PWD85_MAX;
         if (bt == BACK_BT) return;
         if (bt == OK_BT) {
             bip85_password_show();
-        } else if (bt == LEFT_BT) {
-            pwd_cursor = (uint8_t)((pwd_cursor + 2) % 3);
-        } else if (bt == RIGHT_BT) {
-            pwd_cursor = (uint8_t)((pwd_cursor + 1) % 3);
-        } else if (pwd_cursor == 0) {
-            pwd_format = (pwd_format == BIP85_PWD_BASE64) ? BIP85_PWD_BASE85 : BIP85_PWD_BASE64;
-            lo = (pwd_format == BIP85_PWD_BASE64) ? BIP85_PWD64_MIN : BIP85_PWD85_MIN;
-            hi = (pwd_format == BIP85_PWD_BASE64) ? BIP85_PWD64_MAX : BIP85_PWD85_MAX;
-            if (pwd_len < lo) pwd_len = lo;
-            if (pwd_len > hi) pwd_len = hi;
-        } else if (pwd_cursor == 1) {
-            if (bt == UP_BT && pwd_len < hi) pwd_len++;
-            else if (bt == DOWN_BT && pwd_len > lo) pwd_len--;
-        } else if (bt == UP_BT && pwd_index < 0x7FFFFFFFu) {
-            pwd_index++;
-        } else if (bt == DOWN_BT && pwd_index > 0) {
-            pwd_index--;
+            print_password_config(true);
+            continue;
         }
-        print_password_config();
+        if (bt == UP_BT || bt == DOWN_BT) {
+            pwd_cursor = (uint8_t)((pwd_cursor + ((bt == DOWN_BT) ? 1 : 2)) % 3);
+        } else if (bt == LEFT_BT || bt == RIGHT_BT) {
+            bool right = (bt == RIGHT_BT);
+            if (password_step(right) && pwd_cursor != 0) {
+                // Length and index repeat while held, as the account in CONFIG
+                uint32_t t = _CP0_GET_COUNT(), wait = KEY_REPEAT_FIRST_MS;
+                while ((right ? BT6 : BT2) == 0) {
+                    SYS_Tasks();
+                    if ((uint32_t)(_CP0_GET_COUNT() - t) < wait * (CPU_CLOCK_FREQUENCY / 2000u)) continue;
+                    t = _CP0_GET_COUNT();
+                    wait = KEY_REPEAT_NEXT_MS;
+                    if (!password_step(right)) break;
+                    print_password_config(false);
+                }
+            }
+        }
+        print_password_config(false);
     }
 }
 
-// The nsec gives control of the Nostr identity: a red warning every time
+// The nsec gives control of the Nostr identity: a yellow warning, once a session
 static bool nostr_nsec_warning(void) {
     black_screen();
-    drawtext(1, 10, "THE NSEC IS YOUR NOSTR", ST7735_WHITE, ST7735_RED, 1);
-    drawtext(1, 25, "IDENTITY: WHOEVER SEES", ST7735_WHITE, ST7735_RED, 1);
-    drawtext(1, 40, "IT CAN POST AS YOU", ST7735_WHITE, ST7735_RED, 1);
-    drawtext(1, 55, "SHOW IT ONLY TO A", ST7735_WHITE, ST7735_RED, 1);
-    drawtext(1, 70, "NOSTR APP YOU TRUST", ST7735_WHITE, ST7735_RED, 1);
+    draw_title("NOSTR NSEC", ST7735_LIGHTGREY);
+    drawtext(1, 18, "THE NSEC IS YOUR NOSTR", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(1, 30, "IDENTITY: WHOEVER SEES", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(1, 42, "IT CAN POST AS YOU", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(1, 58, "SHOW IT ONLY TO A", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(1, 70, "NOSTR APP YOU TRUST", ST7735_YELLOW, ST7735_BLACK, 1);
     grid_confirm("SHOW");
     int bt;
     do { bt = wait_any_key(); } while (bt != OK_BT && bt != BACK_BT);
@@ -10056,13 +10101,42 @@ static void session_wipe(uint8_t **shares, uint8_t **shares_input, uint8_t *sss_
     memzero(scratch, cap);
 }
 
-// Zeroes the stack below the caller: the frames of the flow that was left
-// never ran their own wipes
-extern char _splim[];
-static __attribute__((noinline)) void stack_wipe(void) {
-    volatile uint32_t *p = (volatile uint32_t *)(((uintptr_t)_splim + 3u) & ~3u);
+// Stack measurement: the free stack holds STACK_FILL, painted at power-on
+// and again by every stack_wipe(); the deepest word that lost it is the
+// peak. A frame that never writes its lowest bytes (an unused buffer) can
+// hide a few of them. The peak since power-on is kept in stack_peak.
+extern char _splim[], _stack[];
+#define STACK_FILL 0x5EED57ACu
+static uint32_t stack_peak;
+
+static volatile uint32_t *stack_floor(void) {
+    return (volatile uint32_t *)(((uintptr_t)_splim + 3u) & ~3u);
+}
+
+// Bytes used at the deepest point since the last paint, kept in stack_peak
+uint32_t stack_peak_bytes(void) {
+    volatile uint32_t *p = stack_floor();
+    while (p < (volatile uint32_t *)_stack && *p == STACK_FILL) p++;
+    uint32_t used = (uint32_t)((uintptr_t)_stack - (uintptr_t)p);
+    if (used > stack_peak) stack_peak = used;
+    return stack_peak;
+}
+
+uint32_t stack_size_bytes(void) {
+    return (uint32_t)((uintptr_t)_stack - (uintptr_t)stack_floor());
+}
+
+// Fills the stack below the caller with STACK_FILL: it also wipes what the
+// frames of a flow that was left never wiped themselves
+static __attribute__((noinline)) void stack_paint(void) {
+    volatile uint32_t *p = stack_floor();
     volatile uint32_t *end = (volatile uint32_t *)__builtin_frame_address(0) - 8;
-    while (p < end) *p++ = 0;
+    while (p < end) *p++ = STACK_FILL;
+}
+
+static __attribute__((noinline)) void stack_wipe(void) {
+    (void)stack_peak_bytes();               // Before the paint resets it
+    stack_paint();
 }
 
 // AUTO UNLOAD fired: the flow that was on screen is gone (longjmp). Wipes it
@@ -10379,6 +10453,7 @@ static void open_sd_slots(int sd_block) {
 }
 
 int main ( void ){
+    stack_paint();                          // Stack measurement (stack_peak_bytes())
     /* Initialize all modules */
     SYS_Initialize ( NULL );
     {

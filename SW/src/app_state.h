@@ -72,4 +72,8 @@ bool sd_init(void);
 bool sd_read_block(uint32_t sector, uint8_t *buffer);
 bool sd_read_partial(uint32_t sector, uint32_t offset, uint32_t count, uint8_t *dst);
 
+// Stack measurement (main.c): deepest use since power-on and the stack size
+uint32_t stack_peak_bytes(void);
+uint32_t stack_size_bytes(void);
+
 #endif // APP_STATE_H
