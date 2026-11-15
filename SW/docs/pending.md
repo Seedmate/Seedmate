@@ -48,6 +48,8 @@ UPDATE FIRMWARE, QR READER on a Compact SeedQR, BIP85 PASSWORD with index 10.
 | PSBT hardening: device test | Done on 2026-11-08, PC tests only. The parser refuses duplicate keys and known fields with a key of the wrong form (all 20 invalid BIP174 vectors refused now); outputs without an address are yellow; HIGH CHANGE INDEX is relative to the inputs (over the highest input index + 100). Try the Sparrow PSBTs again to confirm nothing valid is refused. What is still accepted on purpose, with the reason: `test/psbt/malicious_gaps.txt` |
 | Skewed dice warning | Maybe (2026-11-08): a count per face, no floating point, about 400 B |
 | User documentation | Which card for what: keep the seed card apart from the card for updates and PSBTs, so it never goes into a PC (the device refuses to write files on a seed card, but a PC would offer to format it); the file card FAT16 (the bootloader needs FAT16, PSBTs also work on FAT32), updates, the camera icons (green safe / red not safe for a phone: the start screen legend was removed), SD seeds are not encrypted |
+| Printable templates for users | In `docs/templates/`: today `qr_21x21_template.html` / `.svg` (grid to copy a 21x21 SeedQR by hand). To add: a sheet to write down 12 and 24 word lists (numbered, with room for the passphrase hint and the fingerprint), larger QR grids (25x25 for the 12 word SeedQR and the 24 word Compact SeedQR, 29x29 for the 24 word SeedQR; 21x21 is the 12 word Compact SeedQR), maybe Shamir share and XOR input sheets. Print tested on A4 and Letter |
+| ADDRESSES: address kept while shown | Done on 2026-11-15 (+168 B flash, +56 B RAM): the address on screen is kept (`shown_address()`, bound to chain, index and script, dropped when the branch nodes are derived again and on unload), so its QR and the way back to the text no longer derive it again. Device test: QR and back are instant; UP / DOWN still derive; change account, script (NATIVE / NESTED) and passphrase, then check the address changed |
 | Version 2.0 final | Release notes, `cVersion` |
 | Reproducible build | Checked on 2026-11-15 (commit 1ff84f6): two fresh clones, one in a path with a space, and the working tree gave the same `.hex` (SHA-256 e337388c...561befef); procedure, tool versions and the table of releases in `docs/reproducible-build.md`. To do at the first release: repeat it on the release tag, ideally also on another computer with a clean MPLAB X 6.35 / XC32 5.10 install, and publish the hash with its LMS index (WalletScrutiny verification). Do not use XC32 PRO `-Os`: verifiers would need the PRO license |
 
@@ -70,7 +72,7 @@ UPDATE FIRMWARE, QR READER on a Compact SeedQR, BIP85 PASSWORD with index 10.
 | Task | Notes |
 |---|---|
 | Vault HTML recovery page | It exists, needs a revision; it must read records by the bitmap (old versions stay on the card until reused) |
-| Encrypted SD seed slots | Done on 2026-11-15 (+1,128 B flash, +8 B RAM), not tried on the board. SEED BACKUP > ENCRYPTED (KEF) encrypts as the encrypted QR, then SHOW QR or SAVE TO SD CARD (the same slot list); the slot holds the KEF text (readable by Krux), every load from SD asks its key; XOR slots stay, behind the setting renamed UNENCRYPTED SD SAVE; the key is asked every time. Device test: save to SD, load it in LOAD, XOR, Shamir merge and BIP85, wrong key and BACK on the key, overwrite question on a KEF slot, "KEF" in the previews, INITIALIZE counts it, SHOW QR then SAVE TO SD from the same menu, its QR opened in Krux |
+| Encrypted SD seed slots | Done on 2026-11-15 (+1,128 B flash, +8 B RAM); saving to SD and loading back tried on the board, looks right. SEED BACKUP > ENCRYPTED (KEF) encrypts as the encrypted QR, then SHOW QR or SAVE TO SD CARD (the same slot list); the slot holds the KEF text (readable by Krux), every load from SD asks its key; XOR slots stay, behind the setting renamed UNENCRYPTED SD SAVE; the key is asked every time. Device test: save to SD, load it in LOAD, XOR, Shamir merge and BIP85, wrong key and BACK on the key, overwrite question on a KEF slot, "KEF" in the previews, INITIALIZE counts it, SHOW QR then SAVE TO SD from the same menu, its QR opened in Krux |
 | Vault entry with a password's recipe | Keeps only format, length and index of a BIP85 password, regenerates it |
 | BIP85 WIF / XPRV | On demand only (~0.5 KB each, DERIVE submenu) |
 | Shamir shares and XOR results: transcript check | The same VERIFY TRANSCRIPT as new seeds |
@@ -113,17 +115,19 @@ Help line drafts:
 ## 5. Flash savings, when space runs out
 
 Full analysis of 2026-11-10 in `docs/flash-savings.md` (measuring scripts in
-`test/size/`). Nothing done yet:
+`test/size/`). Batch of 2026-11-15: 216,880 to 212,089 B (-4,791 B):
 
 | Option | Saves | Risk |
 |---|---|---|
 | More size options on the interface files | Done on 2026-11-12: 5,432 B (measured), per-file options on the 15 interface files only; cryptography and long operations untouched | Device test on 2026-11-13, looks right: QR, animated PSBT scan, SD read and write, signing. Not tried yet: the rest of the menus |
-| Small code changes (drawtext wrapper, unused SPI drivers, one scanner read, debug screen) | 3 to 4 KB (estimate) | Low |
-| Text formatter, lines in one call, key helpers | 3 to 5 KB (estimate) | Low |
-| One GCM authentication path (header and data) | ~0.7 KB | Low |
+| Small code changes (drawtext wrapper, unused SPI drivers, one scanner read, debug screen) | Done on 2026-11-15: `text_at()` 2,784 B, SPI1 and SPI3 without interrupt mode in MCC 904 B (and 80 B of RAM), one scanner read (`qr_read_raw()` for the seed QR and SCAN ADDRESS) 475 B; the debug screen was never linked (source removed, 0 B). Device test pending: every seed QR (SeedQR, Compact, KEF, words; from LOAD and as XOR / Shamir input; BACK while waiting), SCAN ADDRESS, a look at every screen; display and SD read and write after the SPI change | Low |
+| Text formatter, lines in one call, key helpers | Done on 2026-11-15: `strcat_num()` for the 79 lines that appended a number, 812 B | Low |
+| One GCM authentication path (header and data) | Done on 2026-11-15: `gcm_ghash_update()` in `crypto/aes/aesgcm.c` (marked Seedmate), 720 B; vault and KEF host tests byte-exact. Device test: open, save, edit, delete in an existing vault | Low |
+| SPI1 / SPI3 interrupt mode off in MCC | ~3.4 KB (estimate) | Low: `main.c` drives both modules by registers; the interrupt mode only keeps ISRs, vectors and `WriteRead` linked. Done in MCC by the user, then the display and the SD to try |
 | `main()` refactor (20.7 KB, repeated menu code) | 2-4 KB | High |
 | Soft float of `sampler.c` (~4 KB) | - | Not advised: UR needs bit exact doubles |
 
 ## 6. Housekeeping
 
-- Untracked files to decide: unused `src/crypto` files, poker tests, `bootloader/documents`, the `SPI` / `TFT` / `mainold` copies in `bootloader/src`.
+- Done on 2026-11-15 in `SW`: unused files removed, copy in `C:\Seedmate\backup_cosas_borradas` (the unused trezor-crypto files, the old `main` snapshots, archives, MCC `.bak` files, the poker test benches, the old animated QR simulator, the `debug` / `v1` / `default` build leftovers, old root files). The firmware builds to the same size and every host test passes; the Sparrow frames that `test_ur.c` reads moved to `test/psbt/sparrow_frames.txt`.
+- Still to decide, outside `SW`: `bootloader/documents`, the `SPI` / `TFT` / `mainold` copies in `bootloader/src`.

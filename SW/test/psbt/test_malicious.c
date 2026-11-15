@@ -52,6 +52,8 @@ static void draw_bip84_wrapped_text(char *t, int x, int y, int w, int l) { (void
 static void led_busy(void) {}
 static void led_done(void) {}
 static void fast_itoa(uint32_t v, char *b) { sprintf(b, "%u", (unsigned)v); }
+static void strcat_num(char *s, uint32_t v) { fast_itoa(v, s + strlen(s)); }
+static void text_at(int x, int y, const char *t, int c) { (void)x; (void)y; (void)t; (void)c; }
 
 static bool bip84_account_cached = true;
 static uint32_t bip84_master_fingerprint;

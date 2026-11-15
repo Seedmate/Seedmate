@@ -197,3 +197,29 @@ crypto-account QR about 0.6 KB, Nostr 0.5 KB, triple and obfuscation 1.6 KB.
 
 Nested segwit, taproot and legacy together are estimated at 10 to 13 KB in
 `pending.md`: the first two rows alone make room for them.
+
+## Batch of 2026-11-15 (measured)
+
+From 216,880 B to 212,089 B, -4,791 B, every host test passing:
+
+| Change | Saved |
+|---|---|
+| `text_at(x, y, text, color)` for the 520 calls of `drawtext(..., ST7735_BLACK, 1)` | 2,784 B |
+| `strcat_num()` for the 79 lines that appended a number (`fast_itoa()` + `strcat()`) | 812 B |
+| One GHASH update for GCM header and data (`gcm_ghash_update()`, `crypto/aes/aesgcm.c`) | 720 B |
+| `qr_read_raw()` as the only scanner read (seed QR with `keep_tail`, SCAN ADDRESS) | 475 B |
+| Debug screen `test_sampler_to_screen()` removed | 0 B (it was never linked) |
+
+Next, in MCC: SPI1 and SPI3 without interrupt mode. The map shows about
+1.7 KB per module kept only by the interrupt mode (`SPIx_WriteRead`, the RX
+and TX handlers and the vector dispatch), never called by the firmware, which
+drives both modules by their registers.
+
+Done on 2026-11-15: "Enable Interrupts" off in SPI1 and SPI3 (MCC), the
+interrupt manager entries off with them. Saved 904 B of flash (not the
+3.4 KB estimated: with `--gc-sections` the linker had already dropped part
+of it) and 80 B of RAM (the two `SPI_OBJECT`s and alignment), so the stack is
+back to 8,344 B. Only `SPIx_Initialize()` is linked, with the same register
+values as before. MCC also reordered the include folders (crypto before SSS):
+harmless, the only duplicates are `memzero.h` (identical) and `shamir.h`,
+which `main.c` includes as `SSS/shamir.h`.

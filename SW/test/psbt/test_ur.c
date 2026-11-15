@@ -185,7 +185,7 @@ static void test_account(void) {
 
 int main(void) {
     init_bytewords_lookup();
-    test_sparrow_frames("../animated_QR_scan/captures_pure.txt");
+    test_sparrow_frames("sparrow_frames.txt");
     test_round_trip();
     test_account();
     printf(failures ? "\n%d FAILURE(S)\n" : "\nALL TESTS PASSED\n", failures);

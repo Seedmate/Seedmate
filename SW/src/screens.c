@@ -274,23 +274,23 @@ void grid_dices(){
     
     // Row 1: Dice 1, 2, 3
     draw_mini_dice(65, 107, 1);
-    drawtext(74, 107, "=01", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(74, 107, "=01", ST7735_WHITE);
 
     draw_mini_dice(95, 107, 2);
-    drawtext(104, 107, "=10", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(104, 107, "=10", ST7735_WHITE);
 
     draw_mini_dice(125, 107, 3);
-    drawtext(134, 107, "=11", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(134, 107, "=11", ST7735_WHITE);
 
     // Row 2: Dice 4, 5, 6
     draw_mini_dice(68, 117, 4);
-    drawtext(77, 117, "=0", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(77, 117, "=0", ST7735_WHITE);
 
     draw_mini_dice(98, 117, 5);
-    drawtext(107, 117, "=1", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(107, 117, "=1", ST7735_WHITE);
 
     draw_mini_dice(125, 117, 6);
-    drawtext(134, 117, "=00", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(134, 117, "=00", ST7735_WHITE);
 }
 
 void grid_coins(){              // Heads tails
@@ -315,7 +315,7 @@ void grid_OK_only(){
 // success screens)
 void draw_title(const char *text, uint16_t color) {
     int x = (SCREEN_WIDTH - 6 * (int)strlen(text)) / 2;
-    drawtext(x < 0 ? 0 : x, 1, (char *)text, color, ST7735_BLACK, 1);
+    text_at(x < 0 ? 0 : x, 1, (char *)text, color);
 }
 
 // Two-part title (e.g. "INPUT 1/3" and the script type), centered as one
@@ -324,13 +324,13 @@ void draw_title_pair(const char *a, uint16_t color_a, const char *b, uint16_t co
     int len_b = (int)strlen(b);
     int x = (SCREEN_WIDTH - 6 * (len_a + (len_b > 0 ? 1 + len_b : 0))) / 2;
     if (x < 0) x = 0;
-    drawtext(x, 1, (char *)a, color_a, ST7735_BLACK, 1);
-    if (len_b > 0) drawtext(x + 6 * (len_a + 1), 1, (char *)b, color_b, ST7735_BLACK, 1);
+    text_at(x, 1, (char *)a, color_a);
+    if (len_b > 0) text_at(x + 6 * (len_a + 1), 1, (char *)b, color_b);
 }
 
 void version_display(){
     // Bottom right of the start screen
-    drawtext(SCREEN_WIDTH - 1 - 6 * (int)strlen(cVersion), 119, cVersion, ST7735_CYAN, ST7735_BLACK, 1);
+    text_at(SCREEN_WIDTH - 1 - 6 * (int)strlen(cVersion), 119, cVersion, ST7735_CYAN);
 }
 
 // ============================================================================
@@ -370,7 +370,7 @@ void print_titled_menu(const char *title, const char* const *options, int n_opt,
     }
     for (int i = 0; i < n_opt; i++) {
         uint16_t color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, top + i * 10, (char*)options[i], color, ST7735_BLACK, 1);
+        text_at(1, top + i * 10, (char*)options[i], color);
     }
     grid_menu2();
 }
@@ -380,9 +380,9 @@ void main_screen(int sel) {
     draw_title("SEEDMATE", ST7735_LIGHTGREY);
     for (int i = 0; i < cMAIN_n_opt; i++) {
         uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(1, 13 + i * 10, (char*)menu_main[main_menu_ids[i]], color, ST7735_BLACK, 1);
+        text_at(1, 13 + i * 10, (char*)menu_main[main_menu_ids[i]], color);
     }
-    if(SD_ready)drawtext(10, 118, "SD OK", ST7735_GREEN, ST7735_BLACK, 1);
+    if(SD_ready)text_at(10, 118, "SD OK", ST7735_GREEN);
     grid_menu1();
 }
 
@@ -448,7 +448,7 @@ void draw_bip84_wrapped_text(const char *text, int x, int y,
 
         memcpy(line, &text[offset], copy_length);
         line[copy_length] = '\0';
-        drawtext(x, y + (line_index * 9), line, ST7735_WHITE, ST7735_BLACK, 1);
+        text_at(x, y + (line_index * 9), line, ST7735_WHITE);
         offset += copy_length;
     }
 }
@@ -518,9 +518,9 @@ void grid_scan_back(void) {
 void print_update_fw_warning(void) {
     black_screen();
     draw_title("SYSTEM UPDATE", ST7735_LIGHTGREY);
-    drawtext(10, 45, "1. INSERT SD CARD", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(10, 60, "   WITH UPDATE.HEX AND", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(10, 75, "   UPDATE.SIG FILES", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(10, 45, "1. INSERT SD CARD", ST7735_WHITE);
+    text_at(10, 60, "   WITH UPDATE.HEX AND", ST7735_WHITE);
+    text_at(10, 75, "   UPDATE.SIG FILES", ST7735_WHITE);
     grid_confirm("UPDT");
 }
 
@@ -537,7 +537,7 @@ void draw_card_bit_counter(void) {
     memcpy(counter_text, current_bits, 3);
     counter_text[3] = '/';
     memcpy(&counter_text[4], target_bit_count, strlen(target_bit_count) + 1);
-    drawtext(45, 15, counter_text, ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(45, 15, counter_text, ST7735_WHITE);
 
 }
 
@@ -547,12 +547,12 @@ void draw_card_selection(void) {
     uint16_t rank_color = (card_field_pointer == 0) ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t suit_color = (card_field_pointer == 1) ? ST7735_ORANGE : ST7735_WHITE;
 
-    drawtext(1, 25, "CARD:", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(1, 25, "CARD:", ST7735_WHITE);
     char rank_text[2] = { card_rank_chars[card_rank_pointer], '\0' };
     char suit_text[2] = { card_suit_chars[card_suit_pointer], '\0' };
-    drawtext(40, 25, rank_text, rank_color, ST7735_BLACK, 1);
-    drawtext(48, 25, suit_text, suit_color, ST7735_BLACK, 1);
-    drawtext(62, 25, "BITS:", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(40, 25, rank_text, rank_color);
+    text_at(48, 25, suit_text, suit_color);
+    text_at(62, 25, "BITS:", ST7735_WHITE);
 
     // Manual padding to save memory
     char padded_bits[6] = "     "; // 5 leading spaces plus null terminator
@@ -560,7 +560,7 @@ void draw_card_selection(void) {
         padded_bits[i] = bits[i];
     }
 
-    drawtext(96, 25, padded_bits, ST7735_CYAN, ST7735_BLACK, 1);
+    text_at(96, 25, padded_bits, ST7735_CYAN);
 }
 
 void draw_shared_entropy_building(void) {
@@ -590,17 +590,17 @@ void draw_shared_entropy_building(void) {
             int abs_idx = completed_words * 11 + i;
             uint16_t color = (abs_idx >= bit_count_dice - last_input_len) ? ST7735_MAGENTA : ST7735_ORANGE;
             char single_char[2] = { read_entropy_bit(data_array_256b, abs_idx) ? '1' : '0', '\0' };
-            drawtext(cursor_x, 35, single_char, color, ST7735_BLACK, 1);
+            text_at(cursor_x, 35, single_char, color);
             cursor_x += 6;
         }
         // Pad spaces to overwrite any trailing characters
         char pad_str[24] = {0};
         for (int p = 0; p < 20 - remaining_bits; p++) pad_str[p] = ' ';
-        drawtext(cursor_x, 35, pad_str, ST7735_BLACK, ST7735_BLACK, 1);
+        text_at(cursor_x, 35, pad_str, ST7735_BLACK);
     } else if (bit_count_dice == 0) {
         // Draw a solid black row to clear TFT pixels before writing
         rectan(0, 35, 159, 44, BLACK); 
-        drawtext(1, 35, "WAITING FOR INPUT...", ST7735_GREY, ST7735_BLACK, 1); 
+        text_at(1, 35, "WAITING FOR INPUT...", ST7735_GREY); 
     } else {
         // Clears the active row cleanly when bits exactly match a word boundary
         rectan(0, 35, 159, 44, BLACK); 
@@ -636,7 +636,7 @@ void draw_shared_entropy_building(void) {
                     uint16_t color = is_purple ? ST7735_MAGENTA : ST7735_GREEN;
                     
                     char single_char[2] = { read_entropy_bit(data_array_256b, abs_idx) ? '1' : '0', '\0' };
-                    drawtext(cursor_x, y_offset, single_char, color, ST7735_BLACK, 1);
+                    text_at(cursor_x, y_offset, single_char, color);
                     cursor_x += 6;
                 }
 
@@ -661,7 +661,7 @@ void draw_shared_entropy_building(void) {
                 }
                 buf[pos] = '\0';
 
-                drawtext(cursor_x, y_offset, buf, ST7735_GREEN, ST7735_BLACK, 1);
+                text_at(cursor_x, y_offset, buf, ST7735_GREEN);
             } else {
                 // No word exists for this slot, print a solid black row to erase the TFT pixels completely
                 rectan(0, y_offset, 159, y_offset + 9, BLACK);
@@ -697,14 +697,14 @@ void print_diceroll_screen(int sel, int sel2){
             grid_dices();
             draw_dice_back_hint(false);     // The screen starts with no rolls
         }
-        drawtext(45,15, text_bits, ST7735_WHITE, ST7735_BLACK, 1);
+        text_at(45,15, text_bits, ST7735_WHITE);
         draw_shared_entropy_building();
 }
 
 // Holding BACK cannot be shown in the grid, where BACK is a die face: a note at its left
 void draw_dice_back_hint(bool can_delete) {
-    drawtext(1, 107, "HOLD BACK", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(1, 117, can_delete ? "TO DELETE" : "TO LEAVE ", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(1, 107, "HOLD BACK", ST7735_WHITE);
+    text_at(1, 117, can_delete ? "TO DELETE" : "TO LEAVE ", ST7735_WHITE);
 }
 
 void print_TMR_screen(int size_TMR){
@@ -712,33 +712,33 @@ void print_TMR_screen(int size_TMR){
     // sel: 0 -> 128 bits, 1 -> 256 bits
     draw_title("STOP TIMER TO SET ENTROPY", ST7735_LIGHTGREY);
     char *text_TMR_SEED = size_TMR ? "000/256 bits" : "000/128 bits";
-    drawtext(45,15, text_TMR_SEED, ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(45,15, text_TMR_SEED, ST7735_WHITE);
     grid_labels(NULL, NULL, "STOP", NULL, NULL, NULL);
 }
 
 void print_child_config_screen(void) {
     draw_title((char*)menu_main[cMAIN_BIP85], ST7735_LIGHTGREY);
-    drawtext(1, 13, "CHILD SIZE:", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(80, 13, "BIP85 INDEX:", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(1, 13, "CHILD SIZE:", ST7735_WHITE);
+    text_at(80, 13, "BIP85 INDEX:", ST7735_WHITE);
 
     uint16_t size_color = (bip85_cursor == 0) ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t index_color = (bip85_cursor == 1) ? ST7735_ORANGE : ST7735_WHITE;
 
     const char *size_str = (bip85_size == cSIZE_12) ? "12 WORDS" : "24 WORDS";
-    drawtext(10, 30, (char*)size_str, size_color, ST7735_BLACK, 1);
+    text_at(10, 30, (char*)size_str, size_color);
 
     char index_str[12];
     u16_to_str((unsigned int)bip85_index, index_str);
     rectan(80, 30, 159, 38, BLACK); // clear index area
-    drawtext(100, 30, index_str, index_color, ST7735_BLACK, 1);
+    text_at(100, 30, index_str, index_color);
 
     grid_bip85();
 }
 
 void print_obfus_config_screen(void) {
     draw_title((char*)menu_obfus[obfuscation_pointer], ST7735_LIGHTGREY);
-    drawtext(1, 13, "OPERATION:", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(100, 13, "AMOUNT:", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(1, 13, "OPERATION:", ST7735_WHITE);
+    text_at(100, 13, "AMOUNT:", ST7735_WHITE);
 
     uint16_t op_color = (obfus_cursor == 0) ? ST7735_ORANGE : ST7735_WHITE;
     uint16_t amt_color = (obfus_cursor == 1) ? ST7735_ORANGE : ST7735_WHITE;
@@ -750,12 +750,12 @@ void print_obfus_config_screen(void) {
         op_str = (obfus_dir_op == 0) ? "ADD WORDS" : "SUB WORDS";
     }
     
-    drawtext(10, 30, (char*)op_str, op_color, ST7735_BLACK, 1);
+    text_at(10, 30, (char*)op_str, op_color);
 
     char amt_str[12];
     u16_to_str((unsigned int)obfus_amount, amt_str);
     rectan(100, 30, 159, 38, BLACK); // clear amount area
-    drawtext(100, 30, amt_str, amt_color, ST7735_BLACK, 1);
+    text_at(100, 30, amt_str, amt_color);
 
     grid_bip85(); // Left/Right/Up/Down/OK/Back
 }
@@ -785,7 +785,7 @@ void print_dice_string_counter(int current_len, int target) {
     
     // Adjusted X coordinate from 50 to 20 to keep it centered 
     // and prevent overflowing the 160px width
-    drawtext(20, 5, counter_text, ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(20, 5, counter_text, ST7735_WHITE);
 }
 
 // Update only number selection
@@ -795,7 +795,7 @@ void print_dice_string_keyboard(int sel, int current_len, int target) {
     
     for(int i = 0; i < 6; i++) {
         uint16_t color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(kx[i], 90, (char*)keys[i], color, ST7735_BLACK, 1);
+        text_at(kx[i], 90, (char*)keys[i], color);
     }
     // DONE color logic
     uint16_t done_color;
@@ -807,7 +807,7 @@ void print_dice_string_keyboard(int sel, int current_len, int target) {
         done_color = ST7735_GREY;   // Not enough rolls yet
     }
     
-    drawtext(130, 90, "DONE", done_color, ST7735_BLACK, 1);
+    text_at(130, 90, "DONE", done_color);
 }
 
 // Only update the modified character to speed up
@@ -852,7 +852,7 @@ void update_dice_string_char(int index, char c, bool is_delete) {
         }
     }
     
-    drawtext(x, y, single_char, color, ST7735_BLACK, 1);
+    text_at(x, y, single_char, color);
 }
 
 void init_dice_string_input_screen(int sel, const char* str, int target) {
@@ -866,6 +866,13 @@ void init_dice_string_input_screen(int sel, const char* str, int target) {
     
     print_dice_string_keyboard(sel, len, target);
     grid_keyboard_dice_hash();
+}
+
+// drawtext() on black at size 1, the case of nearly every call: four
+// arguments instead of six spare the two stack stores of each of the 500
+// calls (about 4 KB). Not inlined, or the saving would be undone.
+__attribute__((noinline)) void text_at(unsigned int x, unsigned int y, const char *text, unsigned int color) {
+    drawtext(x, y, (char *)text, color, ST7735_BLACK, 1);
 }
 
 void black_screen(){
@@ -1014,7 +1021,7 @@ void draw_xpub_qr(const char *text) {
 
 void show_word_list_retry_error(void) {
     black_screen();
-    drawtext(10,10, INCORRECT_MSG, ST7735_RED, ST7735_BLACK, 1);
+    text_at(10,10, INCORRECT_MSG, ST7735_RED);
     grid_labels(NULL, NULL, "TRY", NULL, NULL, NULL);     // Any key tries again
 }
 
@@ -1048,7 +1055,7 @@ void print_keyboard(int index, bool word_found, bool *valid_letters){
             color = ST7735_GREY;
         }
         
-        drawtext(print_index_x,print_index_y, letter_text, color, ST7735_BLACK, 1);
+        text_at(print_index_x,print_index_y, letter_text, color);
         if (print_index_x > (cEND_OF_LINE - 30)){
             print_index_x = 10;
             print_index_y = print_index_y +15;
@@ -1059,10 +1066,10 @@ void print_keyboard(int index, bool word_found, bool *valid_letters){
     }
     if (word_found){
         color = (current_index == index) ? ST7735_ORANGE : ST7735_GREEN;
-        drawtext(print_index_x,print_index_y, OK_MSG, color, ST7735_BLACK, 1);
+        text_at(print_index_x,print_index_y, OK_MSG, color);
     } else {
         color = (current_index == index) ? ST7735_ORANGE : ST7735_GREY;
-        drawtext(print_index_x,print_index_y, OK_MSG, color, ST7735_BLACK, 1);
+        text_at(print_index_x,print_index_y, OK_MSG, color);
     }
 
 
@@ -1072,7 +1079,7 @@ void print_keyboard(int index, bool word_found, bool *valid_letters){
 void update_dice_bit_count_display(int bit_count_dice_local){
     char bit_count_text[4]; // 3 digits plus null terminator
     u16_to_str_pad((unsigned int)bit_count_dice_local, bit_count_text, 3);
-    drawtext(45,15, bit_count_text, ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(45,15, bit_count_text, ST7735_WHITE);
 }
 
 // ============================================================================
@@ -1136,9 +1143,9 @@ void print_logo(void) {
         delay_ms(20);
     }
     delay_ms(250);
-    drawtext((SCREEN_WIDTH - 6 * 15) / 2, LOGO_Y + LOGO_SIZE + 8, "S E E D M A T E", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at((SCREEN_WIDTH - 6 * 15) / 2, LOGO_Y + LOGO_SIZE + 8, "S E E D M A T E", ST7735_WHITE);
     delay_ms(250);
-    drawtext((SCREEN_WIDTH - 6 * 16) / 2, LOGO_Y + LOGO_SIZE + 26, "PRESS ANY BUTTON", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at((SCREEN_WIDTH - 6 * 16) / 2, LOGO_Y + LOGO_SIZE + 26, "PRESS ANY BUTTON", ST7735_WHITE);
     version_display();
 }
 
@@ -1308,7 +1315,7 @@ int draw_text_qr_view(const char *text, int tile) {
 void print_word_number_top(int word_number, char *word_number_text) {
     if (capturing_xor_word) {
         rectan(10, 10, 59, 18, BLACK); // Clear header area
-        drawtext(5, 10, "XOR WORD:", ST7735_WHITE, ST7735_BLACK, 1);
+        text_at(5, 10, "XOR WORD:", ST7735_WHITE);
         return; // Abort standard drawing
     }
     char suffix;
@@ -1332,14 +1339,14 @@ void print_word_number_top(int word_number, char *word_number_text) {
     }
 
     rectan(40,10,59,18,BLACK);
-    drawtext(40,10, word_number_text, ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(40,10, word_number_text, ST7735_WHITE);
 }
 
 void print_selkn_screen(int k, int n, int sel){
     char k_text[3];
     char n_text[3];
     draw_title("SHAMIR SPLIT", ST7735_LIGHTGREY);
-    drawtext(10,15, "SELECT ( K , N ):", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(10,15, "SELECT ( K , N ):", ST7735_WHITE);
     u16_to_str((unsigned int)k, k_text);
     u16_to_str((unsigned int)n, n_text);
     int color_k = (sel==0) ? ST7735_ORANGE : ST7735_WHITE;
@@ -1353,7 +1360,7 @@ void print_selkn_screen(int k, int n, int sel){
 void print_selk_screen(int k){
     char k_text[3];
     draw_title("SHAMIR MERGE", ST7735_LIGHTGREY);
-    drawtext(0,15, "N. OF SHARES NEEDED (K):", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(0,15, "N. OF SHARES NEEDED (K):", ST7735_WHITE);
     u16_to_str((unsigned int)k, k_text);
     drawtext(70,30, k_text, ST7735_ORANGE, ST7735_BLACK, 2);
     grid_nbits();
@@ -1362,7 +1369,7 @@ void print_selk_screen(int k){
 
 void print_sel_share_screen(int k){
     char k_text[3];
-    drawtext(0,15, "SHARE ID:", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(0,15, "SHARE ID:", ST7735_WHITE);
     u16_to_str((unsigned int)k, k_text);
     drawtext(70,30, k_text, ST7735_ORANGE, ST7735_BLACK, 2);
     grid_nbits_noback();
@@ -1380,7 +1387,7 @@ void print_slots(int sel){
         u16_to_str(slot_num, &line[4]);
 
         uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
-        drawtext(3, 20 + i * 10, line, color, ST7735_BLACK, 1);
+        text_at(3, 20 + i * 10, line, color);
 
     }
 }
@@ -1396,7 +1403,7 @@ void print_SD_preview(){
 
         if (sd_read_block(i+SD_page*cSDBLOCK_n_opt, buffer)) {
             if (sd_sector_is_kef(buffer)) {         // Encrypted seed: its size is inside
-                drawtext(48, 20 + 10*i, "KEF", ST7735_CYAN, ST7735_BLACK, 1);
+                text_at(48, 20 + 10*i, "KEF", ST7735_CYAN);
                 continue;
             }
             checksum_SD_aux = 1; // Reset checksum and account for the checksum byte
@@ -1408,12 +1415,12 @@ void print_SD_preview(){
             if (checksum_SD_aux==buffer[cSD_CHECKSUM_ADDR]){
                 size_pointer_aux=buffer[cSD_SIZE_ADDR];
                         if (size_pointer_aux==cSIZE_12){// 12 words
-                            drawtext(48, 20 + 10*i, "12W", ST7735_CYAN, ST7735_BLACK, 1);
+                            text_at(48, 20 + 10*i, "12W", ST7735_CYAN);
                         }   else {
-                            drawtext(48, 20 + 10*i, "24W", ST7735_CYAN, ST7735_BLACK, 1);
+                            text_at(48, 20 + 10*i, "24W", ST7735_CYAN);
                         }
             }   else {
-                drawtext(48, 20 + 10*i, "   ", ST7735_CYAN, ST7735_BLACK, 1);
+                text_at(48, 20 + 10*i, "   ", ST7735_CYAN);
             }
         } else {
             break;
@@ -1450,7 +1457,7 @@ void sel_sd_block_screen_wr(int sel) {
     draw_title("SELECT SLOT TO WRITE", ST7735_LIGHTGREY);
     // Paint 8 lines "SLOT <num>"
     print_slots(sel);
-    if (SD_page == 0) drawtext(70, 20, "READ ONLY", ST7735_GREY, ST7735_BLACK, 1);     // Legacy slot
+    if (SD_page == 0) text_at(70, 20, "READ ONLY", ST7735_GREY);     // Legacy slot
     print_SD_preview();
     grid_menuwr();
 }
@@ -1460,7 +1467,7 @@ void sel_sd_block_screen_merge(int sel,int id) {
     char merge_text[25];
     memcpy(merge_text, "SELECT SLOT ID:", 15);
     u16_to_str((unsigned int)id, &merge_text[15]);
-    drawtext(1, 10 , merge_text, ST7735_ORANGE, ST7735_BLACK, 1);
+    text_at(1, 10 , merge_text, ST7735_ORANGE);
     print_slots(sel);
     print_SD_preview();
     grid_menu2_merge();
@@ -1482,19 +1489,19 @@ void print_settings_screen(int sel) {
     uint16_t color_fw = (sel == cSETTINGS_UPDATE_FW) ? ST7735_ORANGE : ST7735_WHITE;
 
     draw_title((char*)menu_main[cMAIN_SETTINGS], ST7735_LIGHTGREY);
-    drawtext(1, 13, text_seedqr, color_seedqr, ST7735_BLACK, 1);
-    drawtext(1, 23, text_sdwrite, color_sdwrite, ST7735_BLACK, 1);
-    drawtext(1, 33, text_decoy, color_decoy, ST7735_BLACK, 1);
-    drawtext(1, 43, text_stopwatch, color_stopwatch, ST7735_BLACK, 1);
+    text_at(1, 13, text_seedqr, color_seedqr);
+    text_at(1, 23, text_sdwrite, color_sdwrite);
+    text_at(1, 33, text_decoy, color_decoy);
+    text_at(1, 43, text_stopwatch, color_stopwatch);
     strcpy(text_idle, "AUTO UNLOAD: ");
     strcat(text_idle, menu_idle[idle_option]);
-    drawtext(1, 53, text_idle, color_idle, ST7735_BLACK, 1);
+    text_at(1, 53, text_idle, color_idle);
     strcpy(text_idle, menu_settings_kef);
     strcat(text_idle, ": ");
     u16_to_str((unsigned int)kef_steps * cKEF_ITER_STEP, &text_idle[strlen(text_idle)]);
-    drawtext(1, 63, text_idle, color_kef, ST7735_BLACK, 1);
-    drawtext(1, 73, "MCU SERIAL NUMBER", color_serial, ST7735_BLACK, 1);
-    drawtext(1, 83, "UPDATE FIRMWARE", color_fw, ST7735_BLACK, 1);
+    text_at(1, 63, text_idle, color_kef);
+    text_at(1, 73, "MCU SERIAL NUMBER", color_serial);
+    text_at(1, 83, "UPDATE FIRMWARE", color_fw);
 
     // Versions at the bottom left, next to the button grid: this firmware and
     // the bootloader, whose tag it keeps at a fixed boot flash address
@@ -1503,11 +1510,11 @@ void print_settings_screen(int sel) {
     const char *tag = (const char *)BOOT_TAG_ADDRESS;
     strcpy(text, "FW ");
     strcat(text, cVersion);
-    drawtext(5, 107, text, ST7735_CYAN, ST7735_BLACK, 1);
+    text_at(5, 107, text, ST7735_CYAN);
     strcpy(text, "BOOT ");
     if (memcmp(tag, "BOOT ", 5) == 0 && tag[15] == 0) strcat(text, tag + 5);
     else strcat(text, "?");
-    drawtext(5, 117, text, ST7735_CYAN, ST7735_BLACK, 1);
+    text_at(5, 117, text, ST7735_CYAN);
 
     grid_menu2();
 }
@@ -1526,19 +1533,19 @@ void print_seedqr_warning(const char *ok_label) {
 // allows it is enabled); BACK cancels, OK does ok_label
 void print_sd_warning(const char *ok_label) {
     black_screen();
-    drawtext(1, 10, "SEED ON SD: NOT ENCRYPTED", ST7735_YELLOW, ST7735_BLACK, 1);
-    drawtext(1, 25, "ERASE IT AFTER USE, OR", ST7735_YELLOW, ST7735_BLACK, 1);
-    drawtext(1, 40, "KEEP IT APART FROM THIS", ST7735_YELLOW, ST7735_BLACK, 1);
-    drawtext(1, 55, "DEVICE, NEVER IN A PC", ST7735_YELLOW, ST7735_BLACK, 1);
+    text_at(1, 10, "SEED ON SD: NOT ENCRYPTED", ST7735_YELLOW);
+    text_at(1, 25, "ERASE IT AFTER USE, OR", ST7735_YELLOW);
+    text_at(1, 40, "KEEP IT APART FROM THIS", ST7735_YELLOW);
+    text_at(1, 55, "DEVICE, NEVER IN A PC", ST7735_YELLOW);
     grid_confirm(ok_label);
 }
 
 // A function that is not available, and why (red title, the reason below)
 void print_blocked(const char *l1, const char *l2, const char *l3) {
     black_screen();
-    drawtext(1, 20, (char*)l1, ST7735_RED, ST7735_BLACK, 1);
-    drawtext(1, 40, (char*)l2, ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(1, 50, (char*)l3, ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(1, 20, (char*)l1, ST7735_RED);
+    text_at(1, 40, (char*)l2, ST7735_WHITE);
+    text_at(1, 50, (char*)l3, ST7735_WHITE);
     grid_OK_back();
 }
 
@@ -1549,9 +1556,9 @@ void print_slot_in_use(int slot) {
     strcpy(text, "SLOT ");
     u16_to_str((unsigned int)slot, &text[5]);
     strcat(text, " IS IN USE");
-    drawtext(1, 10, text, ST7735_RED, ST7735_BLACK, 1);
-    drawtext(1, 30, "THE CURRENT SEED WILL BE", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(1, 40, "LOST IF YOU OVERWRITE IT", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(1, 10, text, ST7735_RED);
+    text_at(1, 30, "THE CURRENT SEED WILL BE", ST7735_WHITE);
+    text_at(1, 40, "LOST IF YOU OVERWRITE IT", ST7735_WHITE);
     grid_confirm("OVER");
 }
 
@@ -1560,12 +1567,12 @@ void print_slot_in_use(int slot) {
 static void draw_seeds_found(int y, uint32_t seeds) {
     char text[28];
     if (seeds == 0) {
-        drawtext(1, y, "NO SEEDS FOUND ON IT", ST7735_WHITE, ST7735_BLACK, 1);
+        text_at(1, y, "NO SEEDS FOUND ON IT", ST7735_WHITE);
         return;
     }
     u16_to_str((unsigned int)seeds, text);
     strcat(text, (seeds == 1) ? " SEED WILL BE ERASED" : " SEEDS WILL BE ERASED");
-    drawtext(1, y, text, ST7735_RED, ST7735_BLACK, 1);
+    text_at(1, y, text, ST7735_RED);
 }
 
 // Red warning before the first 1 MB of the card is erased and it is marked as
@@ -1573,12 +1580,12 @@ static void draw_seeds_found(int y, uint32_t seeds) {
 void print_sd_init_warning(uint32_t seeds) {
     black_screen();
     draw_title((char*)menu_erase[cERASE_INIT], ST7735_LIGHTGREY);
-    drawtext(1, 14, "ERASES THE FIRST 1 MB OF", ST7735_RED, ST7735_BLACK, 1);
-    drawtext(1, 24, "THE CARD: ALL SEEDS, THE", ST7735_RED, ST7735_BLACK, 1);
-    drawtext(1, 34, "VAULT AND THE FILE SYSTEM", ST7735_RED, ST7735_BLACK, 1);
-    drawtext(1, 44, "(FORMAT). CANNOT BE UNDONE", ST7735_RED, ST7735_BLACK, 1);
-    drawtext(1, 62, "THEN THE CARD ACCEPTS", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(1, 72, "SEEDS FROM THIS DEVICE", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(1, 14, "ERASES THE FIRST 1 MB OF", ST7735_RED);
+    text_at(1, 24, "THE CARD: ALL SEEDS, THE", ST7735_RED);
+    text_at(1, 34, "VAULT AND THE FILE SYSTEM", ST7735_RED);
+    text_at(1, 44, "(FORMAT). CANNOT BE UNDONE", ST7735_RED);
+    text_at(1, 62, "THEN THE CARD ACCEPTS", ST7735_WHITE);
+    text_at(1, 72, "SEEDS FROM THIS DEVICE", ST7735_WHITE);
     draw_seeds_found(88, seeds);
     grid_confirm("INIT");
 }
@@ -1591,11 +1598,11 @@ void print_sd_wipe_warning(uint32_t mb_total, uint32_t seeds) {
     strcpy(text, "CARD SIZE: ");
     u16_to_str((unsigned int)mb_total, &text[11]);
     strcat(text, " MB");
-    drawtext(1, 14, text, ST7735_CYAN, ST7735_BLACK, 1);
-    drawtext(1, 30, "ERASES THE WHOLE SD CARD:", ST7735_RED, ST7735_BLACK, 1);
-    drawtext(1, 40, "ALL SEEDS, THE VAULT AND", ST7735_RED, ST7735_BLACK, 1);
-    drawtext(1, 50, "THE FILE SYSTEM (FORMAT)", ST7735_RED, ST7735_BLACK, 1);
-    drawtext(1, 60, "THIS CANNOT BE UNDONE", ST7735_RED, ST7735_BLACK, 1);
+    text_at(1, 14, text, ST7735_CYAN);
+    text_at(1, 30, "ERASES THE WHOLE SD CARD:", ST7735_RED);
+    text_at(1, 40, "ALL SEEDS, THE VAULT AND", ST7735_RED);
+    text_at(1, 50, "THE FILE SYSTEM (FORMAT)", ST7735_RED);
+    text_at(1, 60, "THIS CANNOT BE UNDONE", ST7735_RED);
     draw_seeds_found(78, seeds);
     grid_confirm("WIPE");
 }
@@ -1603,9 +1610,9 @@ void print_sd_wipe_warning(uint32_t mb_total, uint32_t seeds) {
 // The card was initialized: seeds can be written to it
 void print_sd_initialized(void) {
     black_screen();
-    drawtext(1, 20, "CARD INITIALIZED", ST7735_GREEN, ST7735_BLACK, 1);
-    drawtext(1, 40, "SEEDS CAN BE WRITTEN TO", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(1, 50, "SLOTS 2 TO 200", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(1, 20, "CARD INITIALIZED", ST7735_GREEN);
+    text_at(1, 40, "SEEDS CAN BE WRITTEN TO", ST7735_WHITE);
+    text_at(1, 50, "SLOTS 2 TO 200", ST7735_WHITE);
     grid_OK_back();
 }
 
@@ -1617,15 +1624,15 @@ void print_derive_info(uint32_t fingerprint) {
 
     black_screen();
     draw_title((char*)menu_main[cMAIN_BIP85], ST7735_LIGHTGREY);
-    drawtext(1, 22, "DERIVED FROM", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(1, 32, "FINGERPRINT", ST7735_WHITE, ST7735_BLACK, 1);
+    text_at(1, 22, "DERIVED FROM", ST7735_WHITE);
+    text_at(1, 32, "FINGERPRINT", ST7735_WHITE);
     u16_to_hex4((uint16_t)(fingerprint >> 16), fgp);
     u16_to_hex4((uint16_t)(fingerprint & 0xFFFF), fgp + 4);
     fgp[8] = '\0';
     drawtext(1, 46, fgp, ST7735_GREEN, ST7735_BLACK, 2);
     strcpy(text, (bip85_size == cSIZE_12) ? "12 WORDS, INDEX " : "24 WORDS, INDEX ");
     u16_to_str((unsigned int)bip85_index, &text[16]);
-    drawtext(1, 72, text, ST7735_CYAN, ST7735_BLACK, 1);
+    text_at(1, 72, text, ST7735_CYAN);
     grid_confirm("SHOW");
 }
 
@@ -1646,11 +1653,11 @@ void print_text_seed_warning(void) {
 void print_unload_confirm(void) {
     black_screen();
     draw_title("UNLOAD SEED?", ST7735_RED);
-    drawtext(1, 20, "WIPES THE SEED, ITS", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(1, 30, "PASSPHRASE, ITS KEYS AND", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(1, 40, "THE WALLET FROM MEMORY", ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(1, 58, "BACK IT UP FIRST IF YOU", ST7735_YELLOW, ST7735_BLACK, 1);
-    drawtext(1, 68, "STILL NEED IT", ST7735_YELLOW, ST7735_BLACK, 1);
+    text_at(1, 20, "WIPES THE SEED, ITS", ST7735_WHITE);
+    text_at(1, 30, "PASSPHRASE, ITS KEYS AND", ST7735_WHITE);
+    text_at(1, 40, "THE WALLET FROM MEMORY", ST7735_WHITE);
+    text_at(1, 58, "BACK IT UP FIRST IF YOU", ST7735_YELLOW);
+    text_at(1, 68, "STILL NEED IT", ST7735_YELLOW);
     grid_confirm("WIPE");
 }
 
@@ -1712,13 +1719,13 @@ void print_setting_confirm(int row, bool new_on, int idle_sel) {
         l2 = new_on ? "TO SKIP IT HOLD THESE TWO" : "SEEDMATE";
         l3 = new_on ? "KEYS WHILE TURNING ON" : "";
     }
-    drawtext(5, 14, (char*)name, ST7735_CYAN, ST7735_BLACK, 1);
-    drawtext(1, 30, "PERMANENT SETTING:", ST7735_YELLOW, ST7735_BLACK, 1);
-    drawtext(1, 40, "KEPT AFTER POWER OFF AND", ST7735_YELLOW, ST7735_BLACK, 1);
-    drawtext(1, 50, "AFTER FIRMWARE UPDATES", ST7735_YELLOW, ST7735_BLACK, 1);
-    drawtext(1, 68, (char*)l1, body, ST7735_BLACK, 1);
-    drawtext(1, 78, (char*)l2, body, ST7735_BLACK, 1);
-    drawtext(1, 88, (char*)l3, body, ST7735_BLACK, 1);
+    text_at(5, 14, (char*)name, ST7735_CYAN);
+    text_at(1, 30, "PERMANENT SETTING:", ST7735_YELLOW);
+    text_at(1, 40, "KEPT AFTER POWER OFF AND", ST7735_YELLOW);
+    text_at(1, 50, "AFTER FIRMWARE UPDATES", ST7735_YELLOW);
+    text_at(1, 68, (char*)l1, body);
+    text_at(1, 78, (char*)l2, body);
+    text_at(1, 88, (char*)l3, body);
     if (row == cSETTINGS_DECOY && new_on) draw_skip_keys();
     grid_confirm("SAVE");
 }
@@ -1740,7 +1747,7 @@ void print_mcu_serial_screen(void) {
     // Draw the chunks consecutively
     for (int i = 0; i < 4; i++) {
         u16_to_hex4(parts[i], hex_buf);
-        drawtext(x_pos, 13, hex_buf, ST7735_CYAN, ST7735_BLACK, 1);
+        text_at(x_pos, 13, hex_buf, ST7735_CYAN);
         x_pos += 26; // Advance cursor (4 chars * 6px + 2px spacing)
     }
 
@@ -1754,7 +1761,7 @@ void print_mcu_serial_screen(void) {
     line[n++] = ' ';
     line[n++] = 'B';
     line[n] = '\0';
-    drawtext(1, 30, line, peak > size / 8 * 7 ? ST7735_YELLOW : ST7735_CYAN, ST7735_BLACK, 1);
+    text_at(1, 30, line, peak > size / 8 * 7 ? ST7735_YELLOW : ST7735_CYAN);
 
     grid_OK_back();                 // Either key returns to SETTINGS
 }
@@ -1772,7 +1779,7 @@ void print_card_encoding_screen(void) {
         decks_str[pos++] = num[i];
     }
     decks_str[pos] = '\0';
-    drawtext(1, 12, decks_str, ST7735_GREEN, ST7735_BLACK, 1);
+    text_at(1, 12, decks_str, ST7735_GREEN);
     
     int cards_per_page = 32; // 8 per line, 4 lines 
     int start_idx = card_view_page * cards_per_page;
@@ -1797,7 +1804,7 @@ void print_card_encoding_screen(void) {
         uint16_t color = ST7735_WHITE;
         if ((card_idx / 13) == 1 || (card_idx / 13) == 2) color = ST7735_RED; // Diamonds/Hearts 
         
-        drawtext(x, y, card_str, color, ST7735_BLACK, 1);
+        text_at(x, y, card_str, color);
         x += 20;
         if (x > 145) {
             x = 5;

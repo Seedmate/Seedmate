@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 210 297" width="210mm" height="297mm">
+  <defs>
+    <style>
+      .t1 { font-family: Arial, sans-serif; font-size: 2mm; font-weight: bold; fill: #111; text-anchor: middle; }
+      .t2 { font-family: Arial, sans-serif; font-size: 1mm; fill: #555; text-anchor: middle; }
+      .lbl { font-family: Arial, sans-serif; font-size: 1.5mm; font-weight: bold; fill: #333; }
+      .bh { font-family: Arial, sans-serif; font-size: 2.5mm; font-weight: bold; fill: #000; text-anchor: middle; dominant-baseline: middle; }
+      .badge { font-family: Arial, sans-serif; font-size: 1.2mm; font-weight: bold; fill: #777; }
+      .f-fill { fill: #080808; }
+      .f-solid { fill: #0a0a0a; }
+      .tim { fill: #0a0a0a; }
+      .i-h { font-family: Arial, sans-serif; font-size: 1.8mm; font-weight: bold; fill: #222; }
+      .i-p { font-family: Arial, sans-serif; font-size: 1mm; fill: #444; }
+    </style>
+    <pattern id="g" width="7" height="7" patternUnits="userSpaceOnUse">
+      <rect width="7" height="7" fill="none" stroke="#bbb" stroke-width="0.2"/>
+    </pattern>
+  </defs>
+  <rect width="210" height="297" fill="#fff"/>
+  <!-- Header -->
+  <text x="105" y="19" class="t1">SEEDMATE &#8212; QR CODE TEMPLATE</text>
+  <text x="105" y="25" class="t2">QR Version 1 &#8226; 21 &#215; 21 Modules &#8226; 3 &#215; 3 Sub-Blocks (7 &#215; 7)</text>
+
+  <!-- Metadata -->
+  <g transform="translate(31.5, 31)">
+    <text x="0" y="4" class="lbl">NAME/ID:</text>
+    <line x1="27" y1="4" x2="68" y2="4" stroke="#888" stroke-width="0.25mm"/>
+    <text x="75" y="4" class="lbl">DATE:</text>
+    <line x1="92" y1="4" x2="114" y2="4" stroke="#888" stroke-width="0.25mm"/>
+    <text x="120" y="4" class="lbl">ID:</text>
+    <line x1="129" y1="4" x2="147" y2="4" stroke="#888" stroke-width="0.25mm"/>
+  </g>
+
+  <!-- Row/Col Headers -->
+  <text x="56" y="46" class="bh">1</text>
+  <text x="105" y="46" class="bh">2</text>
+  <text x="154" y="46" class="bh">3</text>
+  <text x="20" y="75.5" class="bh">A</text>
+  <text x="20" y="124.5" class="bh">B</text>
+  <text x="20" y="173.5" class="bh">C</text>
+  
+  <!-- Grid Area (31.5, 51.0), Size 147 x 147 mm (21 * 7mm) -->
+  <g transform="translate(31.5, 51.0)">
+    <!-- Finder Guides (A1, A3, C1) -->
+    <!-- Finder A1 -->
+    <rect x="0" y="0" width="49" height="49" class="f-fill"/>
+    <rect x="7" y="7" width="35" height="35" fill="#fff"/>
+    <rect x="14" y="14" width="21" height="21" class="f-solid"/>
+
+    <!-- Finder A3 -->
+    <rect x="98" y="0" width="49" height="49" class="f-fill"/>
+    <rect x="105" y="7" width="35" height="35" fill="#fff"/>
+    <rect x="112" y="14" width="21" height="21" class="f-solid"/>
+
+    <!-- Finder C1 -->
+    <rect x="0" y="98" width="49" height="49" class="f-fill"/>
+    <rect x="7" y="105" width="35" height="35" fill="#fff"/>
+    <rect x="14" y="112" width="21" height="21" class="f-solid"/>
+
+
+
+
+
+    <!-- Cell Grid -->
+    <rect width="147" height="147" fill="url(#g)"/>
+
+    <!-- Perimeter Border (Thin grey line) -->
+    <rect x="0" y="0" width="147" height="147" stroke="#0a0a0a" stroke-width="0.3" fill="none"/>
+    
+<!-- Top row -->
+<rect x="0" y="0" width="49" height="49" stroke="#0a0a0a" stroke-width="0.3" fill="none"/>
+<rect x="49" y="0" width="49" height="49" stroke="#0a0a0a" stroke-width="0.3" fill="none"/>
+<rect x="98" y="0" width="49" height="49" stroke="#0a0a0a" stroke-width="0.3" fill="none"/>
+
+<!-- Middle row -->
+<rect x="0" y="49" width="49" height="49" stroke="#0a0a0a" stroke-width="0.3" fill="none"/>
+<rect x="49" y="49" width="49" height="49" stroke="#0a0a0a" stroke-width="0.3" fill="none"/>
+<rect x="98" y="49" width="49" height="49" stroke="#0a0a0a" stroke-width="0.3" fill="none"/>
+
+<!-- Bottom row -->
+<rect x="0" y="98" width="49" height="49" stroke="#0a0a0a" stroke-width="0.3" fill="none"/>
+<rect x="49" y="98" width="49" height="49" stroke="#0a0a0a" stroke-width="0.3" fill="none"/>
+<rect x="98" y="98" width="49" height="49" stroke="#0a0a0a" stroke-width="0.3" fill="none"/>
+  </g>
+
+  <!-- Instructions Box -->
+  <g transform="translate(31.5, 215)">
+    <rect x="0" y="0" width="147" height="66" rx="2" fill="#f8f9fa" stroke="#0a0a0a" stroke-width="0.3mm"/>
+    <text x="6" y="7" class="i-h">DRAWING &amp; VERIFICATION GUIDELINES</text>
+
+    <circle cx="9" cy="14" r="1.1" fill="#000"/>
+    <text x="13" y="15" class="i-p"><tspan font-weight="bold">Grid Size:</tspan> 21 &#215; 21 modules (Version 1). Each cell is 7 &#215; 7 mm.</text>
+
+    <circle cx="9" cy="22" r="1.1" fill="#000"/>
+    <text x="13" y="23" class="i-p"><tspan font-weight="bold">3&#215;3 Blocks:</tspan> Rows A, B, C &amp; Cols 1, 2, 3 produce 9 blocks of 7&#215;7 modules.</text>
+
+    <circle cx="9" cy="30" r="1.1" fill="#000"/>
+    <text x="13" y="31" class="i-p"><tspan font-weight="bold">Finder Patterns (A1, A3, C1):</tspan> Fill outer ring and 3&#215;3 center solid black.</text>
+
+    <circle cx="9" cy="38" r="1.1" fill="#000"/>
+    <text x="13" y="39" class="i-p"><tspan font-weight="bold">Timing Lines:</tspan> Alternating dark/light cells along Row 7 and Column 7.</text>
+
+    <circle cx="9" cy="46" r="1.1" fill="#000"/>
+    <text x="13" y="47" class="i-p"><tspan font-weight="bold">Quiet Zone:</tspan> Keep the outer white space completely clear of marks.</text>
+
+    <circle cx="9" cy="54" r="1.1" fill="#000"/>
+    <text x="13" y="55" class="i-p"><tspan font-weight="bold">Drawing Tip:</tspan> Fill each black cell completely with a fine black permanent marker.</text>
+
+    <rect x="6" y="58.5" width="3" height="3" fill="#fff" stroke="#555" stroke-width="0.25mm"/>
+    <text x="11" y="61" class="i-p" font-size="2mm">Finder Patterns checked</text>
+
+    <rect x="52" y="58.5" width="3" height="3" fill="#fff" stroke="#555" stroke-width="0.25mm"/>
+    <text x="57" y="61" class="i-p" font-size="2mm">Timing patterns verified</text>
+
+    <rect x="98" y="58.5" width="3" height="3" fill="#fff" stroke="#555" stroke-width="0.25mm"/>
+    <text x="103" y="61" class="i-p" font-size="2mm">Seedmate scan verified</text>
+  </g>
+
+</svg>

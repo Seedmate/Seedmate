@@ -213,60 +213,68 @@ ret_type gcm_init_message(                  /* initialise a new message     */
     return RETURN_GOOD;
 }
 
-ret_type gcm_auth_header(                   /* authenticate the header      */
-            const unsigned char hdr[],      /* the header buffer            */
-            unsigned long hdr_len,          /* and its length in bytes      */
-            gcm_ctx ctx[1])                 /* the mode context             */
-{   uint32_t cnt = 0, b_pos = (uint32_t)ctx->hdr_cnt & BLK_ADR_MASK;
+/* Seedmate: GHASH of header and of ciphertext data were two identical copies
+   (700 bytes each); one function serves both. Returns the bytes added. */
+static uint32_t gcm_ghash_update(gcm_buf_t ghv, uint32_t done, const unsigned char d[],
+                                 unsigned long len, gcm_ctx ctx[1])
+{   uint32_t cnt = 0, b_pos = done & BLK_ADR_MASK;
 
-    if(!hdr_len)
-        return RETURN_GOOD;
+    if(!len)
+        return 0;
 
-    if(ctx->hdr_cnt && b_pos == 0)
-        gf_mul_hh(ctx->hdr_ghv, ctx);
+    if(done && b_pos == 0)
+        gf_mul_hh(ghv, ctx);
 
-    if(!((hdr - (UI8_PTR(ctx->hdr_ghv) + b_pos)) & BUF_ADRMASK))
+    if(!((d - (UI8_PTR(ghv) + b_pos)) & BUF_ADRMASK))
     {
-		while(cnt < hdr_len && (b_pos & BUF_ADRMASK))
-		    UI8_PTR(ctx->hdr_ghv)[b_pos++] ^= hdr[cnt++];
+		while(cnt < len && (b_pos & BUF_ADRMASK))
+		    UI8_PTR(ghv)[b_pos++] ^= d[cnt++];
 
-		while(cnt + BUF_INC <= hdr_len && b_pos <= BLOCK_SIZE - BUF_INC)
+		while(cnt + BUF_INC <= len && b_pos <= BLOCK_SIZE - BUF_INC)
         {
-            *UNIT_PTR(UI8_PTR(ctx->hdr_ghv) + b_pos) ^= *UNIT_PTR(hdr + cnt);
+            *UNIT_PTR(UI8_PTR(ghv) + b_pos) ^= *UNIT_PTR(d + cnt);
             cnt += BUF_INC; b_pos += BUF_INC;
         }
 
-        while(cnt + BLOCK_SIZE <= hdr_len)
+        while(cnt + BLOCK_SIZE <= len)
         {
-            gf_mul_hh(ctx->hdr_ghv, ctx);
-            xor_block_aligned(ctx->hdr_ghv, ctx->hdr_ghv, hdr + cnt);
+            gf_mul_hh(ghv, ctx);
+            xor_block_aligned(ghv, ghv, d + cnt);
             cnt += BLOCK_SIZE;
         }
     }
     else
     {
-        while(cnt < hdr_len && b_pos < BLOCK_SIZE)
-            UI8_PTR(ctx->hdr_ghv)[b_pos++] ^= hdr[cnt++];
+        while(cnt < len && b_pos < BLOCK_SIZE)
+            UI8_PTR(ghv)[b_pos++] ^= d[cnt++];
 
-        while(cnt + BLOCK_SIZE <= hdr_len)
+        while(cnt + BLOCK_SIZE <= len)
         {
-            gf_mul_hh(ctx->hdr_ghv, ctx);
-            xor_block(ctx->hdr_ghv, ctx->hdr_ghv, hdr + cnt);
+            gf_mul_hh(ghv, ctx);
+            xor_block(ghv, ghv, d + cnt);
             cnt += BLOCK_SIZE;
         }
     }
 
-    while(cnt < hdr_len)
+    while(cnt < len)
     {
         if(b_pos == BLOCK_SIZE)
         {
-            gf_mul_hh(ctx->hdr_ghv, ctx);
+            gf_mul_hh(ghv, ctx);
             b_pos = 0;
         }
-        UI8_PTR(ctx->hdr_ghv)[b_pos++] ^= hdr[cnt++];
+        UI8_PTR(ghv)[b_pos++] ^= d[cnt++];
     }
 
-    ctx->hdr_cnt += cnt;
+    return cnt;
+}
+
+ret_type gcm_auth_header(                   /* authenticate the header      */
+            const unsigned char hdr[],      /* the header buffer            */
+            unsigned long hdr_len,          /* and its length in bytes      */
+            gcm_ctx ctx[1])                 /* the mode context             */
+{
+    ctx->hdr_cnt += gcm_ghash_update(ctx->hdr_ghv, ctx->hdr_cnt, hdr, hdr_len, ctx);
     return RETURN_GOOD;
 }
 
@@ -274,56 +282,8 @@ ret_type gcm_auth_data(                     /* authenticate ciphertext data */
             const unsigned char data[],     /* the data buffer              */
             unsigned long data_len,         /* and its length in bytes      */
             gcm_ctx ctx[1])                 /* the mode context             */
-{   uint32_t cnt = 0, b_pos = (uint32_t)ctx->txt_acnt & BLK_ADR_MASK;
-
-    if(!data_len)
-        return RETURN_GOOD;
-
-    if(ctx->txt_acnt && b_pos == 0)
-        gf_mul_hh(ctx->txt_ghv, ctx);
-
-    if(!((data - (UI8_PTR(ctx->txt_ghv) + b_pos)) & BUF_ADRMASK))
-    {
-	    while(cnt < data_len && (b_pos & BUF_ADRMASK))
-		    UI8_PTR(ctx->txt_ghv)[b_pos++] ^= data[cnt++];
-
-        while(cnt + BUF_INC <= data_len && b_pos <= BLOCK_SIZE - BUF_INC)
-        {
-            *UNIT_PTR(UI8_PTR(ctx->txt_ghv) + b_pos) ^= *UNIT_PTR(data + cnt);
-            cnt += BUF_INC; b_pos += BUF_INC;
-        }
-
-        while(cnt + BLOCK_SIZE <= data_len)
-        {
-            gf_mul_hh(ctx->txt_ghv, ctx);
-            xor_block_aligned(ctx->txt_ghv, ctx->txt_ghv, data + cnt);
-            cnt += BLOCK_SIZE;
-        }
-    }
-    else
-    {
-        while(cnt < data_len && b_pos < BLOCK_SIZE)
-            UI8_PTR(ctx->txt_ghv)[b_pos++] ^= data[cnt++];
-
-        while(cnt + BLOCK_SIZE <= data_len)
-        {
-            gf_mul_hh(ctx->txt_ghv, ctx);
-            xor_block(ctx->txt_ghv, ctx->txt_ghv, data + cnt);
-            cnt += BLOCK_SIZE;
-        }
-    }
-
-    while(cnt < data_len)
-    {
-        if(b_pos == BLOCK_SIZE)
-        {
-            gf_mul_hh(ctx->txt_ghv, ctx);
-            b_pos = 0;
-        }
-        UI8_PTR(ctx->txt_ghv)[b_pos++] ^= data[cnt++];
-    }
-
-    ctx->txt_acnt += cnt;
+{
+    ctx->txt_acnt += gcm_ghash_update(ctx->txt_ghv, ctx->txt_acnt, data, data_len, ctx);
     return RETURN_GOOD;
 }
 

@@ -59,6 +59,8 @@ void print_cursor_grid(void);
 void print_minus_symbol(int x,int y);
 void print_ok(void);
 void grid_menu1(void);
+// Text on black, size 1 (drawtext() with the usual background and size)
+void text_at(unsigned int x, unsigned int y, const char *text, unsigned int color);
 void grid_menuwr(void);
 void print_back(void);
 void grid_menu2(void);

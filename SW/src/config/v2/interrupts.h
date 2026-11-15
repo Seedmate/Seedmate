@@ -56,8 +56,6 @@
 // Section: Handler Routines
 // *****************************************************************************
 // *****************************************************************************
-void SPI1_TX_InterruptHandler( void );
-void SPI3_TX_InterruptHandler( void );
 void UART2_RX_InterruptHandler( void );
 void UART2_TX_InterruptHandler( void );
 void UART2_ERR_InterruptHandler( void );
