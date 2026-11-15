@@ -3986,6 +3986,9 @@ void dice_xy_pointer_line_adjust(){
     }
 }
 
+static bool entropy_check_ok(const char *dice_string, uint32_t len);
+static void entropy_discard(void);
+
 bool check_dice_count_end(){
     int target_bits = (size_pointer == cSIZE_12) ? 128 : 256;
     if (bit_count_dice >= target_bits){
@@ -3994,7 +3997,10 @@ bool check_dice_count_end(){
             if (main_pointer == cMAIN_create) {
                 if (seed_pointer == cSEED_triple) {
                     estado = PROCESS_TRIPLE;
+                } else if (!entropy_check_ok(NULL, 0)) {
+                    entropy_discard();          // REDO: the size menu, nothing kept
                 } else {
+                    black_screen();
                     print_checksum_screen();
                     estado = SHOW_CHECKSUM_DETAILS;
                 }
@@ -4284,6 +4290,135 @@ static void dice_back_key(void) {
     while (BT1 == 0) SYS_Tasks();
     delay_ms(30);
     if (!held) entropy_key("01", 2);
+}
+
+// --- Entropy check of CREATE: coins, dice and cards entered by hand that a
+// fair source would give less than once in a thousand sessions (integer
+// tests at p = 0.001). Nothing is stored for it: the counts come from the
+// entropy bits, the dice history, the card history or the dice string. It
+// warns and lets the user choose; it never refuses. ---
+
+// The warning, shown only when a test fails. True: use the entropy anyway.
+static bool entropy_warning(const char *why, const char *l1, const char *l2) {
+    int bt;
+    black_screen();
+    draw_title("ENTROPY CHECK", ST7735_LIGHTGREY);
+    text_at(5, 20, why, ST7735_YELLOW);
+    text_at(5, 36, l1, ST7735_WHITE);
+    text_at(5, 46, l2, ST7735_WHITE);
+    text_at(5, 62, "UNLIKELY BY CHANCE:", ST7735_WHITE);
+    text_at(5, 72, "REDO, OR USE IT ANYWAY", ST7735_WHITE);
+    grid_labels("REDO", NULL, "USE", NULL, NULL, NULL);
+    while ((bt = wait_any_key()) != OK_BT && bt != BACK_BT) { }
+    while (BT1 == 0 || BT_OK == 0) SYS_Tasks();
+    return bt == OK_BT;
+}
+
+// Bits pos..pos+len-1 of the entropy as a number
+static int entropy_value(int pos, int len) {
+    int v = 0;
+    while (len-- > 0) v = (v << 1) | read_entropy_bit(data_array_256b, pos++);
+    return v;
+}
+
+// Chi-square of n draws over k equally likely outcomes, k sum(c^2) / n - n,
+// above limit100 / 100 (coins: k 2, dice: 6, suits: 4)
+static bool chi_square_over(const uint16_t *c, int k, uint32_t n, int32_t limit100) {
+    uint32_t s = 0;
+    for (int i = 0; i < k; i++) s += (uint32_t)c[i] * c[i];
+    return 100 * ((int32_t)(k * s) - (int32_t)(n * n)) > limit100 * (int32_t)n;
+}
+
+// "1:14 2:4 3:9 ": one label character per count
+static void count_line(char *s, const char *labels, const uint16_t *c) {
+    s[0] = '\0';
+    for (; *labels; labels++, c++) {
+        size_t n = strlen(s);
+        s[n] = *labels;
+        s[n + 1] = ':';
+        s[n + 2] = '\0';
+        strcat_num(s, *c);
+        strcat(s, " ");
+    }
+}
+
+// dice_string: the faces of STRING HASH ('1'..'6'), else the entropy entered
+// on the coins, raw dice or cards screen. Limits for p = 0.001.
+static bool entropy_check_ok(const char *dice_string, uint32_t len) {
+    char l1[28], l2[28];
+    const char *why = NULL;
+    uint16_t c[52], suit[4] = {0, 0, 0, 0};    // Per face, side or card
+    uint32_t n = 0;
+    memset(c, 0, sizeof(c));
+
+    if (dice_string != NULL || seed_pointer == cSEED_dice) {
+        // Raw dice: a roll gave 1 bit ("0" 4, "1" 5) or 2 ("00" 6, "01" 1, "10" 2, "11" 3)
+        static const uint8_t face[6] = {3, 4, 5, 0, 1, 2};
+        int pos = 0;
+        if (dice_string != NULL) {
+            for (n = 0; n < len; n++) c[dice_string[n] - '1']++;
+        } else {
+            for (n = 0; n < dice_rolls; n++) {
+                int two = (dice_two_bits[n >> 3] >> (n & 7u)) & 1;
+                c[face[2 * two + entropy_value(pos, 1 + two)]]++;
+                pos += 1 + two;
+            }
+        }
+        if (chi_square_over(c, 6, n, 2052)) {
+            why = "DICE DO NOT LOOK FAIR";
+            count_line(l1, "123", c);
+            count_line(l2, "456", &c[3]);
+        }
+    } else if (seed_pointer == cSEED_coin) {
+        // Also the runs test (Wald-Wolfowitz): too regular, or too streaky
+        uint32_t runs = 0;
+        int prev = -1;
+        for (n = 0; n < (uint32_t)bit_count_dice; n++) {
+            int b = entropy_value((int)n, 1);        // 0 head, 1 tail
+            c[b]++;
+            runs += (b != prev);
+            prev = b;
+        }
+        int32_t r = 2 * (int32_t)runs - (int32_t)n - 1;
+        if (chi_square_over(c, 2, n, 1083) || 100 * r * r > 1083 * ((int32_t)n - 1)) {
+            why = "COINS DO NOT LOOK FAIR";
+            count_line(l1, "HT", c);
+            strcpy(l2, "RUNS ");
+            strcat_num(l2, runs);
+            strcat(l2, ", EXPECTED ");
+            strcat_num(l2, (n + 1) / 2);
+        }
+    } else if (seed_pointer == cSEED_cards) {
+        // A card too often (limit for that many cards), or the suits off balance
+        int top = 0;
+        n = (uint32_t)card_history_count;
+        for (uint32_t i = 0; i < n; i++) {
+            int bits = card_history_bit_len[i];     // 5 bits: cards 0..31, 4: 32..47, 2: 48..51
+            int card = entropy_value(card_history_start_bits[i], bits) + ((bits == 5) ? 0 : (bits == 4) ? 32 : 48);
+            c[card]++;
+            suit[card / 13]++;
+            if (c[card] > c[top]) top = card;
+        }
+        if (c[top] >= 6 + (n >= 30) + (n >= 44) + (n >= 60) || chi_square_over(suit, 4, n, 1627)) {
+            why = "CARDS NOT SHUFFLED WELL";
+            strcpy(l1, "MOST SEEN ??, ");
+            l1[10] = card_rank_chars[top % 13];
+            l1[11] = card_suit_chars[top / 13];
+            strcat_num(l1, c[top]);
+            strcat(l1, " TIMES");
+            count_line(l2, "CDHS", suit);
+        }
+    }
+    return why == NULL || entropy_warning(why, l1, l2);
+}
+
+// REDO: the entropy, the histories and the dice string go; back to the size menu
+static void entropy_discard(void) {
+    reset_card_entropy_mode();
+    memzero(data_array_256b, sizeof(data_array_256b));
+    memzero(dice_string_buf, sizeof(dice_string_buf));
+    dice_history_clear();
+    transition_to_size();
 }
 
 
@@ -12598,7 +12733,9 @@ int SSS_N = 9;
                                 print_dice_string_keyboard(dice_input_idx, len + 1, target);
                             }
                         } else if (dice_input_idx == 6) {
-                            if (len >= target) {
+                            if (len >= target && !entropy_check_ok(dice_string_buf, (uint32_t)len)) {
+                                entropy_discard();          // REDO
+                            } else if (len >= target) {
                                 // If Keystone standard (0-5 format) is selected, substitute '6' for '0'
                                 if (hash_mode_pointer == 1) { 
                                     for (int i = 0; i < len; i++) {
