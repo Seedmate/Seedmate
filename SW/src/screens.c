@@ -62,8 +62,7 @@ const char* const menu_resource[] = {"TUTORIAL", "BACKUP TOOL", "DICE TESTER", "
 const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB","1 WORD XOR","BYTE SWAP","HOW TO"};
 const char* const menu_erase[]    = {"ERASE SECTOR", "INITIALIZE CARD", "WIPE ALL CARD"};
 const char* const menu_bip84[] = {"SIGN", "ADD PASSPHRASE", "DERIVE", "VAULT", "XPUB/ZPUB", "ADDRESSES", "CONFIG", "UNLOAD SEED"};
-const char* const menu_addresses[] = {"RECEIVE ADDRESS", "CHANGE ADDRESS", "SCAN ADDRESS"};
-const char* const menu_bip84_multi[] = {"SIGN", "ADD PASSPHRASE", "DERIVE", "VAULT", "XPUB/ZPUB", "IMPORT DESCRIPTOR", "CONFIG", "UNLOAD SEED"};
+const char* const menu_addresses[] = {"RECEIVE ADDRESS", "CHANGE ADDRESS", "SCAN ADDRESS", "IMPORT DESCRIPTOR"};
 const char* const menu_sign[]     = {"FROM QR", "FROM SD"};
 const char* const menu_import[]   = {"FROM QR", "FROM SD", "FROM VAULT"};
 const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD", "FROM QR"};
@@ -887,11 +886,23 @@ void draw_url_qr(const char *text) {
     size_t length = strlen(text);
     int version;
     int ecc_level;
+    char upper[64];
 
     // Screen size limits us to a maximum of Version 3 (29x29 modules).
     // Version 4 (33x33) and higher do not fit on the screen.
-    
-    if (length <= 26) {
+
+    // A bech32 address goes in upper case (BIP173 allows it, BIP21 advises it
+    // for QR codes): alphanumeric mode, so the 62 characters of a bc1p or a
+    // P2WSH bc1q address fit version 3
+    if (length < sizeof(upper) && strncmp(text, "bc1", 3) == 0) {
+        for (size_t i = 0; i <= length; i++) {
+            char c = text[i];
+            upper[i] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+        }
+        text = upper;
+        version = (length <= 38) ? 2 : 3;               // Alphanumeric: 38 in 2-M, 61 in 3-M, 77 in 3-L
+        ecc_level = (length <= 61) ? ECC_MEDIUM : ECC_LOW;
+    } else if (length <= 26) {
         // Fits easily in Version 2 with good error correction
         version = 2; // 25x25 modules
         ecc_level = ECC_MEDIUM;

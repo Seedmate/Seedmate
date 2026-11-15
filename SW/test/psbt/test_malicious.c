@@ -35,6 +35,8 @@
 #include "memzero.h"
 #include "crypto/bip32.h"
 #include "crypto/ripemd160.h"
+#include "crypto/segwit_addr.h"
+#include "ms_nested_vectors.h"      // Expected multisig addresses (gen_ms_nested.py)
 
 // --- What the extracted code needs from main.c ------------------------------
 #define PSBT_VIEW_LINE_CHARS 26
@@ -54,6 +56,35 @@ static void led_done(void) {}
 static void fast_itoa(uint32_t v, char *b) { sprintf(b, "%u", (unsigned)v); }
 static void strcat_num(char *s, uint32_t v) { fast_itoa(v, s + strlen(s)); }
 static void text_at(int x, int y, const char *t, int c) { (void)x; (void)y; (void)t; (void)c; }
+
+// Base58Check for the 3... addresses, written here from the spec (the
+// firmware's own lives in a part of main.c that is not extracted)
+static size_t base58_encode_check(const uint8_t *data, size_t len, char *out, size_t cap) {
+    static const char alphabet[] = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    uint8_t buf[64], h1[32], h2[32], digits[96];
+    SHA256_CTX c;
+    size_t n = len + 4, nd = 0, zeros = 0, k = 0;
+    if (n > sizeof(buf)) return 0;
+    memcpy(buf, data, len);
+    sha256_init(&c); sha256_update(&c, data, len); sha256_final(&c, h1);
+    sha256_init(&c); sha256_update(&c, h1, 32); sha256_final(&c, h2);
+    memcpy(buf + len, h2, 4);
+    while (zeros < n && buf[zeros] == 0) zeros++;
+    for (size_t i = zeros; i < n; i++) {        // Big number base 256 -> base 58
+        unsigned carry = buf[i];
+        for (size_t j = 0; j < nd; j++) {
+            carry += (unsigned)digits[j] << 8;
+            digits[j] = (uint8_t)(carry % 58);
+            carry /= 58;
+        }
+        while (carry) { digits[nd++] = (uint8_t)(carry % 58); carry /= 58; }
+    }
+    if (zeros + nd + 1 > cap) return 0;
+    for (size_t i = 0; i < zeros; i++) out[k++] = '1';
+    while (nd) out[k++] = alphabet[digits[--nd]];
+    out[k] = 0;
+    return k + 1;
+}
 
 static bool bip84_account_cached = true;
 static uint32_t bip84_master_fingerprint;
@@ -149,6 +180,40 @@ static void setup_wallet(void) {
         printf("cannot parse the corpus descriptor\n");
         exit(1);
     }
+}
+
+// --- WALLET > ADDRESSES in multisig: ms_wallet_address() of the firmware ----------
+// Receive and change 0..4 of the native and nested wallets against the
+// independent Python generator. Returns the number of wrong addresses.
+static int check_ms_addresses(void) {
+    struct { const char *desc; const char *const (*addr)[MSA_N]; const char *name; } w[2] = {
+        {msa_native_desc, msa_native_addr, "native"},
+        {msn_desc_text, msa_nested_addr, "nested"},
+    };
+    int bad = 0;
+    for (int k = 0; k < 2; k++) {
+        desc_wallet_t wallet;
+        if (desc_parse(w[k].desc, (uint32_t)strlen(w[k].desc), &wallet) != DESC_OK) {
+            printf("ms addresses: cannot parse the %s descriptor\n", w[k].name);
+            return 1;
+        }
+        for (uint32_t ch = 0; ch < 2; ch++) {
+            for (uint32_t i = 0; i < MSA_N; i++) {
+                char addr[76];
+                if (!ms_wallet_address(&wallet, ch, i, addr, sizeof(addr)) || strcmp(addr, w[k].addr[ch][i]) != 0) {
+                    printf("ms addresses: %s %s %u gives %s\n", w[k].name, ch ? "change" : "receive", (unsigned)i, addr);
+                    bad++;
+                }
+            }
+        }
+        char small[40];         // A P2WSH address needs 63 bytes: refused, never cut
+        if (!wallet.nested && ms_wallet_address(&wallet, 0, 0, small, sizeof(small))) {
+            printf("ms addresses: a short buffer was accepted\n");
+            bad++;
+        }
+    }
+    if (bad == 0) printf("Multisig addresses: receive and change 0..%d of the native and nested wallets match\n", MSA_N - 1);
+    return bad;
 }
 
 // --- One run ---------------------------------------------------------------------
@@ -390,7 +455,8 @@ int main(int argc, char **argv) {
     char *gaps = slurp("malicious_gaps.txt");
     if (!gaps) gaps = (char *)"";
 
-    int problems = run_corpus(gaps);
+    int problems = check_ms_addresses();
+    problems += run_corpus(gaps);
     problems += run_bip174(gaps);
     if (update) {
         fclose(update);
