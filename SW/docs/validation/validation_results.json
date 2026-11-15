@@ -1,0 +1,12 @@
+{
+ "format": "seedmate-validation-1",
+ "device": "Seedmate v2 (PIC32MM0256GPM036)",
+ "session": {
+  "version": "",
+  "sha256": "",
+  "bootloader": "",
+  "tester": ""
+ },
+ "updated": "",
+ "results": {}
+}

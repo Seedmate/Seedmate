@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Offline page: no network except reading validation_results.json from the same folder -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:">
+<title>Seedmate firmware validation</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --card: #ffffff; --ink: #1f2328; --muted: #6b7076; --line: #dcdcd8;
+    --pass: #1a7f37; --pass-bg: #e7f5ea; --fail: #c62828; --fail-bg: #fdeaea;
+    --old: #9a6700; --old-bg: #fff4d6; --none: #6b7076; --none-bg: #eeeeec;
+    --accent: #e8730c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg); }
+  header { background: #16181b; color: #fff; padding: 18px 24px; }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: .5px; }
+  header h1 span { color: var(--accent); }
+  header p { margin: 4px 0 0; color: #b9bdc2; font-size: 13px; }
+  main { max-width: 1180px; margin: 0 auto; padding: 18px 20px 60px; }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; }
+  .panel h2 { margin: 0 0 10px; font-size: 15px; }
+  .form { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px 14px; }
+  .form label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 3px; }
+  .form input { font: 13px ui-monospace, SFMono-Regular, Consolas, monospace; padding: 6px 8px; border: 1px solid var(--line); border-radius: 5px; }
+  .form input:read-only { background: #f3f3f1; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+  button { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 5px; border: 1px solid var(--line); background: #fff; cursor: pointer; }
+  button:hover { border-color: #999; }
+  button.primary { background: #16181b; color: #fff; border-color: #16181b; }
+  button.pass { background: var(--pass); color: #fff; border-color: var(--pass); }
+  button.fail { background: #fff; color: var(--fail); border-color: var(--fail); }
+  button.small { padding: 3px 8px; font-size: 12px; }
+  .status-line { font-size: 12px; color: var(--muted); }
+  .dirty { color: var(--fail); font-weight: 600; }
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .tile { border-radius: 7px; padding: 10px 12px; border: 1px solid var(--line); background: #fafaf8; cursor: pointer; }
+  .tile b { display: block; font-size: 22px; }
+  .tile.sel { outline: 2px solid var(--ink); }
+  .bar { height: 10px; border-radius: 5px; background: var(--none-bg); overflow: hidden; display: flex; margin-top: 12px; }
+  .bar i { display: block; height: 100%; }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .filters select, .filters input { font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 5px; }
+  .filters input { flex: 1; min-width: 180px; }
+  section.sec { margin-top: 22px; }
+  section.sec > h2 { font-size: 16px; margin: 0 0 8px; display: flex; justify-content: space-between; align-items: baseline; }
+  section.sec > h2 small { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .test { background: var(--card); border: 1px solid var(--line); border-left: 5px solid var(--none); border-radius: 6px; margin-bottom: 8px; }
+  .test.pass { border-left-color: var(--pass); }
+  .test.old { border-left-color: var(--old); }
+  .test.fail { border-left-color: var(--fail); }
+  .test.changed { border-left-color: var(--old); }
+  .test summary { list-style: none; cursor: pointer; padding: 9px 12px; display: grid; grid-template-columns: 92px 1fr auto; gap: 10px; align-items: center; }
+  .test summary::-webkit-details-marker { display: none; }
+  .tid { font: 12px ui-monospace, Consolas, monospace; color: var(--muted); }
+  .ttl { font-weight: 600; }
+  .badge { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 10px; white-space: nowrap; text-align: center; }
+  .badge.pass { color: var(--pass); background: var(--pass-bg); }
+  .badge.old { color: var(--old); background: var(--old-bg); }
+  .badge.fail { color: var(--fail); background: var(--fail-bg); }
+  .badge.none { color: var(--none); background: var(--none-bg); }
+  .badge small { display: block; font-weight: 400; font-size: 10px; }
+  .body { padding: 0 14px 12px 14px; border-top: 1px solid var(--line); }
+  .body h4 { margin: 10px 0 4px; font-size: 12px; text-transform: uppercase; color: var(--muted); letter-spacing: .4px; }
+  .body ol, .body ul { margin: 0; padding-left: 20px; }
+  .body li { margin: 2px 0; }
+  code, .mono { font: 12.5px ui-monospace, SFMono-Regular, Consolas, monospace; background: #f1f1ee; padding: 1px 4px; border-radius: 3px; word-break: break-all; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line); }
+  .actions input { flex: 1; min-width: 200px; font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 5px; }
+  table.hist { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 4px; }
+  table.hist th, table.hist td { text-align: left; border-bottom: 1px solid var(--line); padding: 4px 6px; vertical-align: top; }
+  table.hist th { color: var(--muted); font-weight: 600; }
+  .note { color: var(--muted); font-size: 12px; }
+  .warnbox { background: var(--old-bg); color: #6b4a00; border: 1px solid #f0d58a; border-radius: 6px; padding: 8px 12px; font-size: 13px; margin-bottom: 14px; }
+  .help { font-size: 13px; color: #33373c; }
+  .help li { margin: 3px 0; }
+  .hidden { display: none !important; }
+  footer { max-width: 1180px; margin: 0 auto; padding: 0 20px 40px; color: var(--muted); font-size: 12px; }
+  @media print {
+    header { background: none; color: #000; padding: 0 0 8px; }
+    header p { color: #444; }
+    .toolbar, .filters, .actions, .noprint, button { display: none !important; }
+    .test { break-inside: avoid; }
+    .test summary { grid-template-columns: 80px 1fr auto; }
+    body { background: #fff; }
+    .panel { border: none; padding: 0; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>SEED<span>MATE</span> &nbsp;firmware validation</h1>
+  <p>Every function of the firmware tested on a real device, with the firmware version, date and time of each test.</p>
+</header>
+
+<main>
+  <div id="publicNote" class="warnbox hidden">
+    Read-only view of the published test results. Each test shows the firmware version it was last passed on and when.
+    Compare the firmware SHA-256 below with the hash of the release you install.
+  </div>
+
+  <div class="panel">
+    <h2>Firmware under test</h2>
+    <div class="form">
+      <label>Firmware version (as on the start screen)
+        <input id="fVersion" placeholder="e.g. v2.0" autocomplete="off"></label>
+      <label>Firmware SHA-256 (UPDATE.HEX)
+        <input id="fSha" placeholder="certutil -hashfile UPDATE.HEX SHA256" autocomplete="off"></label>
+      <label>Bootloader version (SETTINGS)
+        <input id="fBoot" placeholder="e.g. BOOT 1.0" autocomplete="off"></label>
+      <label>Tester
+        <input id="fTester" placeholder="name or initials" autocomplete="off"></label>
+    </div>
+    <div class="toolbar" id="toolbar">
+      <button class="primary" id="btnOpen">Open results file</button>
+      <button id="btnSave">Save results file</button>
+      <button id="btnPrint">Print / PDF</button>
+      <span class="status-line" id="fileStatus"></span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Summary <span class="note" id="sumVersion"></span></h2>
+    <div class="summary" id="summary"></div>
+    <div class="bar" id="bar"></div>
+    <div class="filters">
+      <select id="fltSection"></select>
+      <input id="fltText" placeholder="Search tests (id, title, steps)...">
+      <button id="btnExpand" class="small">Expand all</button>
+      <button id="btnCollapse" class="small">Collapse all</button>
+    </div>
+  </div>
+
+  <details class="panel noprint" id="helpBox">
+    <summary><b>How to use this page</b></summary>
+    <ol class="help">
+      <li>Open this file in Chrome or Edge from the folder where <code>validation_results.json</code> is, and click
+        <b>Open results file</b> to choose that file. From then on every result is written to it at once
+        (other browsers: <b>Save results file</b> downloads it; put it back next to this page).</li>
+      <li>Fill in the firmware under test. Its version is written with every result, so a later release keeps the results
+        of the tests you do not repeat with the version they were passed on.</li>
+      <li>Open a test, follow its steps on the device, then click <b>Passed</b> or <b>Failed</b> (a failure needs a note).
+        The date and time are recorded. <b>Undo last</b> removes your last entry of that test.</li>
+      <li>A test whose description changed after it was passed shows <b>TEST CHANGED</b>: repeat it.
+        A test passed on another version than the one under test shows <b>OLDER VERSION</b>.</li>
+      <li>Publish this page and <code>validation_results.json</code> together. Served over HTTPS the page is read-only;
+        add <code>#edit</code> to the address to edit there.</li>
+      <li>Test data: the seed <code>abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about</code>
+        (no passphrase, fingerprint <code>73c5da0a</code>) and the files in <code>SW/test/psbt/</code> of the repository.
+        Never use a real wallet for these tests.</li>
+    </ol>
+  </details>
+
+  <div id="tests"></div>
+</main>
+
+<footer>
+  <div id="footInfo"></div>
+  <div>Results file SHA-256: <span class="mono" id="footHash">-</span></div>
+</footer>
+
+<script>
+'use strict';
+
+// ===========================================================================
+// Test catalogue. Each test: id (stable, never reused), sec, title, steps,
+// expect, data (optional) and rev. Raise rev when a test changes in a way
+// that needs it repeated: results of an older rev show "TEST CHANGED".
+// Seed for every test unless said otherwise: "abandon x11 about", no passphrase.
+// ===========================================================================
+const SECTIONS = [
+  ['BOOT', 'Power-on, bootloader and firmware updates'],
+  ['SET', 'Settings'],
+  ['NEW', 'Create a new seed'],
+  ['LOAD', 'Load a seed'],
+  ['BAK', 'Seed backup'],
+  ['OPS', 'OPSEC: Shamir, XOR, obfuscation, cards'],
+  ['B85', 'BIP85 child seed (main menu)'],
+  ['TOOL', 'Tools'],
+  ['SD', 'SD card'],
+  ['WAL', 'Wallet: keys and addresses'],
+  ['MS', 'Multisig wallet and descriptors'],
+  ['SIG', 'PSBT review and signing'],
+  ['QR', 'QR scanning (UR and BBQr)'],
+  ['VLT', 'Vault'],
+  ['DER', 'Derive: BIP85 and Nostr'],
+  ['UI', 'Interface rules'],
+  ['SEC', 'Wiping and memory'],
+];
+
+const ABANDON = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+
+const TESTS = [
+  // ---------------------------------------------------------------- BOOT
+  { id: 'BOOT-01', sec: 'BOOT', rev: 1, title: 'Start screen',
+    steps: ['Power the device on.'],
+    expect: ['The two halves of the logo slide in and lock in the middle.', '"S E E D M A T E" and "PRESS ANY BUTTON" appear, and the firmware version at the bottom right is the version under test.', 'Any button opens the main menu (title SEEDMATE, 8 entries).'] },
+  { id: 'BOOT-02', sec: 'BOOT', rev: 1, title: 'Decoy game and the keys that skip it',
+    steps: ['SETTINGS > DECOY: turn it on and confirm.', 'Power off and on.', 'Power off, hold OK + RIGHT and power on.', 'Turn the decoy off again.'],
+    expect: ['With the decoy on, a snake game starts at power-on and nothing of Seedmate is shown.', 'Holding OK + RIGHT at power-on starts Seedmate normally.', 'The setting survives power cycles.'] },
+  { id: 'BOOT-03', sec: 'BOOT', rev: 1, title: 'Signed firmware update',
+    steps: ['Copy UPDATE.HEX and UPDATE.SIG of the release to a FAT16 card (a file card, not the seed card).', 'SETTINGS > UPDATE FIRMWARE and confirm.', 'On the PC: certutil -hashfile UPDATE.HEX SHA256.'],
+    expect: ['The bootloader shows the SHA-256 of UPDATE.HEX, equal to the PC hash.', '"VERIFYING SIGNATURE" with a progress bar, then green "OFFICIAL FIRMWARE".', 'OK installs it, the LED blinks 7 times and the new firmware starts with no warning.'] },
+  { id: 'BOOT-04', sec: 'BOOT', rev: 1, title: 'Unsigned or wrongly signed firmware',
+    steps: ['Repeat the update without UPDATE.SIG.', 'Repeat with an UPDATE.SIG of another file.'],
+    expect: ['Red "UNOFFICIAL FIRMWARE" with the reason and "INSTALL IT ANYWAY?".', 'BACK leaves the installed firmware untouched and working.', 'If installed anyway, every power-on shows "WARNING / UNOFFICIAL FIRMWARE" with the file hash, and OK starts it.'] },
+  { id: 'BOOT-05', sec: 'BOOT', rev: 1, title: 'Forced update (OK + BACK at power-on)',
+    steps: ['Hold OK + BACK and power on, with an update card inserted.'],
+    expect: ['The LED flickers fast 10 times and the update flow starts (hash, signature, confirmation).'] },
+  { id: 'BOOT-06', sec: 'BOOT', rev: 1, title: 'Damaged or foreign HEX file',
+    steps: ['Try an UPDATE.HEX truncated in the middle.', 'Try the HEX of another device or flash layout.'],
+    expect: ['The whole file is checked before anything is erased: an error is shown and the installed firmware still works.', 'A foreign HEX gives "HEX NOT FOR THIS DEVICE" (9 LED blinks).'] },
+  { id: 'BOOT-07', sec: 'BOOT', rev: 1, title: 'Settings survive a firmware update',
+    steps: ['Change two settings (e.g. AUTO UNLOAD and KEF ITERATIONS).', 'Install a firmware update.'],
+    expect: ['Both settings keep their values after the update.'] },
+  { id: 'BOOT-08', sec: 'BOOT', rev: 1, title: 'Versions in SETTINGS',
+    steps: ['Open SETTINGS.'],
+    expect: ['The firmware version (FW ...) and the bootloader version (BOOT ...) appear at the bottom left and match the form above.'] },
+  { id: 'BOOT-09', sec: 'BOOT', rev: 1, title: 'Reproducible build',
+    steps: ['Build the release tag as described in SW/docs/reproducible-build.md.', 'Compare the SHA-256 of the .hex with the published one.'],
+    expect: ['The hashes are equal.'] },
+
+  // ---------------------------------------------------------------- SET
+  { id: 'SET-01', sec: 'SET', rev: 1, title: 'Factory defaults',
+    steps: ['On a device with a blank settings page (new, or after programming with the PICkit), open SETTINGS.'],
+    expect: ['SEEDQR off, UNENCRYPTED SD SAVE off, DECOY off, STOPWATCH SEED off, AUTO UNLOAD 10 MINUTES, KEF ITERATIONS 10000.'] },
+  { id: 'SET-02', sec: 'SET', rev: 1, title: 'Every change is confirmed and permanent',
+    steps: ['Change each setting; once press BACK on the confirmation.', 'Power off and on.'],
+    expect: ['Each change shows a confirmation saying it is permanent; BACK leaves the setting as it was.', 'The confirmed values survive the power cycle.'] },
+  { id: 'SET-03', sec: 'SET', rev: 1, title: 'Warnings before risky settings',
+    steps: ['Turn SEEDQR on.', 'Turn UNENCRYPTED SD SAVE on.', 'Turn STOPWATCH SEED on.'],
+    expect: ['SEEDQR asks after a red warning; UNENCRYPTED SD SAVE after a yellow one.', 'STOPWATCH SEED says in yellow that the origin of its entropy cannot be verified, and CREATE shows STOPWATCH only while it is on.'] },
+  { id: 'SET-04', sec: 'SET', rev: 1, title: 'AUTO UNLOAD inside deep flows',
+    steps: ['Set AUTO UNLOAD to the shortest time.', 'Leave the device untouched inside: the text editor, the vault list, a PSBT review, a QR scan, the words of a seed.', 'Keep pressing keys for longer than the time in one of them.'],
+    expect: ['After the time without a key, everything is wiped, the screen says why, and the main menu appears.', 'Keys and long operations restart the time; it never fires on the start and main screens.'] },
+  { id: 'SET-05', sec: 'SET', rev: 1, title: 'KEF ITERATIONS setting',
+    steps: ['Open KEF ITERATIONS, move from 10000 to 300000.'],
+    expect: ['Steps of 10000, with the process time and the protection level: LOW in yellow under 50000, MEDIUM, STRONG from 150000.'] },
+  { id: 'SET-06', sec: 'SET', rev: 1, title: 'MCU serial number and stack peak',
+    steps: ['SETTINGS > MCU SERIAL NUMBER.'],
+    expect: ['The serial number and "STACK PEAK used/size B" are shown; yellow only above 7/8 of the stack.'] },
+
+  // ---------------------------------------------------------------- NEW
+  { id: 'NEW-01', sec: 'NEW', rev: 1, title: 'Coins: known result with all heads',
+    steps: ['CREATE > THROW COINS > 12 WORDS.', 'Enter HEAD (LEFT) 128 times. The entropy check warns: choose USE.', 'Repeat with 24 WORDS and 256 heads.'],
+    expect: ['12 words: "abandon" x11 and "about".', '24 words: "abandon" x23 and "art".', 'The last (checksum) word is green.'] },
+  { id: 'NEW-02', sec: 'NEW', rev: 1, title: 'Coins: DEL and BACK',
+    steps: ['Enter a few coins, press BACK (labelled DEL) repeatedly.'],
+    expect: ['Each press deletes the last coin; with none left the label is BACK and it returns to the size menu.'] },
+  { id: 'NEW-03', sec: 'NEW', rev: 1, title: 'Raw dice entry',
+    steps: ['CREATE > ROLL DICE > RAW ENTROPY BITS, enter rolls with the 1..6 keys (BACK is face 1 on release).', 'Hold BACK for a second.'],
+    expect: ['The grid shows the bits of each face. A short BACK enters a 1; held 800 ms it deletes the last roll and repeats every 300 ms, stopping at none.'] },
+  { id: 'NEW-04', sec: 'NEW', rev: 1, title: 'Entropy check warnings',
+    steps: ['Coins: all heads, or HTHT... alternating.', 'Dice: always the same face.', 'Cards: the same card six times.', 'A normal honest session of each.'],
+    expect: ['Yellow "COINS / DICE DO NOT LOOK FAIR" or "CARDS NOT SHUFFLED WELL" with the counts; BACK REDO wipes and returns to the size menu, OK USE goes on.', 'A normal session shows no warning.'] },
+  { id: 'NEW-05', sec: 'NEW', rev: 1, title: 'Dice string hash',
+    steps: ['CREATE > ROLL DICE > STRING HASH, type a long string of rolls, finish.'],
+    expect: ['A valid seed is produced; the same string gives the same seed again.'] },
+  { id: 'NEW-06', sec: 'NEW', rev: 1, title: 'Random word pick',
+    steps: ['CREATE > RANDOM WORD PICK, draw all words.'],
+    expect: ['A valid seed with a correct checksum word.'] },
+  { id: 'NEW-07', sec: 'NEW', rev: 1, title: 'Poker cards',
+    steps: ['CREATE > POKER CARDS.'],
+    expect: ['An introduction explains putting each card back and shuffling, and the card codes ("tc = TEN OF CLUBS"); BACK returns to the size menu.', 'Enough cards give a valid seed.'] },
+  { id: 'NEW-08', sec: 'NEW', rev: 1, title: 'Triple mnemonic',
+    steps: ['CREATE > TRIPLE MNEMONIC.'],
+    expect: ['The flow completes and the seeds shown are valid.'] },
+  { id: 'NEW-09', sec: 'NEW', rev: 1, title: 'Stopwatch seed',
+    steps: ['With STOPWATCH SEED on: CREATE > STOPWATCH, press the samples needed.'],
+    expect: ['Each sample counts as 8 bits; the seed is produced when the count is reached.'] },
+  { id: 'NEW-10', sec: 'NEW', rev: 1, title: 'Mix entropy (XOR of seeds)',
+    steps: ['CREATE > MIX ENTROPY, 2 INPUTS, both from the keyboard.', 'Try BACK from each step (XOR menu, source menu, size, word entry, SD list, QR scan).'],
+    expect: ['Title "MIX ENTROPY - XOR"; BACK from its menu returns to CREATE.', 'The result asks for its transcript before WALLET; UNLOAD returns to the main menu.'] },
+  { id: 'NEW-11', sec: 'NEW', rev: 1, title: 'Verify transcript of a new seed',
+    steps: ['Create a seed, press OK (WALLET).', 'Pick the right words; once pick a wrong one.', 'Create another and choose SKIP AND LOAD.'],
+    expect: ['Four choices per word, random order; a wrong word is named in red and the list starts again.', 'All right: green "TRANSCRIPT VERIFIED", then the wallet. Not asked again for the same seed; never asked for loaded seeds.'] },
+
+  // ---------------------------------------------------------------- LOAD
+  { id: 'LOAD-01', sec: 'LOAD', rev: 1, title: 'Load the test seed from the keyboard',
+    steps: ['LOAD SEED WORDS > 12 WORDS > keyboard, type the test seed.', 'Open WALLET.'],
+    expect: ['The words are accepted; WALLET shows fingerprint 73C5DA0A and ACC: 0.'], data: ABANDON },
+  { id: 'LOAD-02', sec: 'LOAD', rev: 1, title: 'Wrong checksum is refused',
+    steps: ['Type the test seed with "abandon" as the last word.'],
+    expect: ['The seed is refused with the reason on screen.'] },
+  { id: 'LOAD-03', sec: 'LOAD', rev: 1, title: 'Word entry editing',
+    steps: ['Type letters, DEL them; confirm words and DEL back into them.', 'With word 1 empty press BACK.'],
+    expect: ['DEL deletes letters, then confirmed words; on an empty word 1 the key is BACK and leaves, wiping what was typed.'] },
+  { id: 'LOAD-04', sec: 'LOAD', rev: 1, title: 'Load from an SD slot (plain and KEF)',
+    steps: ['Save the test seed to an unencrypted slot and to a KEF slot (see BAK tests).', 'LOAD > FROM SD each slot; for KEF try a wrong key first.'],
+    expect: ['The slot list previews the slots ("KEF" for encrypted ones).', 'Plain slot loads directly; KEF asks the key, a wrong key allows another try, the right one loads the seed.'] },
+  { id: 'LOAD-05', sec: 'LOAD', rev: 1, title: 'Load from QR: SeedQR, Compact SeedQR, words, KEF',
+    steps: ['Show the SeedQR, the Compact SeedQR and a KEF QR of the test seed (from this device or another tool) and LOAD > FROM QR each.', 'Press BACK while it waits for a code.'],
+    expect: ['Each loads the test seed (fingerprint 73C5DA0A).', 'KEF shows its ID, iterations and estimated time, then asks the key.', 'BACK cancels the wait.'] },
+  { id: 'LOAD-06', sec: 'LOAD', rev: 1, title: 'Card of the first Seedmate',
+    steps: ['Insert an SD card with seeds written by the first Seedmate firmware and load one.'],
+    expect: ['The seed loads; no marker is needed to read old cards.'] },
+
+  // ---------------------------------------------------------------- BAK
+  { id: 'BAK-01', sec: 'BAK', rev: 1, title: 'SeedQR and Compact SeedQR',
+    steps: ['On the words screen: LEFT (SEED BACKUP) > SEEDQR with the setting off.', 'Turn SEEDQR on, try again; then COMPACT SEEDQR.', 'Zoom with OK and move between tiles with the arrows.', 'Scan the code back with LOAD > FROM QR.'],
+    expect: ['With the setting off: blocked, with the reason.', 'With it on: a red warning first (once per session), then the full-screen QR; the zoom shows one tile with grid lines and numbers.', 'The scanned code loads the same seed.'] },
+  { id: 'BAK-02', sec: 'BAK', rev: 1, title: 'Unencrypted SD slot',
+    steps: ['SEED BACKUP > UNENCRYPTED SD with the setting off, then on.', 'Try a card that was never initialized.', 'Write to a free slot, then to the same slot again.'],
+    expect: ['Setting off: blocked. On: yellow warning once per session, then the slot list (slots 2..200; slot 1 read only).', 'Uninitialized card: "CARD NOT INITIALIZED / USE SD CARD > INITIALIZE CARD".', 'A used slot asks "SLOT n IS IN USE" (BACK / OVER) before overwriting.'] },
+  { id: 'BAK-03', sec: 'BAK', rev: 1, title: 'Encrypted backup (KEF): QR and SD',
+    steps: ['SEED BACKUP > ENCRYPTED (KEF), type a key.', 'SHOW QR, then SAVE TO SD CARD to a slot.', 'Load both back (QR and SD).'],
+    expect: ['Notice, key, confirmation with seed size, ID, real iteration count and the fingerprint in lower case, progress, then the envelope is checked.', 'The QR and the slot load the same seed with that key.'] },
+  { id: 'BAK-04', sec: 'BAK', rev: 1, title: 'KEF interoperability with Krux',
+    steps: ['Open the KEF QR of this device in a Krux.', 'Load in this device an encrypted QR made by a Krux.'],
+    expect: ['Both directions decrypt to the same seed.'] },
+  { id: 'BAK-05', sec: 'BAK', rev: 1, title: 'Verify transcript from SEED BACKUP',
+    steps: ['SEED BACKUP > VERIFY TRANSCRIPT on a loaded seed.'],
+    expect: ['The same check as for a new seed; BACK returns to the word list.'] },
+
+  // ---------------------------------------------------------------- OPS
+  { id: 'OPS-01', sec: 'OPS', rev: 1, title: 'Shamir split and merge',
+    steps: ['OPSEC > SHAMIR SECRET SHARE: split the test seed 2 of 3.', 'Merge with shares 1 and 3, inputs from keyboard, SD and QR.'],
+    expect: ['The merge gives back the test seed (fingerprint 73C5DA0A).'] },
+  { id: 'OPS-02', sec: 'OPS', rev: 1, title: 'Shamir merge with wrong input',
+    steps: ['Merge with a share of another split, or of another size.'],
+    expect: ['The size mismatch is refused with the reason; a share of another split gives a different seed, never a crash.'] },
+  { id: 'OPS-03', sec: 'OPS', rev: 1, title: 'Seed word XOR',
+    steps: ['OPSEC > SEED WORD XOR: A XOR B = C, then XOR C with B.'],
+    expect: ['The result of the second XOR is A. BACK from the flow returns to OPSEC.'] },
+  { id: 'OPS-04', sec: 'OPS', rev: 1, title: 'Obfuscation round trip',
+    steps: ['OPSEC > OBFUSCATION: obfuscate the test seed, then reverse it.'],
+    expect: ['The reversed words are the test seed.'] },
+  { id: 'OPS-05', sec: 'OPS', rev: 1, title: 'Mnemonic to cards round trip',
+    steps: ['OPSEC > MNEMONIC TO CARDS: encode the test seed, decode the card sequence.'],
+    expect: ['The decoded seed is the test seed.'] },
+
+  // ---------------------------------------------------------------- B85
+  { id: 'B85-01', sec: 'B85', rev: 1, title: 'BIP85 child seed from the main menu',
+    steps: ['BIP85 CHILD SEED, type the test seed, 12 words, index 0; then 24 words, index 1.', 'Derive the same in an independent BIP85 tool (offline).'],
+    expect: ['The child words match the independent tool.'] },
+
+  // ---------------------------------------------------------------- TOOL
+  { id: 'TOOL-01', sec: 'TOOL', rev: 1, title: 'QR READER types',
+    steps: ['TOOLS > QR READER: read a text, a bitcoin address, a payment URI, one UR part, one BBQr part, a SeedQR, a Compact SeedQR, a binary code, a KEF QR.'],
+    expect: ['Each is named (address, payment URI, ONE PART OF A BBQR CODE, yellow "LOOKS LIKE A SEED" / "COMPACT SEEDQR", "ENCRYPTED SEED (KEF)", binary in hex) and shown in pages; nothing is loaded or saved.'] },
+  { id: 'TOOL-02', sec: 'TOOL', rev: 1, title: 'QR FROM TEXT',
+    steps: ['Type a text up to 320 characters, GEN QR, zoom.', 'Type 12 BIP39 words.'],
+    expect: ['The QR reads back as the same text.', 'A text that is a seed gets a red warning first.'] },
+  { id: 'TOOL-03', sec: 'TOOL', rev: 1, title: 'EFF PASSWORD',
+    steps: ['Choose 6 words, NUMBERS yes, 1ST LETTER CAPITAL yes, SEPARATOR "-".', 'Enter dice 1-1-1-1 for the first word, and finish.', 'Check the words in the printed EFF Short Wordlist 1.'],
+    expect: ['Dice 1111 gives the first word of the list; each word matches its dice index.', 'The entropy shown is 6 x 13.66 rounded down (81 bits); OK shows its QR.'] },
+  { id: 'TOOL-04', sec: 'TOOL', rev: 1, title: 'REVIEW PSBT without a seed',
+    steps: ['TOOLS > REVIEW PSBT > FROM SD, open test/psbt/abandon multisig.psbt.'],
+    expect: ['The flow says "NO SEED / UNCHECKED"; inputs and outputs in yellow; keys "FP xxxxxxxx NOT CHECKED"; no SIGN in the grid; BACK returns to TOOLS.'] },
+  { id: 'TOOL-05', sec: 'TOOL', rev: 1, title: 'Resources QR codes',
+    steps: ['Open each entry of RESOURCES.'],
+    expect: ['Each QR opens the right page on a phone.'] },
+
+  // ---------------------------------------------------------------- SD
+  { id: 'SD-01', sec: 'SD', rev: 1, title: 'INITIALIZE CARD',
+    steps: ['SD CARD > INITIALIZE CARD on a card with two seeds; then on an empty card.'],
+    expect: ['It counts first (progress), then the red warning says "2 SEEDS WILL BE ERASED" or "NO SEEDS FOUND ON IT".', 'Progress with the steps; afterwards seed writes are allowed and the vault can be created.'] },
+  { id: 'SD-02', sec: 'SD', rev: 1, title: 'WIPE ALL CARD',
+    steps: ['SD CARD > WIPE ALL CARD on an initialized card with seeds.'],
+    expect: ['Red warning with the card size and the seeds that will be erased; afterwards the card is uninitialized.'] },
+  { id: 'SD-03', sec: 'SD', rev: 1, title: 'ERASE SECTOR',
+    steps: ['Erase a seed slot; try a sector that is not a seed slot.'],
+    expect: ['A seed slot is erased; other sectors are refused with "NOT A SEED".'] },
+  { id: 'SD-04', sec: 'SD', rev: 1, title: 'Seed card refused for files',
+    steps: ['Try to save a signed PSBT or a descriptor to the seed card.'],
+    expect: ['"THIS IS A SEED CARD": nothing is written.'] },
+  { id: 'SD-05', sec: 'SD', rev: 1, title: 'File list and card removal',
+    steps: ['On a FAT32 file card with mixed-case names, open SIGN > FROM SD.', 'Take the card out while the list is shown and press DOWN.'],
+    expect: ['Files in alphabetical order, case ignored; long names cut with "..".', 'Card removed: "SD CARD ERROR / CARD REMOVED OR CHANGED" within seconds.'] },
+
+  // ---------------------------------------------------------------- WAL
+  { id: 'WAL-01', sec: 'WAL', rev: 1, title: 'Load the wallet keys',
+    steps: ['On the test seed words press OK (WALLET).', 'Once press BACK during the derivation.'],
+    expect: ['Loading screen with progress phases; BACK cancels it.', 'The menu WALLET shows "SINGLE SIG, NATIVE SEGWIT", fingerprint 73C5DA0A and ACC: 0.'] },
+  { id: 'WAL-02', sec: 'WAL', rev: 1, title: 'Native segwit: zpub and addresses',
+    steps: ['CONFIG: SINGLE SIG, NATIVE SEGWIT. XPUB/ZPUB, LEFT for the zpub.', 'ADDRESSES > RECEIVE 0 and 1, CHANGE 0.'],
+    expect: ['zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs',
+             'Receive 0 bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu, receive 1 bc1qnjg0jd8228aq7egyzacy8cys3knf9xvrerkf9g, change 0 bc1q8c6fshw2dlwun7ekn9qwf37cu2rn755upcp6el (BIP84 vectors).'] },
+  { id: 'WAL-03', sec: 'WAL', rev: 1, title: 'Nested segwit: ypub and addresses',
+    steps: ['CONFIG: SCRIPT NESTED SEGWIT. XPUB/YPUB, LEFT for the ypub.', 'ADDRESSES > RECEIVE 0.'],
+    expect: ['ypub6Ww3ibxVfGzLrAH1PNcjyAWenMTbbAosGNB6VvmSEgytSER9azLDWCxoJwW7Ke7icmizBMXrzBx9979FfaHxHcrArf3zbeJJJUZPf663zsP', 'Receive 0 37VucYSaXLCAsxYyAPfbSi9eh4iEcbShgf'] },
+  { id: 'WAL-04', sec: 'WAL', rev: 1, title: 'Taproot: xpub and addresses',
+    steps: ['CONFIG: SCRIPT TAPROOT. XPUB.', 'ADDRESSES > RECEIVE 0, CHANGE 0.'],
+    expect: ['xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ (no LEFT / RIGHT format switch)',
+             'Receive 0 bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr, change 0 bc1p3qkhfews2uk44qtvauqyr2ttdsw7svhkl9nkm9s9c3x4ax5h60wqwruhk7 (BIP86 vectors).'] },
+  { id: 'WAL-05', sec: 'WAL', rev: 1, title: 'Legacy: xpub and addresses',
+    steps: ['CONFIG: SCRIPT LEGACY. XPUB.', 'ADDRESSES > RECEIVE 0 and 1, CHANGE 0.'],
+    expect: ['xpub6BosfCnifzxcFwrSzQiqu2DBVTshkCXacvNsWGYJVVhhawA7d4R5WSWGFNbi8Aw6ZRc1brxMyWMzG3DSSSSoekkudhUd9yLb6qx39T9nMdj',
+             'Receive 0 1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA, receive 1 1Ak8PffB2meyfYnbXZR9EGfLfFZVpzJvQP, change 0 1J3J6EvPrv8q6AC3VCjWV45Uf3nssNMRtH'] },
+  { id: 'WAL-06', sec: 'WAL', rev: 1, title: 'Address QR codes',
+    steps: ['For each script type, OK on an address shows its QR; scan it with a phone or Sparrow.', 'BACK returns to the address text instantly.'],
+    expect: ['Every QR reads as the address on screen (bech32 addresses in upper case).'] },
+  { id: 'WAL-07', sec: 'WAL', rev: 1, title: 'Account key QR into Sparrow (text and UR)',
+    steps: ['For each script type: XPUB page, OK for the QR; LEFT / RIGHT switch between text and UR.', 'Import each into Sparrow.'],
+    expect: ['Text "[73c5da0a/<purpose>h/0h/0h]xpub..." and UR crypto-account are both accepted; Sparrow shows receive 0 as in the tests above.'] },
+  { id: 'WAL-08', sec: 'WAL', rev: 1, title: 'EXPORT DESCRIPTOR to SD',
+    steps: ['For each script type: XPUB page, RIGHT (SD), confirm. Save once more.', 'Sparrow: File > Import Wallet, the descriptor file.'],
+    expect: ['Title "EXPORT DESCRIPTOR"; file 73c5da0a-<type>-acc0.txt, the second one -2.', 'Sparrow imports wpkh / sh(wpkh) / tr / pkh with nothing left to choose and the same receive 0.', 'A seed card is refused.'] },
+  { id: 'WAL-09', sec: 'WAL', rev: 1, title: 'Another account',
+    steps: ['CONFIG: ACCOUNT 1, SAVE (native).', 'Compare with Sparrow account 1 of the test seed.'],
+    expect: ['The account changes without the long derivation; xpub and receive 0 match Sparrow account 1; ACC: 1 at the bottom left.'] },
+  { id: 'WAL-10', sec: 'WAL', rev: 1, title: 'Passphrase from keyboard, QR and vault',
+    steps: ['ADD PASSPHRASE > FROM KEYBOARD: type "TREZOR", SAVE, review.', 'Repeat FROM QR (a QR of the text) and FROM VAULT (a PASSPHRASE entry).', 'Compare the fingerprint with Sparrow (test seed + passphrase TREZOR).'],
+    expect: ['Title "WALLET (PASSPHRASE)", the entry says CHANGE PASSPHRASE, the fingerprint changes and matches Sparrow.', 'CANCEL in the editor keeps the old passphrase.'] },
+  { id: 'WAL-11', sec: 'WAL', rev: 1, title: 'SCAN ADDRESS and +20',
+    steps: ['ADDRESSES > SCAN ADDRESS: scan receive 5 of the wallet, then a change address.', 'Scan an address of index 25 (from Sparrow), press RIGHT (+20).', 'Scan an address of another wallet and one of another script type.', 'Press BACK during a search.'],
+    expect: ['Own addresses: green "ADDRESS IS YOURS" with the path.', 'Index 25: "NOT IN INDEX 0-19", then +20 finds it.', 'Foreign: "NOT IN INDEX ..." in yellow; other type: "NOT A ... ADDRESS".', 'BACK: "CHECK CANCELLED", no +20.'] },
+  { id: 'WAL-12', sec: 'WAL', rev: 1, title: 'UNLOAD SEED',
+    steps: ['WALLET > UNLOAD SEED: BACK once, then WIPE.', 'Also BACK on the words screen.'],
+    expect: ['Red confirmation; BACK returns where it came from; WIPE returns to the main menu and the wallet needs the seed again.'] },
+  { id: 'WAL-13', sec: 'WAL', rev: 1, title: 'CONFIG screen',
+    steps: ['Move through ACCOUNT, MODE and SCRIPT with UP / DOWN; change values with LEFT / RIGHT; hold RIGHT on ACCOUNT.', 'BACK, then the same changes with SAVE.'],
+    expect: ['The grid names the neighbour value; the path and address prefix update without flicker; ACCOUNT repeats while held.', 'BACK leaves without changes; SAVE applies them with progress.'] },
+
+  // ---------------------------------------------------------------- MS
+  { id: 'MS-01', sec: 'MS', rev: 1, title: 'Multisig keys',
+    steps: ['CONFIG: MULTI SIG, NATIVE SEGWIT. XPUB.', 'Then NESTED SEGWIT, LEFT for the Ypub.'],
+    expect: ['Native: [73c5da0a/48h/0h/0h/2h]xpub6DkFAXWQ2dHxq2vatrt9qyA3bXYU4ToWQwCHbf5XB2mSTexcHZCeKS1VZYcPoBd5X8yVcbXFHJR9R8UCVpt82VX1VhR28mCyxUFL4r6KFrf',
+             'Nested: Ypub6jUbbRukkGPp4DgJDD4HL2NKkSZ1UPk111mg59XtJRQZHvJ6XqvJzrntik9U4jCFQkgrBqevdKLPMdYZXU9KAGhKpMhW5XujwqiQ7Csmm4Z'] },
+  { id: 'MS-02', sec: 'MS', rev: 1, title: 'ADDRESSES without a descriptor',
+    steps: ['MULTI SIG mode with no descriptor loaded: WALLET > ADDRESSES; press UP.'],
+    expect: ['RECEIVE and CHANGE in dark gray (no flicker), the cursor on IMPORT DESCRIPTOR, yellow "NO DESCRIPTOR LOADED".'] },
+  { id: 'MS-03', sec: 'MS', rev: 1, title: 'Import a descriptor from SD (native)',
+    steps: ['ADDRESSES > IMPORT DESCRIPTOR > FROM SD: test/psbt/MSDESC.TXT; then MSCOLD.TXT.'],
+    expect: ['Review: "2 OF 3 SORTEDMULTI", CHECKSUM OK, fingerprints 73c5da0a (green) 010535a1 bdc140de, receive 0 bc1qxhdtr2wr4krn3cfn8ghd83n2v76558hjsf5cgtyjgs26pq23ajgqtyeugs.', 'After OK the wallet line says "MULTI 2/3, NATIVE SEGWIT".'] },
+  { id: 'MS-04', sec: 'MS', rev: 1, title: 'Multisig addresses (native)',
+    steps: ['With MSDESC.TXT loaded: ADDRESSES > RECEIVE 0..1, CHANGE 0; OK for the QR. Note the time per index.'],
+    expect: ['Receive 0 bc1qxhdtr2wr4krn3cfn8ghd83n2v76558hjsf5cgtyjgs26pq23ajgqtyeugs, receive 1 bc1q72scqu0wrdrzr9pqq649sq7yz6wlhrqrvv54mxfhq5rwqkwlcf6sd460rt, change 0 bc1qfyhff8dsw9z0pe592u2ej6tdte9tk5kwa0cmzfjfhpry225qxxxs53pckw.', '"2 OF 3, NATIVE SEGWIT" and the fingerprints below the address; the QR reads in Sparrow.'] },
+  { id: 'MS-05', sec: 'MS', rev: 1, title: 'Nested multisig descriptor and addresses',
+    steps: ['CONFIG: NESTED SEGWIT. IMPORT DESCRIPTOR > FROM SD: MSNDESC.TXT, then MSNCOLD.TXT.', 'ADDRESSES > RECEIVE 0, CHANGE 0.'],
+    expect: ['Review with "SH"; receive 0 36he8x7aELcwBcVC6GHTwf6VBCcJASJGYk; change 0 3FYBqFx722oaq3L7qEwVWPQyEQbKNCLxG5.'] },
+  { id: 'MS-06', sec: 'MS', rev: 1, title: 'Descriptor from QR (UR, single QR, BBQr)',
+    steps: ['Sparrow: animated "Output Descriptor" QR of a test multisig; the single QR of its printed PDF.', 'Animator page: MSDESC.TXT as BBQr (type U).'],
+    expect: ['All three are read and reviewed like the SD file; "CHECKING THE DESCRIPTOR" stays until the review.'] },
+  { id: 'MS-07', sec: 'MS', rev: 1, title: 'Descriptor refusals',
+    steps: ['In NATIVE import MSNDESC.TXT.', 'With ACCOUNT 1 import MSDESC.TXT.', 'Import a descriptor without our key.'],
+    expect: ['"SWITCH TO NESTED SEGWIT", "SWITCH TO ACCOUNT 0", "MY KEY DOES NOT MATCH": nothing is loaded.'] },
+  { id: 'MS-08', sec: 'MS', rev: 1, title: 'Descriptor in the vault',
+    steps: ['VAULT > NEW ENTRY > MULTISIG DESCRIPTOR > CURRENT MS DESCRIPTOR, save.', 'Unload, load the seed again, IMPORT DESCRIPTOR > FROM VAULT.'],
+    expect: ['Saved as "MULTISIG 2 OF 3 ..." after one confirmation with the fingerprints; loading it goes through the same review.'] },
+  { id: 'MS-09', sec: 'MS', rev: 1, title: 'Descriptor becomes inactive',
+    steps: ['With a descriptor loaded change the account or the passphrase, then come back.'],
+    expect: ['Another account or passphrase: addresses gray again ("NO DESCRIPTOR LOADED"); back to the original: active again.'] },
+
+  // ---------------------------------------------------------------- SIG
+  { id: 'SIG-01', sec: 'SIG', rev: 1, title: 'Native single sig PSBTs (Sparrow test files)',
+    steps: ['NATIVE SEGWIT, account 0. SIGN > FROM SD each file of test/psbt/sparrow/ (send, 3 inputs, big, sweep).', 'Go through the flow diagram, every output page, the inputs and DETAILS; sign; save to SD.', 'Open each signed file in Sparrow.'],
+    expect: ['OK is NEXT until every destination was shown, then SIGN; the confirmation shows the destination, the fee and ~sat/vB.', 'Sparrow shows each PSBT fully signed and offers Broadcast.'] },
+  { id: 'SIG-02', sec: 'SIG', rev: 1, title: 'Nested single sig PSBT',
+    steps: ['NESTED SEGWIT. Sign test/psbt/abandon nested.psbt (SD and QR).'],
+    expect: ['Signed; Sparrow shows it fully signed; the change of 98,000 sats is shown as change.'] },
+  { id: 'SIG-03', sec: 'SIG', rev: 1, title: 'Taproot PSBT',
+    steps: ['TAPROOT. Sign test/psbt/abandon taproot.psbt by QR and by SD.'],
+    expect: ['No PREVIOUS TX MISSING screen; Sparrow accepts both signatures; change 48,000 sats.'] },
+  { id: 'SIG-04', sec: 'SIG', rev: 1, title: 'Legacy PSBT and its previous transactions',
+    steps: ['LEGACY. Sign test/psbt/abandon legacy.psbt by QR and by SD.', 'Try test/psbt/malicious/OWN-legacy_no_prev_tx.psbt.'],
+    expect: ['Signed (2 inputs); the file is byte-identical to the reference signer (808 bytes) and Sparrow accepts it.', 'The second is refused: "LEGACY NEEDS PREV TX".'] },
+  { id: 'SIG-05', sec: 'SIG', rev: 1, title: 'Native multisig with and without descriptor',
+    steps: ['MULTI SIG, NATIVE. Without descriptor sign test/psbt/abandon multisig.psbt.', 'Import MSDESC.TXT and sign it again.'],
+    expect: ['Without descriptor the change is shown as not verified; with it the change is verified.', 'Three inputs signed; Sparrow accepts the signatures.'] },
+  { id: 'SIG-06', sec: 'SIG', rev: 1, title: 'Nested multisig',
+    steps: ['MULTI SIG, NESTED, MSNDESC.TXT loaded. Sign test/psbt/abandon nested multisig.psbt by QR and by SD.'],
+    expect: ['2 inputs signed, change of 168,000 sats verified.'] },
+  { id: 'SIG-07', sec: 'SIG', rev: 1, title: 'Attack PSBTs: fake change',
+    steps: ['With the matching descriptor loaded sign test/psbt/MSATTACK.PSB (native) and MSNATTACK.PSB (nested).'],
+    expect: ['The "change" is shown as a send, NOT IN LOADED WALLET: the user sees the amount leaving.'] },
+  { id: 'SIG-08', sec: 'SIG', rev: 1, title: 'Refusals with the reason',
+    steps: ['In NATIVE, account 0: test/psbt/abandon taproot.psbt, abandon legacy.psbt, abandon multisig.psbt, sparrow/abandon account 1.psbt and malicious/TX-14.cross_net.psbt (testnet).'],
+    expect: ['"SWITCH TO TAPROOT", "SWITCH TO LEGACY", "SWITCH TO MULTI SIG", "SWITCH TO ACCOUNT 1", "TESTNET NOT SUPPORTED".'] },
+  { id: 'SIG-09', sec: 'SIG', rev: 1, title: 'Warnings: fee, burn, change index, previous tx',
+    steps: ['NATIVE. Review test/psbt/malicious/OWN-fee_quarter_over.psbt, OWN-op_return_burn.psbt, OWN-change_index_over.psbt and a PSBT without previous transactions (OWN-fee_quarter_limit.psbt).'],
+    expect: ['"HIGH FEE" on the diagram and the confirmation; "BURNS BTC" with "THIS AMOUNT IS BURNED"; "HIGH CHANGE INDEX"; the red "PREVIOUS TX MISSING / CHECK INPUT AMOUNTS MANUALLY" screen and "AMOUNTS NOT VERIFIED".'] },
+  { id: 'SIG-10', sec: 'SIG', rev: 1, title: 'Export after signing',
+    steps: ['After signing: SHOW QR (read it in Sparrow), then SAVE TO SD CARD twice.'],
+    expect: ['The animated QR is read by Sparrow.', 'Files "<name>-signed.psbt" and "<name>-signed-2.psbt" (or "signed.psbt" for a PSBT from QR), written and verified, green "SAVED TO SD CARD".'] },
+  { id: 'SIG-11', sec: 'SIG', rev: 1, title: 'PSBTs made by real wallets',
+    steps: ['With a test wallet in Sparrow and in Nunchuk (single sig and multisig), create PSBTs and sign them by SD and by QR.'],
+    expect: ['Nothing valid is refused; the review matches what the wallet shows; the signed PSBTs broadcast (testnet wallets cannot be used: mainnet only).'] },
+
+  // ---------------------------------------------------------------- QR
+  { id: 'QR-01', sec: 'QR', rev: 1, title: 'Animated UR scan under loss',
+    steps: ['tools/ur_psbt_animator.html: fragments 60, 100, 150 and 250 bytes; frame time 100 and 500 ms; "Mixed parts only"; "Start at part"; drop 30-50 % of frames.'],
+    expect: ['Every case completes and the PSBT review opens.'] },
+  { id: 'QR-02', sec: 'QR', rev: 1, title: 'UR limits',
+    steps: ['A PSBT over 35 parts (animator).', 'Sparrow UR at medium and high density.'],
+    expect: ['"UR MESSAGE TOO BIG" and "LOWER THE QR DENSITY" respectively; never a silent wait.'] },
+  { id: 'QR-03', sec: 'QR', rev: 1, title: 'BBQr scan',
+    steps: ['Animator: BBQr Z, 2 and H at 224 and 758 characters per code.', 'Sparrow BBQr at low and medium density with test/psbt/sparrow/abandon big.psbt; then high.'],
+    expect: ['All low and medium cases read; high says "LOWER THE QR DENSITY".'] },
+  { id: 'QR-04', sec: 'QR', rev: 1, title: 'Mixed formats and wrong types',
+    steps: ['Start a scan with a UR frame, then show a BBQr.', 'Show a BBQr of a text file in SIGN.', 'Show any other QR during a PSBT scan.'],
+    expect: ['"MIXED UR AND BBQR", "BBQR IS NOT A PSBT", "NOT A UR:CRYPTO-PSBT QR".'] },
+  { id: 'QR-05', sec: 'QR', rev: 1, title: 'Single part UR and BACK',
+    steps: ['A small PSBT as a single part UR.', 'BACK during any scan, then use QR READER.'],
+    expect: ['The single part PSBT is read.', 'BACK leaves the scan; QR READER works afterwards (the scanner settings were restored).'] },
+
+  // ---------------------------------------------------------------- VLT
+  { id: 'VLT-01', sec: 'VLT', rev: 1, title: 'Create and open the vault',
+    steps: ['On a card initialized before the vault existed: WALLET > VAULT.', 'On a freshly initialized card: VAULT.'],
+    expect: ['Old card: "CREATE AN EMPTY VAULT" offered. New card: "VAULT 73C5DA0A", reading progress, list with NEW ENTRY last.'] },
+  { id: 'VLT-02', sec: 'VLT', rev: 1, title: 'Entries: new, load, edit, delete',
+    steps: ['NEW ENTRY: NOTE, LOGIN, PASSPHRASE, CREDIT CARD, EFF PASSWORD; save each.', 'LOAD, EDIT, DEL one of each.'],
+    expect: ['Titles sorted; "TITLE NEEDED" without a title; SAVE TO VAULT confirmation; DEL asks in red; the count at the bottom left is right.'] },
+  { id: 'VLT-03', sec: 'VLT', rev: 1, title: 'Entry QR and seed warning',
+    steps: ['LOAD an entry, OK for its QR; an entry whose text is a seed.'],
+    expect: ['The QR holds title and text (text only for PASSPHRASE); a seed text gets the red warning first.'] },
+  { id: 'VLT-04', sec: 'VLT', rev: 1, title: 'Entries of another seed or passphrase',
+    steps: ['Add entries with the test seed, then open the vault with a passphrase or another seed.'],
+    expect: ['Entries of the other seed are neither listed nor counted.'] },
+  { id: 'VLT-05', sec: 'VLT', rev: 1, title: 'Card changed and old records',
+    steps: ['Swap the card while the vault list is open and try to save.', 'Open a vault written by the previous firmware version.'],
+    expect: ['"CARD CHANGED": the vault is left, nothing written.', 'Old entries open and can be edited.'] },
+
+  // ---------------------------------------------------------------- DER
+  { id: 'DER-01', sec: 'DER', rev: 1, title: 'BIP85 child seed from the wallet',
+    steps: ['WALLET > DERIVE > BIP85 CHILD SEED, 12 words, index 0; compare with B85-01.', 'LOAD the child.'],
+    expect: ['"FROM FINGERPRINT 73C5DA0A" in green; same words as the main menu BIP85 (no passphrase).', 'LOAD makes the child the seed on screen and drops the passphrase.'] },
+  { id: 'DER-02', sec: 'DER', rev: 1, title: 'BIP85 password',
+    steps: ['DERIVE > BIP85 PASSWORD: BASE64 length 21 index 0; BASE85 length 20 index 1.', 'Compare with an independent BIP85 tool.'],
+    expect: ['Same passwords; shown in groups of 4; OK shows the QR; yellow note that it is a secret.'] },
+  { id: 'DER-03', sec: 'DER', rev: 1, title: 'Nostr keys',
+    steps: ['DERIVE > NOSTR KEYS: npub, RIGHT for the nsec (warning), OK for each QR.', 'Compare with an independent NIP-06 tool for the same seed and account.'],
+    expect: ['npub with cyan "SAFE TO SHARE"; the nsec only after the yellow warning (once per session); both match the tool.'] },
+
+  // ---------------------------------------------------------------- UI
+  { id: 'UI-01', sec: 'UI', rev: 1, title: 'Button grid on every screen that waits for a key',
+    steps: ['Walk through every menu and flow.'],
+    expect: ['The grid (bottom right) shows only the keys that act, with labels centered and never doubled; nothing else is drawn inside it.'] },
+  { id: 'UI-02', sec: 'UI', rev: 1, title: 'Colors keep their meaning',
+    steps: ['Look at titles, cursors, warnings, errors and progress across the flows.'],
+    expect: ['Titles light gray and centered; selection orange; warnings and unverified data yellow; success and verified green; errors red; progress and running steps cyan.'] },
+  { id: 'UI-03', sec: 'UI', rev: 1, title: 'Activity LED',
+    steps: ['Watch the LED during a key derivation, a PSBT signing, an SD write and while waiting for a key.'],
+    expect: ['Blinks every 150 ms while working; off when waiting for the user.'] },
+  { id: 'UI-04', sec: 'UI', rev: 1, title: 'Key repeat',
+    steps: ['Hold UP / DOWN in a menu and in the address list; hold them on an entropy screen.'],
+    expect: ['Repeat after 500 ms then every 120 ms; never on the entropy screens.'] },
+  { id: 'UI-05', sec: 'UI', rev: 1, title: 'BACK before every irreversible step',
+    steps: ['In every flow that signs, writes the SD card, exports or changes a setting, press BACK at each step before the final confirmation.'],
+    expect: ['Each one can be left without any change.'] },
+
+  // ---------------------------------------------------------------- SEC
+  { id: 'SEC-01', sec: 'SEC', rev: 1, title: 'Unload wipes everything',
+    steps: ['Load the seed with a passphrase, a descriptor and the vault; UNLOAD SEED.', 'Open WALLET again with a new seed.'],
+    expect: ['Nothing of the previous seed remains: passphrase, keys, descriptor and vault key are gone.'] },
+  { id: 'SEC-02', sec: 'SEC', rev: 1, title: 'Stack peak after the heaviest flows',
+    steps: ['Power on, sign abandon multisig.psbt with MSDESC.TXT loaded, scan a BBQr Z PSBT, sign the taproot PSBT.', 'SETTINGS > MCU SERIAL NUMBER: write the STACK PEAK in the note.'],
+    expect: ['The peak stays below 7/8 of the stack (no yellow).'] },
+];
+
+// ===========================================================================
+// State: the results file, kept in localStorage as a working copy and written
+// to validation_results.json (File System Access API) or downloaded.
+// ===========================================================================
+const FORMAT = 'seedmate-validation-1';
+const STORE = 'seedmate-validation-working';
+const RESULTS_NAME = 'validation_results.json';
+const EDIT = location.protocol === 'file:' || location.hash === '#edit';
+
+let state = emptyState();
+let fileHandle = null;
+let dirty = false;
+let statusFilter = 'all';
+
+function emptyState() {
+  return { format: FORMAT, device: 'Seedmate v2 (PIC32MM0256GPM036)',
+           session: { version: '', sha256: '', bootloader: '', tester: '' }, updated: '', results: {} };
+}
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const testById = Object.fromEntries(TESTS.map(t => [t.id, t]));
+
+function validState(s) {
+  return s && s.format === FORMAT && typeof s.results === 'object' && s.session;
+}
+
+function latest(id) {
+  const h = state.results[id];
+  return h && h.length ? h[h.length - 1] : null;
+}
+
+// none | pass | old | fail | changed
+function category(t) {
+  const r = latest(t.id);
+  if (!r) return 'none';
+  if ((r.rev || 1) < t.rev) return 'changed';
+  if (r.status === 'fail') return 'fail';
+  return (state.session.version && r.version !== state.session.version) ? 'old' : 'pass';
+}
+
+const CAT_LABEL = { none: 'NOT TESTED', pass: 'PASSED', old: 'OLDER VERSION', fail: 'FAILED', changed: 'TEST CHANGED' };
+const CAT_CLASS = { none: 'none', pass: 'pass', old: 'old', fail: 'fail', changed: 'old' };
+
+function localStamp(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const p = n => String(n).padStart(2, '0');
+  const off = -d.getTimezoneOffset();
+  const tz = 'UTC' + (off >= 0 ? '+' : '-') + p(Math.floor(Math.abs(off) / 60)) + ':' + p(Math.abs(off) % 60);
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())} ${tz}`;
+}
+
+// ---------------------------------------------------------------- persistence
+function persistLocal() {
+  try { localStorage.setItem(STORE, JSON.stringify(state)); } catch (e) { /* storage full or blocked */ }
+}
+
+function setDirty(d) {
+  dirty = d;
+  updateFileStatus();
+}
+
+function updateFileStatus() {
+  const where = fileHandle ? `writing to ${esc(fileHandle.name)}` : 'not linked to a results file';
+  $('fileStatus').innerHTML = (dirty ? '<span class="dirty">Unsaved changes</span> &middot; ' : '') + where;
+}
+
+async function writeFile() {
+  state.updated = new Date().toISOString();
+  const text = JSON.stringify(state, null, 1) + '\n';
+  persistLocal();
+  if (fileHandle) {
+    try {
+      const w = await fileHandle.createWritable();
+      await w.write(text);
+      await w.close();
+      setDirty(false);
+      showHash(text);
+      return true;
+    } catch (e) {
+      alert('Could not write ' + fileHandle.name + ': ' + e.message);
+      fileHandle = null;
+    }
+  }
+  setDirty(true);
+  showHash(text);
+  return false;
+}
+
+async function saveAs() {
+  state.updated = new Date().toISOString();
+  const text = JSON.stringify(state, null, 1) + '\n';
+  if (window.showSaveFilePicker) {
+    try {
+      fileHandle = await showSaveFilePicker({ suggestedName: RESULTS_NAME,
+        types: [{ description: 'Validation results', accept: { 'application/json': ['.json'] } }] });
+      await writeFile();
+      return;
+    } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  a.download = RESULTS_NAME;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  setDirty(false);
+  showHash(text);
+}
+
+function adopt(s, source) {
+  if (!validState(s)) { alert(source + ' is not a Seedmate validation results file.'); return false; }
+  state = s;
+  for (const k of ['version', 'sha256', 'bootloader', 'tester']) state.session[k] = state.session[k] || '';
+  persistLocal();
+  fillForm();
+  render();
+  return true;
+}
+
+async function openFile() {
+  if (dirty && !confirm('There are unsaved changes in this browser. Replace them with the file?')) return;
+  if (window.showOpenFilePicker) {
+    try {
+      const [h] = await showOpenFilePicker({ types: [{ description: 'Validation results', accept: { 'application/json': ['.json'] } }] });
+      const text = await (await h.getFile()).text();
+      if (adopt(JSON.parse(text), h.name)) { fileHandle = h; setDirty(false); showHash(text); }
+    } catch (e) { if (e.name !== 'AbortError') alert('Could not open the file: ' + e.message); }
+    return;
+  }
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,application/json';
+  input.onchange = async () => {
+    const f = input.files[0];
+    if (!f) return;
+    try {
+      const text = await f.text();
+      if (adopt(JSON.parse(text), f.name)) { setDirty(false); showHash(text); }
+    } catch (e) { alert('Could not read the file: ' + e.message); }
+  };
+  input.click();
+}
+
+async function showHash(text) {
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    $('footHash').textContent = [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch (e) { $('footHash').textContent = 'not available here'; }
+}
+
+// ---------------------------------------------------------------- actions
+async function mark(id, status) {
+  const v = state.session.version.trim();
+  if (!v) { alert('Enter the firmware version under test first.'); $('fVersion').focus(); return; }
+  const noteEl = document.querySelector(`input[data-note="${id}"]`);
+  let note = noteEl ? noteEl.value.trim() : '';
+  if (status === 'fail' && !note) {
+    note = (prompt('What failed? (required for a failure)') || '').trim();
+    if (!note) return;
+  }
+  const now = new Date();
+  (state.results[id] = state.results[id] || []).push({
+    status, version: v, sha256: state.session.sha256.trim(), bootloader: state.session.bootloader.trim(),
+    tester: state.session.tester.trim(), date: now.toISOString(), date_local: localStamp(now.toISOString()),
+    rev: testById[id].rev, note,
+  });
+  await writeFile();
+  render(id);
+}
+
+async function undo(id) {
+  const h = state.results[id];
+  if (!h || !h.length) return;
+  const r = h[h.length - 1];
+  if (!confirm(`Remove the last entry of ${id} (${r.status.toUpperCase()}, ${r.version}, ${localStamp(r.date)})?`)) return;
+  h.pop();
+  if (!h.length) delete state.results[id];
+  await writeFile();
+  render(id);
+}
+
+// ---------------------------------------------------------------- rendering
+function fillForm() {
+  $('fVersion').value = state.session.version;
+  $('fSha').value = state.session.sha256;
+  $('fBoot').value = state.session.bootloader;
+  $('fTester').value = state.session.tester;
+}
+
+function counts() {
+  const c = { none: 0, pass: 0, old: 0, fail: 0, changed: 0 };
+  for (const t of TESTS) c[category(t)]++;
+  return c;
+}
+
+function renderSummary() {
+  const c = counts();
+  const n = TESTS.length;
+  const tiles = [['all', 'All tests', n, '#1f2328'], ['pass', 'Passed on this version', c.pass, 'var(--pass)'],
+                 ['old', 'Passed on an older version', c.old, 'var(--old)'], ['fail', 'Failed', c.fail, 'var(--fail)'],
+                 ['changed', 'Test changed, repeat', c.changed, 'var(--old)'], ['none', 'Not tested', c.none, 'var(--none)']];
+  $('summary').innerHTML = tiles.map(([k, label, v, col]) =>
+    `<div class="tile${statusFilter === k ? ' sel' : ''}" data-filter="${k}"><b style="color:${col}">${v}</b>${label}</div>`).join('');
+  const pct = v => (100 * v / n).toFixed(2) + '%';
+  $('bar').innerHTML = `<i style="width:${pct(c.pass)};background:var(--pass)"></i><i style="width:${pct(c.old)};background:#e3b341"></i>` +
+                       `<i style="width:${pct(c.changed)};background:#f0d58a"></i><i style="width:${pct(c.fail)};background:var(--fail)"></i>`;
+  $('sumVersion').textContent = state.session.version ? `(version under test: ${state.session.version})` : '';
+  const up = state.updated ? 'Results last updated ' + localStamp(state.updated) + '. ' : '';
+  $('footInfo').textContent = up + TESTS.length + ' tests in ' + SECTIONS.length + ' sections.';
+}
+
+function testHtml(t) {
+  const cat = category(t);
+  const r = latest(t.id);
+  const hist = state.results[t.id] || [];
+  const badge = r ? `${CAT_LABEL[cat]}<small>${esc(r.version)} &middot; ${esc(localStamp(r.date))}</small>` : CAT_LABEL[cat];
+  const list = (a, tag) => `<${tag}>${a.map(x => `<li>${esc(x)}</li>`).join('')}</${tag}>`;
+  let h = `<details class="test ${cat}" id="t-${t.id}" data-id="${t.id}">
+    <summary><span class="tid">${t.id}</span><span class="ttl">${esc(t.title)}</span>
+      <span class="badge ${CAT_CLASS[cat]}">${badge}</span></summary>
+    <div class="body">
+      <h4>Steps</h4>${list(t.steps, 'ol')}
+      <h4>Expected</h4>${list(t.expect, 'ul')}
+      ${t.data ? `<h4>Data</h4><span class="mono">${esc(t.data)}</span>` : ''}`;
+  if (hist.length) {
+    h += `<h4>History</h4><table class="hist"><tr><th>Result</th><th>Firmware</th><th>Date</th><th>Tester</th><th>Note</th></tr>` +
+      hist.slice().reverse().map(e => `<tr><td>${e.status === 'pass' ? 'PASSED' : 'FAILED'}${(e.rev || 1) < t.rev ? ' (test rev ' + (e.rev || 1) + ')' : ''}</td>
+        <td><span class="mono">${esc(e.version)}</span>${e.sha256 ? `<br><span class="note">${esc(e.sha256.slice(0, 16))}...</span>` : ''}</td>
+        <td>${esc(localStamp(e.date))}</td><td>${esc(e.tester || '')}</td><td>${esc(e.note || '')}</td></tr>`).join('') + `</table>`;
+  }
+  if (EDIT) {
+    h += `<div class="actions"><input data-note="${t.id}" placeholder="Note (optional; required when it fails)">
+      <button class="pass" data-act="pass" data-id="${t.id}">&#10003; Passed</button>
+      <button class="fail" data-act="fail" data-id="${t.id}">&#10007; Failed</button>
+      ${hist.length ? `<button class="small" data-act="undo" data-id="${t.id}">Undo last</button>` : ''}</div>`;
+  }
+  return h + '</div></details>';
+}
+
+function visible(t) {
+  const sec = $('fltSection').value;
+  if (sec && t.sec !== sec) return false;
+  if (statusFilter !== 'all' && category(t) !== statusFilter) return false;
+  const q = $('fltText').value.trim().toLowerCase();
+  if (q && !(t.id + ' ' + t.title + ' ' + t.steps.join(' ') + ' ' + t.expect.join(' ')).toLowerCase().includes(q)) return false;
+  return true;
+}
+
+function render(keepOpen) {
+  const open = new Set([...document.querySelectorAll('details.test[open]')].map(d => d.dataset.id));
+  if (keepOpen) open.add(keepOpen);
+  renderSummary();
+  let html = '';
+  for (const [key, name] of SECTIONS) {
+    const tests = TESTS.filter(t => t.sec === key);
+    const shown = tests.filter(visible);
+    if (!shown.length) continue;
+    const passed = tests.filter(t => category(t) === 'pass').length;
+    html += `<section class="sec"><h2>${esc(name)} <small>${passed} of ${tests.length} passed on this version</small></h2>` +
+            shown.map(testHtml).join('') + '</section>';
+  }
+  $('tests').innerHTML = html || '<p class="note">No test matches the filter.</p>';
+  for (const id of open) { const d = $('t-' + id); if (d) d.open = true; }
+}
+
+// ---------------------------------------------------------------- wiring
+function init() {
+  $('fltSection').innerHTML = '<option value="">All sections</option>' +
+    SECTIONS.map(([k, n]) => `<option value="${k}">${esc(n)}</option>`).join('');
+
+  for (const [el, key] of [['fVersion', 'version'], ['fSha', 'sha256'], ['fBoot', 'bootloader'], ['fTester', 'tester']]) {
+    $(el).readOnly = !EDIT;
+    $(el).addEventListener('change', () => { state.session[key] = $(el).value.trim(); writeFile(); render(); });
+  }
+  $('btnOpen').onclick = openFile;
+  $('btnSave').onclick = () => fileHandle ? writeFile() : saveAs();
+  $('btnPrint').onclick = () => window.print();
+  $('btnExpand').onclick = () => document.querySelectorAll('details.test').forEach(d => d.open = true);
+  $('btnCollapse').onclick = () => document.querySelectorAll('details.test').forEach(d => d.open = false);
+  $('fltSection').onchange = () => render();
+  $('fltText').oninput = () => render();
+  $('summary').addEventListener('click', e => {
+    const tile = e.target.closest('.tile');
+    if (!tile) return;
+    statusFilter = tile.dataset.filter;
+    render();
+  });
+  $('tests').addEventListener('click', e => {
+    const b = e.target.closest('button[data-act]');
+    if (!b) return;
+    if (b.dataset.act === 'undo') undo(b.dataset.id); else mark(b.dataset.id, b.dataset.act);
+  });
+  window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+  if (!EDIT) {
+    $('publicNote').classList.remove('hidden');
+    $('btnOpen').classList.add('hidden');
+    $('btnSave').classList.add('hidden');
+    $('helpBox').classList.add('hidden');
+  }
+  load();
+}
+
+async function load() {
+  // Editing: the working copy of this browser, until a results file is
+  // opened. Read-only (served from a web server): the results file next to
+  // the page; also when editing there and nothing is stored yet.
+  let local = null;
+  if (EDIT) {
+    try { local = JSON.parse(localStorage.getItem(STORE) || 'null'); } catch (e) { local = null; }
+  }
+  if (validState(local)) {
+    state = local;
+  } else if (location.protocol !== 'file:') {
+    try {
+      const resp = await fetch(RESULTS_NAME, { cache: 'no-store' });
+      if (resp.ok) {
+        const text = await resp.text();
+        const s = JSON.parse(text);
+        if (validState(s)) { state = s; showHash(text); }
+      }
+    } catch (e) { /* no results published yet */ }
+  }
+  fillForm();
+  updateFileStatus();
+  render();
+}
+
+init();
+</script>
+</body>
+</html>
