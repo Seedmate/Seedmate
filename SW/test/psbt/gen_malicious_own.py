@@ -41,6 +41,20 @@ def psbt(amount_in, outs, change=None, change_index=0):
         maps += kv(b'\x02' + pub_ch, keypath(FP, *ACCOUNT, 1, change_index)) + b'\x00'
     return b'psbt\xff' + kv(b'\x00', tx) + b'\x00' + inp + b'\x00' + maps
 
+def legacy_witness_only():
+    """A P2PKH input at m/44'/0'/0'/0/0 with only a witness UTXO: a legacy
+    signature does not commit to the amount, so without the previous tx the
+    amount (and the fee) is a claim; the legacy mode must refuse it"""
+    acc = [44 | H, 0 | H, 0 | H]
+    pub = ser_pub(point_mul(derive(seed, acc + [0, 0])))
+    spk = b'\x76\xa9\x14' + hash160(pub) + b'\x88\xac'
+    tx = (struct.pack('<I', 2) + b'\x01' + sha256(b'own legacy') + struct.pack('<I', 0) + b'\x00' +
+          struct.pack('<I', 0xfffffffd) + b'\x01' +
+          struct.pack('<Q', 199000) + varint(len(EXTERNAL)) + EXTERNAL + struct.pack('<I', 0))
+    inp = kv(b'\x01', struct.pack('<Q', 200000) + varint(len(spk)) + spk)
+    inp += kv(b'\x06' + pub, keypath(FP, *acc, 0, 0))
+    return b'psbt\xff' + kv(b'\x00', tx) + b'\x00' + inp + b'\x00' + b'\x00'
+
 VECTORS = {
     # An amount in an OP_RETURN is burned; an empty one is only data
     'OWN-op_return_burn': psbt(200000, [(OP_RETURN, 50000), (EXTERNAL, 149000)]),
@@ -54,6 +68,8 @@ VECTORS = {
     # The input is at index 0: change up to 100 is normal, 101 is flagged
     'OWN-change_index_limit': psbt(1000000, [(EXTERNAL, 500000)], change=499000, change_index=100),
     'OWN-change_index_over': psbt(1000000, [(EXTERNAL, 500000)], change=499000, change_index=101),
+    # Legacy input without its previous tx: refused in the legacy mode
+    'OWN-legacy_no_prev_tx': legacy_witness_only(),
 }
 
 for name, data in VECTORS.items():

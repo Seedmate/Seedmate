@@ -12,6 +12,7 @@
 #include "descriptor.h"
 #include "ms_nested_vectors.h"
 #include "taproot_vectors.h"
+#include "legacy_vectors.h"
 #include "sha256.h"
 #include "crypto/ripemd160.h"
 
@@ -340,6 +341,46 @@ static void test_sign_taproot(void) {
     printf("Taproot: BIP341 vectors and the signed PSBT identical to the Python signer (%u bytes)\n", len);
 }
 
+// Legacy (BIP44, P2PKH): two inputs with only their previous transactions;
+// the legacy signature hash of each must be the Python signer's (gen_legacy.py,
+// itself checked against Bitcoin Core's sighash.json), and the firmware must
+// sign both byte-identically
+static void test_sign_legacy(void) {
+    static uint8_t buf[2048];
+    psbt_t p;
+    psbt_input_t in;
+    uint8_t digest[32], sig[PSBT_SIG_MAX_LEN], sha[32], spk[25] = {0x76, 0xA9, 0x14};
+    uint32_t sig_len = 0, len = sizeof(legacy_psbt);
+    SHA256_CTX ctx;
+
+    memcpy(buf, legacy_psbt, sizeof(legacy_psbt));
+    for (uint32_t i = 0; i < 2; i++) {
+        const uint8_t *pub = &legacy_pub[33 * i];
+        CHECK(psbt_parse(buf, len, &p) == PSBT_OK && p.input_count == 2);
+        CHECK(psbt_get_input(&p, i, &in) && in.has_amount && !in.amount_from_witness);
+        CHECK(in.prev_tx != NULL && psbt_prev_tx_matches(&in));
+        CHECK(psbt_script_type(in.script, in.script_len) == PSBT_SCRIPT_P2PKH);
+        sha256_init(&ctx);
+        sha256_update(&ctx, pub, 33);
+        sha256_final(&ctx, sha);
+        ripemd160(sha, 32, &spk[3]);
+        spk[23] = 0x88;
+        spk[24] = 0xAC;
+        CHECK(in.script_len == 25 && memcmp(in.script, spk, 25) == 0);
+        CHECK(psbt_sighash_legacy(&p, i, spk, sizeof(spk), PSBT_SIGHASH_ALL, digest));
+        CHECK(memcmp(digest, &legacy_sighash[32 * i], 32) == 0);
+        CHECK(!psbt_sighash_legacy(&p, i, spk, sizeof(spk), PSBT_SIGHASH_NONE, digest));
+        CHECK(!psbt_sighash_legacy(&p, 2, spk, sizeof(spk), PSBT_SIGHASH_ALL, digest));
+        CHECK(psbt_sighash_legacy(&p, i, spk, sizeof(spk), PSBT_SIGHASH_ALL, digest));
+        CHECK(psbt_ecdsa_sign(&legacy_priv[32 * i], pub, digest, PSBT_SIGHASH_ALL, sig, &sig_len, NULL));
+        len = psbt_add_partial_sig(buf, sizeof(buf), &p, i, pub, 33, sig, sig_len);
+        CHECK(len > 0);
+    }
+    CHECK(len == sizeof(legacy_signed_psbt));
+    CHECK(memcmp(buf, legacy_signed_psbt, sizeof(legacy_signed_psbt)) == 0);
+    printf("Legacy: both sighashes and the signed PSBT identical to the Python signer (%u bytes)\n", len);
+}
+
 int main(void) {
     (void)expected_txid_v1_in0;     // Shared vector file; unused here
     test_bip143_vector();
@@ -352,6 +393,7 @@ int main(void) {
     test_bip340_vectors();
     test_bip341_vectors();
     test_sign_taproot();
+    test_sign_legacy();
     printf(failures ? "\n%d FAILURE(S)\n" : "\nALL TESTS PASSED\n", failures);
     return failures != 0;
 }

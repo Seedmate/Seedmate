@@ -68,10 +68,12 @@ typedef struct {
     bool multisig;                  // wsh(cosigner(key)) instead of wpkh(key)
     bool nested;                    // Wrapped in sh(): sh(wpkh(key)) BIP49, sh(wsh(cosigner(key))) BIP48 1'
     bool taproot;                   // tr(key) (BIP86) instead of wpkh(key)
+    bool legacy;                    // pkh(key) (BIP44) instead of wpkh(key)
 } ur_account_key_t;
 
 // CBOR of a crypto-account with one output descriptor: wpkh(hdkey) for a
-// BIP84 account, sh(wpkh(hdkey)) for BIP49, tr(hdkey) for BIP86, or
+// BIP84 account, sh(wpkh(hdkey)) for BIP49, tr(hdkey) for BIP86, pkh(hdkey)
+// for BIP44, or
 // wsh(cosigner(hdkey)) for a BIP48 multisig cosigner.
 // Returns the length written to out, or 0 if out_size is too small.
 uint32_t ur_account_cbor(const ur_account_key_t *key, uint8_t *out, uint32_t out_size);

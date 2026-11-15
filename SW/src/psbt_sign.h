@@ -35,6 +35,13 @@ bool psbt_sighash_segwit_v0(const psbt_t *psbt, uint32_t index, const uint8_t *s
                             uint32_t script_code_len, uint64_t amount, uint32_t sighash_type,
                             uint8_t digest[32]);
 
+// Legacy (pre-SegWit) signature hash of input 'index' with SIGHASH_ALL: the
+// unsigned tx with script_code (the scriptPubKey spent, without its length)
+// as the scriptSig of that input and empty scriptSigs elsewhere, plus the
+// hash type, hashed twice. It does not commit to the input amounts.
+bool psbt_sighash_legacy(const psbt_t *psbt, uint32_t index, const uint8_t *script_code,
+                         uint32_t script_code_len, uint32_t sighash_type, uint8_t digest[32]);
+
 // Same for a P2WPKH output that pays to pubkey hash 'pkh' (20 bytes).
 bool psbt_sighash_p2wpkh(const psbt_t *psbt, uint32_t index, const uint8_t *pkh,
                          uint64_t amount, uint32_t sighash_type, uint8_t digest[32]);

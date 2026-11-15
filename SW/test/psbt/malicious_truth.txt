@@ -123,3 +123,4 @@ OWN-fee_tenth_limit	parses	1		own	exactly 1/10 of inputs: HIGH FEE
 OWN-fee_tenth_under	parses	1		own	one sat under 1/10: no warning
 OWN-change_index_limit	parses	1		own	change at input index + 100: no warning
 OWN-change_index_over	parses	1		own	change at input index + 101: HIGH CHANGE INDEX
+OWN-legacy_no_prev_tx	reject_parser	-1	LEGACY_NO_PREV_TX	own	P2PKH input with a witness UTXO only: the amount is not committed by a legacy signature, refused without the previous tx

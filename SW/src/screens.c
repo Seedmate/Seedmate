@@ -185,7 +185,7 @@ void grid_menu2_merge(){
     print_down_arrow(106,123, ST7735_WHITE);
     print_ok();
     print_back();
-    drawtext(128,117, "ID++", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(127,117, "ID++", ST7735_WHITE, ST7735_WHITE, 1);
     drawtext(67,117, "ID--", ST7735_WHITE, ST7735_WHITE, 1);
 }
 
@@ -467,7 +467,10 @@ void grid_labels(const char *back, const char *up, const char *ok,
         if (n > 4) n = 4;
         memcpy(text, labels[i], n);
         text[n] = '\0';
-        int x = GRID_X + (i % 3) * 30 + 1 + (29 - 6 * (int)n) / 2;
+        // Centered in the 29 px inside the cell: n characters show 6n - 1 px
+        // (the last column of a character is its spacing), as print_back()
+        // and print_ok() place BACK and OK
+        int x = GRID_X + (i % 3) * 30 + 1 + (30 - 6 * (int)n) / 2;
         drawtext(x, (i < 3) ? 107 : 117, text, ST7735_WHITE, ST7735_WHITE, 1);
     }
 }
@@ -508,10 +511,10 @@ void grid_OK_back(void) {
 }
 
 // Button grid of the QR seed scan screen: BACK, and SCAN on the OK button
+// The same labels as grid_confirm("SCAN"), so a screen that draws one and
+// then the other (SCAN ADDRESS after a result) never doubles a label
 void grid_scan_back(void) {
-    print_cursor_grid();
-    print_back();
-    drawtext(126, 107, "SCAN", ST7735_WHITE, ST7735_WHITE, 1);
+    grid_confirm("SCAN");
 }
 
 void print_update_fw_warning(void) {

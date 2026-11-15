@@ -135,6 +135,64 @@ bool psbt_sighash_segwit_v0(const psbt_t *psbt, uint32_t index, const uint8_t *s
     return true;
 }
 
+// CompactSize of n into the hash
+static void sha256_varint(SHA256_CTX *ctx, uint32_t n) {
+    uint8_t b[5];
+    uint32_t len = 1;
+    if (n < 0xFD) {
+        b[0] = (uint8_t)n;
+    } else if (n <= 0xFFFF) {
+        b[0] = 0xFD;
+        b[1] = (uint8_t)n;
+        b[2] = (uint8_t)(n >> 8);
+        len = 3;
+    } else {
+        b[0] = 0xFE;
+        le32_write(&b[1], n);
+        len = 5;
+    }
+    sha256_update(ctx, b, len);
+}
+
+bool psbt_sighash_legacy(const psbt_t *psbt, uint32_t index, const uint8_t *script_code,
+                         uint32_t script_code_len, uint32_t sighash_type, uint8_t digest[32]) {
+    uint8_t buf[4];
+    psbt_input_t in;
+    SHA256_CTX ctx;
+    const uint8_t *outputs;
+    uint32_t outputs_len;
+
+    if (sighash_type != PSBT_SIGHASH_ALL) return false;   // Only SIGHASH_ALL is supported
+    if (script_code == NULL || script_code_len == 0 || script_code_len > 0xFFFF) return false;
+    if (index >= psbt->input_count || !psbt_tx_outputs(psbt, &outputs, &outputs_len)) return false;
+
+    sha256_init(&ctx);
+    le32_write(buf, psbt->tx_version);
+    sha256_update(&ctx, buf, 4);
+    sha256_varint(&ctx, psbt->input_count);
+    for (uint32_t i = 0; i < psbt->input_count; i++) {
+        if (!psbt_get_input(psbt, i, &in)) return false;
+        sha256_update(&ctx, in.prev_txid, 36);            // txid + vout are contiguous
+        if (i == index) {
+            sha256_varint(&ctx, script_code_len);
+            sha256_update(&ctx, script_code, script_code_len);
+        } else {
+            sha256_varint(&ctx, 0);                       // Other inputs: empty scriptSig
+        }
+        le32_write(buf, in.sequence);
+        sha256_update(&ctx, buf, 4);
+    }
+    sha256_varint(&ctx, psbt->output_count);
+    sha256_update(&ctx, outputs, outputs_len);
+    le32_write(buf, psbt->locktime);
+    sha256_update(&ctx, buf, 4);
+    le32_write(buf, sighash_type);
+    sha256_update(&ctx, buf, 4);
+    sha256_final(&ctx, digest);
+    sha256_again(digest);
+    return true;
+}
+
 bool psbt_sighash_p2wpkh(const psbt_t *psbt, uint32_t index, const uint8_t *pkh,
                          uint64_t amount, uint32_t sighash_type, uint8_t digest[32]) {
     // scriptCode of P2WPKH: OP_DUP OP_HASH160 <pkh> OP_EQUALVERIFY OP_CHECKSIG
