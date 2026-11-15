@@ -47,7 +47,7 @@ const uint8_t main_menu_ids[cMAIN_n_opt] = {cMAIN_create, cMAIN_LOAD, cMAIN_BIP8
 const char* const menu_opsec[]    = {"SHAMIR SECRET SHARE", "SEED WORD XOR", "OBFUSCATION", "MNEMONIC TO CARDS"};
 const uint8_t opsec_menu_ids[cOPSEC_n_opt] = {cMAIN_SSS, cMAIN_XOR, cMAIN_OBFUS, cMAIN_MNEM2CARD};
 const char* const menu_tools[]    = {"QR READER", "QR FROM TEXT", "EFF PASSWORD", "REVIEW PSBT"};
-const char* const menu_backup[]   = {"SD", "SEEDQR", "COMPACT SEEDQR", "ENCRYPTED QR (KEF)", "VERIFY TRANSCRIPT"};
+const char* const menu_backup[]   = {"UNENCRYPTED SD", "SEEDQR", "COMPACT SEEDQR", "ENCRYPTED (KEF)", "VERIFY TRANSCRIPT"};
 const char* const menu_passphrase[] = {"FROM KEYBOARD", "FROM QR", "FROM VAULT"};
 const char* const menu_create[]   = {"THROW COINS", "ROLL DICE", "RANDOM WORD PICK", "POKER CARDS", "TRIPLE MNEMONIC", "STOPWATCH TEST ONLY",
                                      "MIX ENTROPY"};
@@ -152,7 +152,7 @@ void grid_menuwr(){
     print_up_arrow(106,114, ST7735_WHITE);
     print_down_arrow(106,123, ST7735_WHITE);
     print_ok();
-    drawtext(67,107, "LIST", ST7735_WHITE, ST7735_WHITE, 1);
+    print_back();
     drawtext(125,117, "PAGE+", ST7735_WHITE, ST7735_WHITE, 1);
     drawtext(65,117, "PAGE-", ST7735_WHITE, ST7735_WHITE, 1);
 }
@@ -1395,6 +1395,10 @@ void print_SD_preview(){
         // Display information about the slot.
 
         if (sd_read_block(i+SD_page*cSDBLOCK_n_opt, buffer)) {
+            if (sd_sector_is_kef(buffer)) {         // Encrypted seed: its size is inside
+                drawtext(48, 20 + 10*i, "KEF", ST7735_CYAN, ST7735_BLACK, 1);
+                continue;
+            }
             checksum_SD_aux = 1; // Reset checksum and account for the checksum byte
 
             for (int i = 0; i < 32; i++){
@@ -1464,7 +1468,7 @@ void sel_sd_block_screen_merge(int sel,int id) {
 
 void print_settings_screen(int sel) {
     char* text_seedqr = seedqr_enabled ? "SEEDQR ON " : "SEEDQR OFF";
-    char* text_sdwrite = sdwrite_enabled ? "SD SEED SAVE ON " : "SD SEED SAVE OFF";
+    char* text_sdwrite = sdwrite_enabled ? "UNENCRYPTED SD SAVE ON " : "UNENCRYPTED SD SAVE OFF";
     char* text_decoy = decoy_enabled ? "DECOY GAME ON " : "DECOY GAME OFF";
     char* text_stopwatch = stopwatch_enabled ? "STOPWATCH SEED ON " : "STOPWATCH SEED OFF";
     uint16_t color_seedqr = (sel == cSETTINGS_SEEDQR) ? ST7735_ORANGE : ST7735_WHITE;
@@ -1693,7 +1697,7 @@ void print_setting_confirm(int row, bool new_on, int idle_sel) {
         l2 = new_on ? "SEED AS A QR CODE" : "DISABLED";
         l3 = new_on ? "IN THE SEED BACKUP MENU" : "";
     } else if (row == cSETTINGS_SDWRITE) {
-        name = new_on ? "SD SEED SAVE: ON" : "SD SEED SAVE: OFF";
+        name = new_on ? "UNENCRYPTED SD SAVE: ON" : "UNENCRYPTED SD SAVE: OFF";
         l1 = new_on ? "SEEDS CAN BE WRITTEN TO" : "SEEDS CANNOT BE";
         l2 = new_on ? "THE SD CARD (NOT" : "WRITTEN TO THE SD CARD";
         l3 = new_on ? "ENCRYPTED)" : "";

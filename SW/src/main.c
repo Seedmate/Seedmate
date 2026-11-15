@@ -824,6 +824,7 @@ typedef enum
     SETTING_FAILED,
     BACKUP_MENU,
     BACKUP_BLOCKED,
+    KEF_OUTPUT,
     WARNING_SD,
     WARNING_SD_SETTING,
     CONFIRM_SD_OVERWRITE,
@@ -3693,12 +3694,62 @@ bool sd_read_partial(uint32_t sector, uint32_t offset, uint32_t count, uint8_t *
 // Buffer for the SD card
 uint8_t buffer[512];
 
+// Seed slot holding an encrypted seed (KEF, the same envelope as the encrypted
+// QR, so Krux can read it too): "SEEDMATE KEF", the format version, the text
+// length (2 bytes, big endian), then from byte 16 the base43 text of the
+// envelope, zeros after it. Every check of a slot knows this format.
+#define KEF_TITLE           "ENCRYPTED (KEF)"     // Title of the KEF screens (SEED BACKUP)
+#define SD_KEF_MAGIC        "SEEDMATE KEF"
+#define SD_KEF_MAGIC_LEN    12
+#define SD_KEF_VERSION      1
+#define SD_KEF_TEXT_AT      16
+#define SD_KEF_TEXT_MAX     (512 - SD_KEF_TEXT_AT - 1)
 
+bool sd_sector_is_kef(const uint8_t *b) {
+    uint32_t len = (uint32_t)b[13] << 8 | b[14];
+    return memcmp(b, SD_KEF_MAGIC, SD_KEF_MAGIC_LEN) == 0 && b[12] == SD_KEF_VERSION &&
+           len > 0 && len <= SD_KEF_TEXT_MAX;
+}
+
+// The encrypted seed text between ENCRYPTED (KEF) and its SHOW QR / SAVE TO
+// SD CARD menu, at the start of the fountain buffer (buffer does the SD I/O
+// and the slot previews meanwhile), and the text of a slot being opened.
+// Wiped when that menu is left and on every return to the main menu.
+#define KEF_TEXT_CAP        512
+static char *kef_text(void) {
+    uint32_t cap;
+    return (char *)fountain_scratch_buffer(&cap);
+}
+
+static bool kef_sd_mode;                // The slot list writes the KEF text, not the XOR slot
+
+typedef enum { KEF_LOAD_NOT_KEF, KEF_LOAD_OK, KEF_LOAD_CANCELLED } kef_load_t;
+static kef_load_t kef_load_from_qr(const char *text, int len);
+
+static const char *const menu_kef_out[] = {"SHOW QR", "SAVE TO SD CARD"};
+static uint8_t kef_out_pointer;
+
+
+// Reads a seed slot into data_array_256b and size_pointer: an encrypted one
+// (KEF) after its key, as an encrypted QR, or an XOR one. 0 loaded, 1 SD
+// error, 2 no seed (or a damaged encrypted text), 3 cancelled by the user
+// (the screen must be drawn again).
 static int load_and_verify_sd_slot(int absolute_slot) {
     if (!sd_read_block(absolute_slot, buffer)) {
         sd_init();
     }
     if (sd_read_block(absolute_slot, buffer)) {
+        if (sd_sector_is_kef(buffer)) {
+            uint32_t len = (uint32_t)buffer[13] << 8 | buffer[14];
+            char *text = kef_text();
+            memcpy(text, &buffer[SD_KEF_TEXT_AT], len);
+            text[len] = '\0';
+            memzero(buffer, sizeof(buffer));
+            kef_load_t r = kef_load_from_qr(text, (int)len);
+            memzero(text, len + 1);
+            if (r == KEF_LOAD_OK) return 0;
+            return (r == KEF_LOAD_CANCELLED) ? 3 : 2;
+        }
         BYTE checksum_SD = 1;
         BYTE XOR_SD = buffer[cSD_XOR_ADDR];
         for (int i = 0; i < 32; i++) {
@@ -3708,6 +3759,7 @@ static int load_and_verify_sd_slot(int absolute_slot) {
         // The size byte comes from the card too: anything but 12 or 24 words
         // would be used as a length
         if (checksum_SD == buffer[cSD_CHECKSUM_ADDR] && buffer[cSD_SIZE_ADDR] <= cSIZE_24) {
+            size_pointer = buffer[cSD_SIZE_ADDR];
             return 0; // Success
         }
         memzero(data_array_256b, sizeof(data_array_256b));
@@ -3968,7 +4020,8 @@ static void secrets_wipe(void) {
 
 void transition_to_main(void) {
     black_screen();
-    secrets_wipe();
+    secrets_wipe();                         // The fountain buffer too: an encrypted seed text
+    kef_sd_mode = false;
     if (xor_from_create) {                  // MIX ENTROPY is a CREATE function
         xor_from_create = false;
         main_pointer = cMAIN_create;
@@ -7701,6 +7754,21 @@ static void print_backup_menu(void) {
     estado = BACKUP_MENU;
 }
 
+// The encrypted seed is ready (kef_text()): show its QR or save it to a slot
+static void print_kef_output_menu(void) {
+    black_screen();
+    print_titled_menu(KEF_TITLE, menu_kef_out, 2, kef_out_pointer);
+    drawtext(1, 40, "ENCRYPTED AND VERIFIED", ST7735_GREEN, ST7735_BLACK, 1);
+    estado = KEF_OUTPUT;
+}
+
+// Leaving that menu: the encrypted text goes, back to SEED BACKUP
+static void kef_output_leave(void) {
+    memzero(kef_text(), KEF_TEXT_CAP);
+    kef_sd_mode = false;
+    print_backup_menu();
+}
+
 // Draws the QR on screen (seed or text, whole or zoomed tile, see qr_tile)
 static void redraw_qr(void) {
     if (qr_view_text) {
@@ -10175,6 +10243,7 @@ static bool sd_initialize_card(uint32_t *bad_sector) {
 // True if the sector in buffer holds a valid seed slot (checksum as written
 // by sd_write_seed())
 static bool sd_slot_in_use(void) {
+    if (sd_sector_is_kef(buffer)) return true;
     uint8_t sum = 1;
     for (int i = 0; i < 32; i++) sum += buffer[i];
     return sum == buffer[cSD_CHECKSUM_ADDR];
@@ -10184,6 +10253,7 @@ static bool sd_slot_in_use(void) {
 // byte zero, as this firmware and the first one write a seed. A sector of
 // files passes the one byte checksum alone once in 256.
 static bool sd_sector_is_seed(void) {
+    if (sd_sector_is_kef(buffer)) return true;
     if (!sd_slot_in_use() || buffer[cSD_SIZE_ADDR] >= cSIZE_n_opt) return false;
     for (int i = 16 + 16 * buffer[cSD_SIZE_ADDR]; i < 512; i++) {
         if (i != cSD_CHECKSUM_ADDR && i != cSD_SIZE_ADDR && i != cSD_XOR_ADDR && buffer[i] != 0) return false;
@@ -10236,6 +10306,26 @@ static void sd_write_seed(uint32_t sector, int row) {
     } else {
         drawtext(70, 20 + 10*row, "WRITE ERROR  ", ST7735_RED, ST7735_BLACK, 1);
     }
+    memzero(buffer, sizeof(buffer));
+}
+
+// Writes the encrypted seed text (kef_text()) to a slot, reads it back and
+// compares, and shows the result beside its slot (list row)
+static void sd_write_kef(uint32_t sector, int row) {
+    const char *text = kef_text();
+    size_t len = strlen(text);
+    bool ok = len > 0 && len <= SD_KEF_TEXT_MAX;
+
+    memzero(buffer, sizeof(buffer));
+    memcpy(buffer, SD_KEF_MAGIC, SD_KEF_MAGIC_LEN);
+    buffer[12] = SD_KEF_VERSION;
+    buffer[13] = (uint8_t)(len >> 8);
+    buffer[14] = (uint8_t)len;
+    if (ok) memcpy(&buffer[SD_KEF_TEXT_AT], text, len);
+    ok = ok && sd_write_block(sector, buffer);
+    ok = ok && sd_read_block(sector, buffer) && sd_sector_is_kef(buffer) &&
+         memcmp(&buffer[SD_KEF_TEXT_AT], text, len) == 0;
+    drawtext(70, 20 + 10*row, ok ? "WRITE SUCCESS" : "WRITE ERROR  ", ok ? ST7735_GREEN : ST7735_RED, ST7735_BLACK, 1);
     memzero(buffer, sizeof(buffer));
 }
 
@@ -10372,6 +10462,7 @@ static void idle_recover(uint8_t **shares, uint8_t **shares_input, uint8_t *sss_
     qr_view_text = false;
     qr_from_eff = false;
     qr_from_kef = false;
+    kef_sd_mode = false;
     editor_review_title = NULL;
     capturing_xor_word = false;
     bip84_qr_return_to_menu = false;
@@ -10393,7 +10484,6 @@ static void idle_recover(uint8_t **shares, uint8_t **shares_input, uint8_t *sss_
 
 #define KEF_SECRET_MAX      200         // Characters of the key, as Krux
 #define KEF_ID_TEXT_MAX     20
-#define KEF_TITLE           "ENCRYPTED QR (KEF)"
 
 // The key of the QR, in the editor. False if it was cancelled.
 static bool kef_ask_key(char *key) {
@@ -10455,8 +10545,8 @@ static void kef_message(const char *line1, const char *line2) {
     wait_keys_released();
 }
 
-// Encrypts the seed on screen into buffer, as the text of a QR. False: nothing
-// to show (cancelled, or the reason was already on screen).
+// Encrypts the seed on screen into buffer, as the text of a QR or an SD slot.
+// False: nothing to show (cancelled, or the reason was already on screen).
 static __attribute__((noinline)) bool kef_export_run(void) {
     char key[KEF_SECRET_MAX + 1] = {0};
     char id[KEF_ID_TEXT_MAX + 1] = {0};
@@ -10472,7 +10562,7 @@ static __attribute__((noinline)) bool kef_export_run(void) {
     drawtext(5, 18, "READ BY SEEDMATE AND KRUX", ST7735_WHITE, ST7735_BLACK, 1);
     drawtext(5, 34, "AS STRONG AS ITS KEY:", ST7735_YELLOW, ST7735_BLACK, 1);
     drawtext(5, 44, "USE A LONG RANDOM ONE", ST7735_YELLOW, ST7735_BLACK, 1);
-    drawtext(5, 58, "LOSE THE KEY = QR USELESS", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(5, 58, "LOSE KEY = BACKUP USELESS", ST7735_YELLOW, ST7735_BLACK, 1);
     drawtext(5, 72, "PASSPHRASE NOT INCLUDED", ST7735_YELLOW, ST7735_BLACK, 1);
     grid_confirm("NEXT");
     int bt;
@@ -10505,7 +10595,7 @@ static __attribute__((noinline)) bool kef_export_run(void) {
     strcpy(line, "ID: ");
     strcat(line, id);
     drawtext(5, 32, line, ST7735_WHITE, ST7735_BLACK, 1);
-    drawtext(5, 42, "FINGERPRINT SHOWN IN QR", ST7735_YELLOW, ST7735_BLACK, 1);
+    drawtext(5, 42, "FINGERPRINT LEFT VISIBLE", ST7735_YELLOW, ST7735_BLACK, 1);
     strcpy(line, "ITERATIONS: ");
     fast_itoa(iterations, num);
     strcat(line, num);
@@ -10528,7 +10618,7 @@ static __attribute__((noinline)) bool kef_export_run(void) {
         if (r == KEF_OK) r = kef_unwrap(env_bytes, env_len, &env);
         if (r == KEF_OK) r = kef_open(derived, &env, back, &back_len);     // Opens what was written
         if (r != KEF_OK || back_len != plain_len || memcmp(back, data_array_256b, plain_len) != 0) {
-            kef_message("ENCRYPTION FAILED", "NOTHING WAS SHOWN");
+            kef_message("ENCRYPTION FAILED", "NOTHING WAS SAVED");
             goto wipe;
         }
     }
@@ -10550,9 +10640,7 @@ wipe:
     return done;
 }
 
-typedef enum { KEF_LOAD_NOT_KEF, KEF_LOAD_OK, KEF_LOAD_CANCELLED } kef_load_t;
-
-// Every seed read from a QR comes here first. Not KEF: the normal seed checks
+// Every seed read from a QR (or an encrypted SD slot) comes here first.Not KEF: the normal seed checks
 // go on. KEF_LOAD_OK: the seed is in data_array_256b and size_pointer is set.
 static __attribute__((noinline)) kef_load_t kef_load_from_qr(const char *text, int len) {
     kef_envelope_t env;
@@ -10608,7 +10696,7 @@ static __attribute__((noinline)) kef_load_t kef_load_from_qr(const char *text, i
         if (r == KEF_OK && (plain_len == 16 || plain_len == 32)) break;
         black_screen();
         draw_title("NOT DECRYPTED", ST7735_RED);
-        drawtext(5, 40, "WRONG KEY OR DAMAGED QR", ST7735_RED, ST7735_BLACK, 1);
+        drawtext(5, 40, "WRONG KEY OR DAMAGED DATA", ST7735_RED, ST7735_BLACK, 1);
         grid_confirm("KEY");
         do {
             bt = wait_any_key();
@@ -11761,8 +11849,12 @@ int SSS_N = 9;
 
                         }else{ // Read
                             int sd_status = load_and_verify_sd_slot(SDblock_pointer + SD_page * cSDBLOCK_n_opt);
+                            if (sd_status == 3) {               // Encrypted slot, key not given
+                                black_screen();
+                                sel_sd_block_screen_generic(SDblock_pointer);
+                                break;
+                            }
                             if (sd_status == 0) {
-                                size_pointer=buffer[cSD_SIZE_ADDR];
                                 if (main_pointer == cMAIN_create && seed_pointer == cSEED_triple) {
                                     if (size_pointer != cSIZE_24) {
                                         drawtext(70, 20 + 10*SDblock_pointer, "WRONG SIZE", ST7735_RED, ST7735_BLACK, 1);
@@ -11895,11 +11987,17 @@ int SSS_N = 9;
                                 estado = CONFIRM_SD_OVERWRITE;
                                 break;
                             }
-                            sd_write_seed(sector, SDblock_pointer);
+                            if (kef_sd_mode) sd_write_kef(sector, SDblock_pointer);
+                            else sd_write_seed(sector, SDblock_pointer);
                         }
                         break;
                     case BACK_BT:
-                        print_backup_menu();
+                        if (kef_sd_mode) {
+                            kef_sd_mode = false;
+                            print_kef_output_menu();
+                        } else {
+                            print_backup_menu();
+                        }
                         break;
                     case UP_BT:
                         if ((SDblock_pointer == 0) & (SD_page >0)){// Page down and point to slot 8
@@ -11948,7 +12046,9 @@ int SSS_N = 9;
                     sel_sd_block_screen_wr(SDblock_pointer);
                     estado = SEL_SD_BLOCK_WR;
                     if (pulsed_bt == OK_BT) {
-                        sd_write_seed((uint32_t)(SDblock_pointer + SD_page * cSDBLOCK_n_opt), SDblock_pointer);
+                        uint32_t sector = (uint32_t)(SDblock_pointer + SD_page * cSDBLOCK_n_opt);
+                        if (kef_sd_mode) sd_write_kef(sector, SDblock_pointer);
+                        else sd_write_seed(sector, SDblock_pointer);
                     }
                 }
                 break;
@@ -11957,8 +12057,12 @@ int SSS_N = 9;
                     case OK_BT:
                         {
                             int sd_status = load_and_verify_sd_slot(SDblock_pointer + SD_page * cSDBLOCK_n_opt);
+                            if (sd_status == 3) {               // Encrypted slot, key not given
+                                black_screen();
+                                sel_sd_block_screen_generic(SDblock_pointer);
+                                break;
+                            }
                             if (sd_status == 0) {
-                                size_pointer = buffer[cSD_SIZE_ADDR];
                                 int r = multi_input_store(cFROMSD, shares_input, share_indices, SSS_result, LEN);
                                 if (r == MULTI_WRONG_SIZE) {
                                     drawtext(70, 20 + 10*SDblock_pointer, "WRONG SIZE", ST7735_RED, ST7735_BLACK, 1);
@@ -12032,8 +12136,12 @@ int SSS_N = 9;
                                 break;
                             }
                             int sd_status = load_and_verify_sd_slot(SDblock_pointer + SD_page * cSDBLOCK_n_opt);
+                            if (sd_status == 3) {               // Encrypted slot, key not given
+                                black_screen();
+                                sel_sd_block_screen_merge(SDblock_pointer, selected_share_id);
+                                break;
+                            }
                             if (sd_status == 0) {
-                                size_pointer = buffer[cSD_SIZE_ADDR];
                                 int r = multi_input_store(cFROMSD, shares_input, share_indices, SSS_result, LEN);
                                 if (r == MULTI_WRONG_SIZE) {
                                     drawtext(70, 20 + 10*SDblock_pointer, "WRONG SIZE", ST7735_RED, ST7735_BLACK, 1);
@@ -13440,20 +13548,21 @@ int SSS_N = 9;
                             print_backup_menu();
                             pulsed_bt = NONE;
                         } else if (backup_pointer == cBACKUP_KEF) {
-                            if (kef_export_run()) {         // Not blocked by SEEDQR: it is encrypted
-                                qr_view_text = true;
-                                qr_from_eff = false;
-                                qr_from_kef = true;
-                                qr_tile = -1;
-                                redraw_qr();
-                                estado = VIEW_QR;
+                            // Not blocked by the SEEDQR or UNENCRYPTED SD SAVE settings: it is encrypted
+                            if (kef_export_run()) {
+                                char *text = kef_text();
+                                strncpy(text, (const char *)buffer, KEF_TEXT_CAP - 1);
+                                text[KEF_TEXT_CAP - 1] = '\0';
+                                memzero(buffer, sizeof(buffer));
+                                kef_out_pointer = 0;
+                                print_kef_output_menu();
                             } else {
                                 print_backup_menu();
                             }
                             pulsed_bt = NONE;
                         } else if (backup_pointer == cBACKUP_SD) {
                             if (!sdwrite_enabled) {
-                                print_blocked("SD SEED SAVE IS OFF", "TURN IT ON IN", "SETTINGS > SD SEED SAVE");
+                                print_blocked("UNENCRYPTED SD SAVE OFF", "SETTINGS TURNS IT ON;", "OR USE ENCRYPTED (KEF)");
                                 estado = BACKUP_BLOCKED;
                             } else if (warned_sd) {
                                 open_sd_slots(SDblock_pointer);
@@ -13493,7 +13602,31 @@ int SSS_N = 9;
                 break;
             case BACKUP_BLOCKED:
                 if (pulsed_bt == OK_BT || pulsed_bt == BACK_BT) {
-                    print_backup_menu();
+                    if (kef_sd_mode) {              // From SAVE TO SD CARD of an encrypted seed
+                        kef_sd_mode = false;
+                        print_kef_output_menu();
+                    } else {
+                        print_backup_menu();
+                    }
+                }
+                break;
+            case KEF_OUTPUT:
+                if (pulsed_bt == UP_BT || pulsed_bt == DOWN_BT) {
+                    kef_out_pointer ^= 1;
+                    print_titled_menu(KEF_TITLE, menu_kef_out, 2, kef_out_pointer);
+                } else if (pulsed_bt == OK_BT && kef_out_pointer == 0) {
+                    strcpy((char *)buffer, kef_text());
+                    qr_view_text = true;
+                    qr_from_eff = false;
+                    qr_from_kef = true;
+                    qr_tile = -1;
+                    redraw_qr();
+                    estado = VIEW_QR;
+                } else if (pulsed_bt == OK_BT) {
+                    kef_sd_mode = true;             // The same slot list as the XOR backup
+                    open_sd_slots(SDblock_pointer);
+                } else if (pulsed_bt == BACK_BT) {
+                    kef_output_leave();
                 }
                 break;
             case WARNING_SD:
@@ -13520,7 +13653,7 @@ int SSS_N = 9;
                             qr_from_kef = false;
                             qr_view_text = false;
                             memzero(buffer, sizeof(buffer));
-                            print_backup_menu();
+                            print_kef_output_menu();    // SAVE TO SD CARD is still offered
                         } else if (qr_view_text) {
                             text_qr_edit();         // Back to the text, to correct it
                         } else {

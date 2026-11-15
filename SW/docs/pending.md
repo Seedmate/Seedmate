@@ -70,7 +70,7 @@ UPDATE FIRMWARE, QR READER on a Compact SeedQR, BIP85 PASSWORD with index 10.
 | Task | Notes |
 |---|---|
 | Vault HTML recovery page | It exists, needs a revision; it must read records by the bitmap (old versions stay on the card until reused) |
-| Encrypted SD seed slots | Today XOR obfuscation only. Decided on 2026-11-08: use the same KEF envelope (`kef.c`) with a key per seed, as the encrypted QR. New slot format, old slots still load |
+| Encrypted SD seed slots | Done on 2026-11-15 (+1,128 B flash, +8 B RAM), not tried on the board. SEED BACKUP > ENCRYPTED (KEF) encrypts as the encrypted QR, then SHOW QR or SAVE TO SD CARD (the same slot list); the slot holds the KEF text (readable by Krux), every load from SD asks its key; XOR slots stay, behind the setting renamed UNENCRYPTED SD SAVE; the key is asked every time. Device test: save to SD, load it in LOAD, XOR, Shamir merge and BIP85, wrong key and BACK on the key, overwrite question on a KEF slot, "KEF" in the previews, INITIALIZE counts it, SHOW QR then SAVE TO SD from the same menu, its QR opened in Krux |
 | Vault entry with a password's recipe | Keeps only format, length and index of a BIP85 password, regenerates it |
 | BIP85 WIF / XPRV | On demand only (~0.5 KB each, DERIVE submenu) |
 | Shamir shares and XOR results: transcript check | The same VERIFY TRANSCRIPT as new seeds |
