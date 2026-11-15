@@ -9,11 +9,17 @@ typedef struct {
     uint8_t payload[MAX_PAYLOAD_LEN];
 } MixedFrame;
 
-static uint8_t pure_parts[MAX_FOUNTAIN_PARTS][MAX_PAYLOAD_LEN];
+// The part buffer and the mixed frames in one block, so that a BBQr scan
+// (which uses neither) can borrow both as one contiguous buffer
+static struct {
+    uint8_t pure[MAX_FOUNTAIN_PARTS][MAX_PAYLOAD_LEN];
+    MixedFrame mixed[MAX_MIXED_FRAMES];
+} fountain_ram;
+#define pure_parts   fountain_ram.pure
+#define mixed_frames fountain_ram.mixed
 static uint32_t pure_lengths[MAX_FOUNTAIN_PARTS];
 static bool has_pure[MAX_FOUNTAIN_PARTS];
 
-static MixedFrame mixed_frames[MAX_MIXED_FRAMES];
 static uint32_t mixed_count = 0;
 
 static uint32_t total_expected = 0;
@@ -201,6 +207,12 @@ uint8_t* fountain_assemble_message(uint32_t msg_len) {
 uint8_t* fountain_scratch_buffer(uint32_t *size) {
     memset(has_pure, 0, sizeof(has_pure));   // Parts are no longer valid
     *size = sizeof(pure_parts);
+    return &pure_parts[0][0];
+}
+
+uint8_t* fountain_large_buffer(uint32_t *size) {
+    fountain_init();                          // Neither parts nor mixed frames are valid
+    *size = sizeof(fountain_ram);
     return &pure_parts[0][0];
 }
 

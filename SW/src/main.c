@@ -78,6 +78,7 @@
 #include "prng.h"
 #include "sampler.h"
 #include "fountain.h"
+#include "bbqr.h"
 #include "app_defs.h"
 #include "app_state.h"
 #include "screens.h"
@@ -7101,6 +7102,17 @@ static void scan_notice(const char *text) {
     text_at(5, 30, line, ST7735_YELLOW);
 }
 
+// Why a BBQr code was not taken, BBQR_ERR_HEADER onwards (rule 4)
+static const char *const bbqr_error_text[] = {
+    "BBQR CODE NOT READABLE", "BBQR ENCODING UNKNOWN", NULL, "BBQR OF ANOTHER FILE",
+    "BBQR CODE NOT READABLE", "BBQR PARTS DO NOT MATCH", "BBQR FILE TOO BIG", "BBQR DATA DAMAGED"
+};
+
+static bool scan_bbqr_text;     // The last scan_ur_message() was a BBQr text file (type U)
+
+// Also takes a BBQr series ("B$..." codes, any order, up to 850 characters): file
+// type P (PSBT) for "UR:CRYPTO-PSBT/", U (text) otherwise; whichever of UR
+// and BBQr comes first is the format of the scan.
 static bool scan_ur_message(const char *target, const char *title, uint8_t **msg, uint32_t *msg_len) {
     char title_text[24];
     char not_this[26];
@@ -7120,7 +7132,11 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
     rectan(9, 92, 151, 97, WHITE);
 
     init_bytewords_lookup();
-    fountain_init();
+    uint32_t bbqr_cap;
+    const char bbqr_type = (strcmp(target, "UR:CRYPTO-PSBT/") == 0) ? 'P' : 'U';
+    bbqr_init(fountain_large_buffer(&bbqr_cap), bbqr_cap, bbqr_type);       // Also resets the fountain
+    bool bbqr_done = false;
+    scan_bbqr_text = false;
 
     char burst_buffer[MAX_UR_PAYLOAD_LEN * 2 + 50];
 
@@ -7179,16 +7195,21 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
             int burst_idx = 0;
             uint32_t last_byte = _CP0_GET_COUNT();
             bool have_byte = true;
+            bool too_long = false;              // More than the buffer: the rest is read and dropped
 
             // A frame ends with CR/LF or, if the scanner sends none, with a
-            // short silence measured in real time
-            while (burst_idx < (int)sizeof(burst_buffer) - 1) {
+            // short silence measured in real time. A code longer than the
+            // buffer is read to its end and dropped whole, so its tail is
+            // never taken for another code.
+            while (BT1 == 1) {
                 if (have_byte) {
                     last_byte = _CP0_GET_COUNT();
                     if (rx == '\r' || rx == '\n') {
-                        if (burst_idx > 0) break;
-                    } else {
+                        if (burst_idx > 0 || too_long) break;
+                    } else if (burst_idx < (int)sizeof(burst_buffer) - 1) {
                         burst_buffer[burst_idx++] = (char)rx;
+                    } else {
+                        too_long = true;
                     }
                 } else if ((uint32_t)(_CP0_GET_COUNT() - last_byte) >= SCAN_FRAME_GAP_MS * CORE_TICKS_PER_MS) {
                     break;
@@ -7204,15 +7225,41 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
                 memmove(burst_buffer, &burst_buffer[7], (size_t)burst_idx + 1);
             }
 
-            // A code that is not a frame of this UR type is said on screen
-            // instead of being ignored
-            if (burst_idx > 15 && !scan_has_target(burst_buffer, burst_idx, target)) {
-                bool full = burst_idx >= (int)sizeof(burst_buffer) - 1;
-                scan_notice(full ? "QR TEXT TOO LONG" :
-                            (burst_buffer[0] == 'B' && burst_buffer[1] == '$') ? "BBQR NOT SUPPORTED YET" : not_this);
+            // A code longer than the buffer is from too dense a QR (BBQr:
+            // Sparrow low and medium fit; UR: low)
+            if (too_long) scan_notice("LOWER THE QR DENSITY");
+
+            // BBQr: each part goes to its place
+            bool is_bbqr = !too_long && bbqr_is_part(burst_buffer, (uint32_t)burst_idx);
+            bool ur_ok = !too_long && !is_bbqr && bbqr_total() == 0;
+            if (is_bbqr) {
+                if (fountain_get_pure_count() > 0 || fountain_get_mixed_count() > 0) {
+                    scan_notice("MIXED UR AND BBQR");
+                } else {
+                    bbqr_result_t r = bbqr_add_part(burst_buffer, (uint32_t)burst_idx);
+                    if (r == BBQR_COMPLETE) {
+                        bbqr_done = true;
+                    } else if (r == BBQR_ERR_TYPE) {
+                        scan_notice((bbqr_type == 'P') ? "BBQR IS NOT A PSBT" : "BBQR IS NOT TEXT");
+                    } else if (r >= BBQR_ERR_HEADER) {
+                        scan_notice(bbqr_error_text[r - BBQR_ERR_HEADER]);
+                    }
+                    if (bbqr_total() > 0) {
+                        uint32_t fill = (140u * bbqr_received()) / bbqr_total();
+                        if (fill > 0) rectan(10, 93, 10 + fill, 96, ST7735_GREEN);
+                    }
+                }
+            } else if (!too_long && !ur_ok && burst_idx > 15) {
+                scan_notice("MIXED UR AND BBQR");
             }
 
-            if (burst_idx > target_len) {
+            // A code that is not a frame of this UR type is said on screen
+            // instead of being ignored
+            if (ur_ok && burst_idx > 15 && !scan_has_target(burst_buffer, burst_idx, target)) {
+                scan_notice(not_this);
+            }
+
+            if (ur_ok && burst_idx > target_len) {
                 char *header_start = NULL;
 
                 for (int i = 0; i <= burst_idx - target_len; i++) {
@@ -7301,7 +7348,13 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
                                     else if (v == 25) { frag_len = ((uint32_t)decoded_bytes[cursor]<<8) | decoded_bytes[cursor+1]; cursor += 2; }
                                 }
 
-                                if (frag_len > 0 && (cursor + frag_len) <= decoded_len) {
+                                // Fragments over the decoder's part size (Sparrow medium)
+                                // or too many parts: said on screen, never ignored
+                                if (frag_len > MAX_PAYLOAD_LEN) {
+                                    scan_notice("LOWER THE QR DENSITY");
+                                } else if (cbor_total > MAX_FOUNTAIN_PARTS) {
+                                    scan_notice("UR MESSAGE TOO BIG");
+                                } else if (frag_len > 0 && (cursor + frag_len) <= decoded_len) {
                                     uint8_t *fragment_data = &decoded_bytes[cursor];
                                     
                                     bool complete = fountain_process_frame(cbor_seq, cbor_total, cbor_msg_len, cbor_checksum, fragment_data, frag_len);
@@ -7378,7 +7431,7 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
             }
         }
         
-        if (psbt_recovered || single_len > 0) break;
+        if (psbt_recovered || single_len > 0 || bbqr_done) break;
     }
 
     // Back to polled reception, then give the GM861 its original settings
@@ -7407,11 +7460,26 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
         uint32_t cap;
         *msg = fountain_scratch_buffer(&cap);   // Decoded there already
         *msg_len = single_len;
+    } else if (bbqr_done) {
+        // Joined (and inflated) at the start of the buffer, within what a
+        // PSBT may use there; the reason on screen if it cannot be
+        uint32_t cap, n;
+        uint8_t *base = fountain_scratch_buffer(&cap);
+        bbqr_result_t r = bbqr_finish(cap, &n);
+        if (r == BBQR_COMPLETE) {
+            *msg = base;
+            *msg_len = n;
+            scan_bbqr_text = (bbqr_type == 'U');
+        } else {
+            memzero(base, bbqr_cap);
+            psbt_sd_message("BBQR NOT READ", (char *)bbqr_error_text[r - BBQR_ERR_HEADER]);
+            bbqr_done = false;
+        }
     }
     memzero(burst_buffer, sizeof(burst_buffer));
 
     while (BT1 == 0) SYS_Tasks(); // Wait for button release
-    return psbt_recovered || single_len > 0;
+    return psbt_recovered || single_len > 0 || bbqr_done;
 }
 
 // SIGN > FROM QR: animated "ur:crypto-psbt", then review and signing
@@ -7436,9 +7504,10 @@ static int qr_read_raw(uint8_t *out, uint32_t cap, bool keep_tail);    // With Q
 // scanner setup, the end of a code is 50 ms of silence, into the fountain
 // buffer), so a long static text QR such as the one in Sparrow's PDF arrives
 // whole: the descriptor text, or a single part "ur:crypto-output" (the QR
-// of Sparrow's PDF, about 1,300 characters); a frame of the animated one
-// hands over to the UR scan. *is_text: the descriptor text is in *msg (NUL
-// terminated), else *msg is the CBOR. False if BACK was pressed. Then
+// of Sparrow's PDF, about 1,300 characters); a frame of the animated one,
+// or a BBQr part (a text file, type U), hands over to the UR scan.
+// *is_text: the descriptor text is in *msg (NUL terminated), else *msg is
+// the CBOR. False if BACK was pressed. Then
 // "CHECKING THE DESCRIPTOR" stays on screen while it is parsed and checked.
 static bool scan_descriptor_qr(uint8_t **msg, uint32_t *len, bool *is_text) {
     uint32_t cap;
@@ -7449,7 +7518,7 @@ static bool scan_descriptor_qr(uint8_t **msg, uint32_t *len, bool *is_text) {
     *is_text = false;
     black_screen();
     draw_title("SCANNING DESCRIPTOR", ST7735_LIGHTGREY);
-    text_at(5, 45, "ANIMATED UR OR TEXT QR", ST7735_WHITE);
+    text_at(5, 45, "UR, BBQR OR TEXT QR", ST7735_WHITE);
     text_at(5, 70, "SCANNING...", ST7735_CYAN);
     grid_back_only();
     while (1) {
@@ -7472,11 +7541,12 @@ static bool scan_descriptor_qr(uint8_t **msg, uint32_t *len, bool *is_text) {
                 return true;
             }
             scan_notice("UR CODE NOT READABLE");
-        } else if (at >= 0) {
+        } else if (at >= 0 || (n > 0 && bbqr_is_part((const char *)buf, (uint32_t)n))) {
+            // A frame of the animated UR, or a BBQr part (text file)
             memzero(buf, (size_t)n);
-            return scan_ur_message("UR:CRYPTO-OUTPUT/", "SCANNING DESCRIPTOR", msg, len);
-        } else if (n > 1 && buf[0] == 'B' && buf[1] == '$') {
-            scan_notice("BBQR NOT SUPPORTED YET");
+            bool ok = scan_ur_message("UR:CRYPTO-OUTPUT/", "SCANNING DESCRIPTOR", msg, len);
+            *is_text = scan_bbqr_text;
+            return ok;
         } else if (n > 0) {
             *msg = buf;
             *len = (uint32_t)n;
@@ -8719,6 +8789,8 @@ static void print_reader_screen(void) {
         kind = "ENCRYPTED SEED (KEF)";
     } else if (strncmp(t, "UR:", 3) == 0 || strncmp(t, "ur:", 3) == 0) {
         kind = "ONE PART OF A UR CODE";
+    } else if (bbqr_is_part(t, (uint32_t)reader_len)) {
+        kind = "ONE PART OF A BBQR CODE";
     } else if (strncmp(t, "bitcoin:", 8) == 0 || strncmp(t, "BITCOIN:", 8) == 0) {
         kind = "BITCOIN PAYMENT URI";
     } else if (segwit_addr_decode(&ver, prog, &prog_len, "bc", t)) {

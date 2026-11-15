@@ -207,6 +207,38 @@ by use of this software.
 
 ---
 
+## 6b. tinf (tiny inflate)
+
+- **Directory:** `SW/src/tinf/` (`tinflate.c`, `tinf.h`, `LICENSE`)
+- **Upstream:** https://github.com/jibsen/tinf (v1.2.1)
+- **Used for:** inflating the raw deflate data of BBQr codes with the Z encoding (`SW/src/bbqr.c`, which compiles `tinflate.c` inside it)
+- **Local changes:** none; the files are byte-identical to the v1.2.1 tag
+- **License:** zlib license (`SW/src/tinf/LICENSE`)
+- **Copyright:** (c) 2003-2019 Joergen Ibsen
+
+```
+This software is provided 'as-is', without any express or implied
+warranty. In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+  1. The origin of this software must not be misrepresented; you must
+     not claim that you wrote the original software. If you use this
+     software in a product, an acknowledgment in the product
+     documentation would be appreciated but is not required.
+
+  2. Altered source versions must be plainly marked as such, and must
+     not be misrepresented as being the original software.
+
+  3. This notice may not be removed or altered from any source
+     distribution.
+```
+
+---
+
 ## 7. Microchip generated code (MCC / Harmony)
 
 - **Directories:** `SW/src/config/v2/` (firmware), `bootloader/src/config/default/` (bootloader), including the linker scripts and the peripheral libraries (`plib_*`)
@@ -232,10 +264,16 @@ by use of this software.
 These parts were written for this project from public specifications; they are listed for reference, not because third-party code is included:
 
 - Uniform Resources and fountain codes (Blockchain Commons BCR-2020-005), including the Xoshiro256** PRNG (D. Blackman, S. Vigna, public domain algorithm) and the alias-method sampler: `fountain.c`, `prng.c`, `sampler.c`, `bytewords.c`, `ur_encode.c`
+- BBQr (Coinkite, https://github.com/coinkite/BBQr, public domain specification): `bbqr.c`; the Z encoding is inflated with tinf (section 6b)
 - UR types `crypto-psbt` (BCR-2020-006), `crypto-hdkey` (BCR-2020-007), `crypto-output` (BCR-2020-010) and `crypto-account` (BCR-2020-015): `ur_encode.c`
 - PSBT (BIP174), SegWit v0 signature hash (BIP143), low-S signatures (BIP146), RFC6979 deterministic nonces with low-R grinding as in Bitcoin Core / libsecp256k1: `psbt.c`, `psbt_sign.c`
 - BIP32, BIP39, BIP44, BIP48, BIP84, BIP85; HMAC (RFC 2104) and PBKDF2 (RFC 8018): `main.c`, `kdf.c`, `bip85.c`
 - Vault record format (`SW/docs/vault.md`): AES-256-GCM (NIST SP 800-38D, code from section 1a) with a BIP85 HEX key, CRC32: `vault.c`
+- Taproot key path: BIP340 Schnorr signatures, BIP341 signature hash, BIP86 output keys: `psbt_sign.c`
+- Output descriptor checksum (BIP380): `main.c`, `descriptor.c`
+- Krux KEF encrypted mnemonic format (base43, PBKDF2-HMAC-SHA256, AES-GCM; `SW/docs/kef.md`): `kef.c`
+- Nostr keys (NIP-06 derivation, NIP-19 npub / nsec): `main.c`, `nostr.c`
+- LMS hash-based signatures (RFC 8554) for the firmware update check: `bootloader` (`boot_lms.c`) and `SW/tools/lms_sign.html`
 - GM861S barcode reader serial protocol (GM861S User Manual V1.2.4): `main.c`
 
 ---
@@ -245,3 +283,4 @@ These parts were written for this project from public specifications; they are l
 - `SW/test/animated_QR_scan/captures_pure.txt` - animated QR frames captured from Sparrow Wallet (https://sparrowwallet.com), used to check that the UR encoder reproduces them byte for byte.
 - The host tests use published test vectors: BIP84 ("abandon ... about"), BIP143, BIP39 (Trezor vectors), RFC 4231, BIP85 (master key of the BIP85 specification).
 - `SW/test/vault/gen_vault.py` uses the Python `cryptography` package (Apache 2.0 / BSD) as an independent AES-GCM reference to generate `vault_vectors.h`; it is a test tool only and is not distributed with the firmware. `SW/test/vault/test_vault.c` links the upstream `fault_handler_noop.c` (trezor-crypto, MIT) for the host build only.
+- `SW/test/bbqr/gen_bbqr.py` is an independent BBQr encoder written from the specification (Python `zlib` for the deflate data); `SW/test/bbqr/anim_frames.js` uses Node's `zlib`. Test tools only.

@@ -171,6 +171,7 @@
       <itemPath>../src/prng.c</itemPath>
       <itemPath>../src/sampler.c</itemPath>
       <itemPath>../src/fountain.c</itemPath>
+      <itemPath>../src/bbqr.c</itemPath>
       <itemPath>../src/bip85.c</itemPath>
       <itemPath>../src/vault.c</itemPath>
       <itemPath>../src/kef.c</itemPath>

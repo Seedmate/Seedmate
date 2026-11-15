@@ -58,14 +58,14 @@ table.kv td:first-child { color: var(--dim); white-space: nowrap; width: 1%; }
 <main>
 <h1>UR PSBT animator</h1>
 <p class="sub">Test tool: shows a PSBT as an animated <span class="mono">UR:CRYPTO-PSBT</span> QR, the way Sparrow does
-(pure parts first, then fountain mixed parts without end). Offline, nothing leaves the page.
-Use test PSBTs only.</p>
+(pure parts first, then fountain mixed parts without end), or as a BBQr series (<span class="mono">B$...</span> codes, in a loop).
+Offline, nothing leaves the page. Use test PSBTs only.</p>
 
 <div class="cols">
 <div>
 <section>
   <h2>1. PSBT</h2>
-  <div id="drop">Drop a .psbt file (binary or base64) or click to choose</div>
+  <div id="drop">Drop a .psbt file (binary or base64), or a text file for BBQr, or click to choose</div>
   <input type="file" id="file" hidden>
   <label for="text">or paste base64 / hex</label>
   <textarea id="text" spellcheck="false" placeholder="cHNidP8B..."></textarea>
@@ -87,6 +87,13 @@ Use test PSBTs only.</p>
 
 <section>
   <h2>2. Animation</h2>
+  <div class="row" style="margin-bottom:6px">
+    <div><label for="format">Format</label>
+      <select id="format"><option value="ur" selected>UR</option><option value="bbqr">BBQr</option></select></div>
+    <div><label for="bbenc">BBQr encoding</label>
+      <select id="bbenc"><option value="Z" selected>Z (deflate, base32)</option><option value="2">2 (base32)</option><option value="H">H (hex)</option></select></div>
+    <div><label for="bbchars">BBQr chars per code</label><input type="number" id="bbchars" min="16" max="4296" value="224"></div>
+  </div>
   <div class="row">
     <div><label for="frag">Max fragment (bytes)</label><input type="number" id="frag" min="10" max="1000" value="100"></div>
     <div><label for="ms">Frame time (ms)</label><input type="number" id="ms" min="30" max="5000" value="250"></div>
@@ -103,7 +110,10 @@ Use test PSBTs only.</p>
     <label class="inline"><input type="checkbox" id="lower"> Lower case (byte mode, bigger QR)</label>
   </div>
   <p class="sub" style="margin:8px 0 0">"Start at part", "Mixed parts only" and "Drop frames" test the fountain decoder:
-  the device must still finish from the mixed parts.</p>
+  the device must still finish from the mixed parts. BBQr: "Max fragment" and "Mixed parts only" do not apply;
+  224 characters per code is a version 7 QR, as Sparrow's low density, 758 a version 15, as its medium density;
+  Z uses the browser's deflate (32 KB window, the spec asks for 1 KB; the device inflates both). A text file
+  (a descriptor) goes as BBQr type U, for IMPORT DESCRIPTOR.</p>
 </section>
 
 <section>
@@ -323,6 +333,38 @@ function urEncoder(psbt, maxFragment, type) {
   }
   return { msgLen: msg.length, checksum, fragLen, seqLen, partInfo, single,
            part: seq => seqLen === 1 ? single() : partInfo(seq).text };
+}
+
+// ---- BBQr (Coinkite spec, github.com/coinkite/BBQr): "B$" + encoding (H hex,
+// 2 base32, Z deflate then base32) + file type (P PSBT, U text) + total and
+// index in two base 36 digits; every part but the last has the same bytes.
+// For Z, data is the compressed file. ----
+function bbqrFrames(data, encoding, ftype, maxChars) {
+  const B36 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", A32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const room = maxChars - 8;
+  const per = encoding === "H" ? Math.floor(room / 2) : Math.floor(room / 8) * 5;
+  if (per < 1) throw new Error("code too small for BBQr");
+  const n = Math.max(1, Math.ceil(data.length / per));
+  if (n > 1295) throw new Error("over 1295 BBQr parts");
+  const b36 = v => B36[Math.floor(v / 36)] + B36[v % 36];
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const chunk = data.subarray(i * per, Math.min(data.length, (i + 1) * per));
+    let t = "";
+    if (encoding === "H") {
+      for (const x of chunk) t += x.toString(16).toUpperCase().padStart(2, "0");
+    } else {                                   // RFC 4648 base32, no padding
+      let acc = 0, bits = 0;
+      for (const x of chunk) {
+        acc = (acc << 8) | x; bits += 8;
+        while (bits >= 5) { bits -= 5; t += A32[(acc >> bits) & 31]; }
+        acc &= (1 << bits) - 1;
+      }
+      if (bits) t += A32[(acc << (5 - bits)) & 31];
+    }
+    out.push("B$" + encoding + ftype + b36(n) + b36(i) + t);
+  }
+  return out;
 }
 
 // ---- QR encoder: port of the firmware's library (src/QRCode-master/src/qrcode.c) ----
@@ -609,7 +651,7 @@ const PRESETS = {
 };
 const $ = id => document.getElementById(id);
 
-let psbt = null, psbtName = "";
+let psbt = null, psbtName = "", fileType = "P", deflated = null;
 let enc = null, qrVersion = 0;
 let seq = 1, timer = null, history = [];
 
@@ -632,17 +674,33 @@ function bytesFromText(t) {
   return b64decode(t);
 }
 
-function setPsbt(bytes, name) {
+function isText(b) {
+  return b.length > 0 && b.every(x => x === 9 || x === 10 || x === 13 || (x >= 32 && x < 127));
+}
+
+// A PSBT (type P), or a text file (type U, BBQr only)
+function setPsbt(bytes, name, text) {
   const msg = $("loadmsg");
-  if (!isPsbt(bytes)) {
+  if (!isPsbt(bytes) && !(text && isText(text))) {
     msg.className = "mono err";
-    msg.textContent = "Not a PSBT (no \"psbt\\xff\" magic).";
+    msg.textContent = "Not a PSBT (no \"psbt\\xff\" magic) nor a text file.";
     return;
   }
-  psbt = bytes;
+  fileType = isPsbt(bytes) ? "P" : "U";
+  psbt = fileType === "P" ? bytes : text;
   psbtName = name;
   msg.className = "mono ok";
-  msg.textContent = name + ": " + bytes.length + " bytes loaded.";
+  msg.textContent = name + ": " + psbt.length + " bytes loaded" + (fileType === "U" ? " as text (BBQr type U)." : ".");
+  if (fileType === "U") $("format").value = "bbqr";
+  deflated = null;
+  // The browser's raw deflate, for BBQr Z
+  const mine = psbt;
+  new Response(new Blob([psbt]).stream().pipeThrough(new CompressionStream("deflate-raw"))).arrayBuffer()
+    .then(buf => {
+      if (psbt !== mine) return;
+      deflated = new Uint8Array(buf);
+      if ($("format").value === "bbqr") rebuild(true);
+    });
   rebuild(true);
 }
 
@@ -655,11 +713,12 @@ function loadText() {
 
 function loadFile(file) {
   file.arrayBuffer().then(buf => {
-    let b = new Uint8Array(buf);
+    const raw = new Uint8Array(buf);
+    let b = raw;
     if (!isPsbt(b)) {
       try { b = bytesFromText(new TextDecoder().decode(b)); } catch (e) { /* reported by setPsbt */ }
     }
-    setPsbt(b, file.name);
+    setPsbt(b, file.name, raw);
   });
 }
 
@@ -678,9 +737,61 @@ function pickVersion() {
   return qrSmallestVersion(longest, ecc);
 }
 
+// BBQr: the frames in a list, shown in a loop
+function bbqrEncoder() {
+  const e = $("bbenc").value;
+  const data = e === "Z" ? deflated : psbt;
+  const chars = Math.max(16, Math.min(4296, +$("bbchars").value || 224));
+  const frames = bbqrFrames(data, e, fileType, chars);
+  return { bbqr: true, encoding: e, sent: data.length, frames, seqLen: frames.length, msgLen: psbt.length,
+           part: s => frames[(s - 1) % frames.length] };
+}
+
+function rebuildBbqr(resetSeq) {
+  if ($("bbenc").value === "Z" && !deflated) return;     // Called again when the deflate is done
+  enc = bbqrEncoder();
+  qrVersion = pickVersion();
+  const ecc = "LMQH"[+$("ecc").value];
+  const rows = [
+    ["File", psbtName],
+    [fileType === "P" ? "PSBT" : "Text", psbt.length + " bytes, BBQr type " + fileType],
+    ["Encoding", enc.encoding + (enc.encoding === "Z" ? ": " + enc.sent + " bytes compressed" : "")],
+    ["Parts", enc.seqLen + (enc.seqLen === 1 ? ", not animated" : ", shown in a loop")],
+    ["Code", enc.part(1).length + " characters"],
+    ["QR", qrVersion ? "version " + qrVersion + " (" + (qrVersion * 4 + 17) + " modules), ECC " + ecc : "too big for any QR version"],
+  ];
+  $("summary").innerHTML = "";
+  for (const [k, v] of rows) {
+    const tr = document.createElement("tr");
+    const a = document.createElement("td"), b = document.createElement("td");
+    a.textContent = k; b.textContent = v;
+    tr.append(a, b);
+    $("summary").append(tr);
+  }
+  // The device decoder's limits (bbqr.h, fountain.h, main.c)
+  const lim = [];
+  if (enc.part(1).length > 849) lim.push("Code over 849 characters: over the scan buffer, the device says LOWER THE QR DENSITY.");
+  if (enc.seqLen > 256) lim.push("More than 256 parts: over the Seedmate decoder (BBQR_MAX_PARTS).");
+  if (psbt.length > 8750) lim.push("File over 8,750 bytes: over what the device takes.");
+  else if (enc.encoding === "Z" && psbt.length + enc.sent > 11952)
+    lim.push("Compressed plus inflated over 11,952 bytes: the device inflates in one buffer and says BBQR FILE TOO BIG.");
+  $("limits").className = "mono " + (lim.length ? "warn" : "ok");
+  $("limits").textContent = lim.length ? lim.join("\n") : "Within the Seedmate BBQr limits.";
+  $("limits").style.whiteSpace = "pre-line";
+  for (const id of ["play", "prev", "next", "restart", "dump"]) $(id).disabled = !qrVersion;
+  if (resetSeq) restart(); else show(seq);
+}
+
 function rebuild(resetSeq) {
   if (!psbt) return;
   stop();
+  if ($("format").value === "bbqr") return rebuildBbqr(resetSeq);
+  if (fileType !== "P") {
+    $("limits").className = "mono err";
+    $("limits").textContent = "A text file goes only as BBQr.";
+    for (const id of ["play", "prev", "next", "restart", "dump"]) $(id).disabled = true;
+    return;
+  }
   let frag = Math.max(10, Math.min(1000, +$("frag").value || 100));
   enc = urEncoder(psbt, frag);
   qrVersion = pickVersion();
@@ -716,7 +827,7 @@ function rebuild(resetSeq) {
 
 function firstSeq() {
   let s = Math.max(1, +$("start").value || 1);
-  if ($("mixedonly").checked && s <= enc.seqLen) s = enc.seqLen + 1;
+  if (!enc.bbqr && $("mixedonly").checked && s <= enc.seqLen) s = enc.seqLen + 1;
   return s;
 }
 
@@ -741,6 +852,7 @@ function show(s) {
   }
   let st;
   if (enc.seqLen === 1) st = "Single part";
+  else if (enc.bbqr) st = "BBQr part " + ((s - 1) % enc.seqLen + 1) + " of " + enc.seqLen;
   else {
     const info = enc.partInfo(s);
     st = "Part " + s + " of " + enc.seqLen + (s <= enc.seqLen ? " (pure)" :
@@ -774,7 +886,7 @@ function restart() { history = []; show(firstSeq()); }
 
 function dump() {
   const out = [];
-  const from = firstSeq(), n = enc.seqLen === 1 ? 1 : enc.seqLen + 20;
+  const from = firstSeq(), n = enc.seqLen === 1 ? 1 : enc.seqLen + (enc.bbqr ? 0 : 20);
   for (let s = from; s < from + n; s++) {
     let t = enc.part(s);
     if ($("lower").checked) t = t.toLowerCase();
@@ -799,6 +911,7 @@ document.querySelectorAll("[data-preset]").forEach(b => b.addEventListener("clic
   setPsbt(b64decode(p.b64), p.name);
 }));
 for (const id of ["frag", "ecc", "lower"]) $(id).addEventListener("change", () => rebuild(false));
+for (const id of ["format", "bbenc", "bbchars"]) $(id).addEventListener("change", () => rebuild(true));
 for (const id of ["start", "mixedonly"]) $(id).addEventListener("change", () => { if (enc) restart(); });
 $("px").addEventListener("change", () => show(seq));
 $("ms").addEventListener("change", () => { if (timer) { stop(); play(); } });

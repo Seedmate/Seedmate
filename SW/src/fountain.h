@@ -35,4 +35,9 @@ uint8_t* fountain_assemble_message(uint32_t msg_len);
 // call fountain_init() before decoding again. *size gets the buffer size.
 uint8_t* fountain_scratch_buffer(uint32_t *size);
 
+// The part buffer and the mixed frames together (about 11.9 KB, starting at
+// the same address as fountain_scratch_buffer()), for a BBQr scan, which
+// does not use the fountain decoder. Resets the decoder.
+uint8_t* fountain_large_buffer(uint32_t *size);
+
 #endif // FOUNTAIN_H
