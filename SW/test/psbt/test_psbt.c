@@ -173,7 +173,7 @@ static void test_metadata(void) {
     // A path too long for the buffer is cut with "..."
     uint8_t long_path[4 * 12];
     memset(long_path, 0xFF, sizeof(long_path));
-    psbt_keypath_t big = { NULL, 0, 0, long_path, 12 };
+    psbt_keypath_t big = { NULL, 0, 0, long_path, 12, 0 };
     char s[PSBT_PATH_STR_LEN];
     psbt_format_path(&big, s);
     CHECK(strlen(s) < PSBT_PATH_STR_LEN && strcmp(s + strlen(s) - 3, "...") == 0);

@@ -27,9 +27,16 @@
 #define PSBT_IN_BIP32_DERIVATION  0x06
 #define PSBT_IN_FINAL_SCRIPTSIG   0x07
 #define PSBT_IN_FINAL_WITNESS     0x08
+#define PSBT_IN_TAP_KEY_SIG       0x13      // BIP371 (Taproot)
+#define PSBT_IN_TAP_SCRIPT_SIG    0x14
+#define PSBT_IN_TAP_BIP32_DERIVATION 0x16
+#define PSBT_IN_TAP_INTERNAL_KEY  0x17
+#define PSBT_IN_TAP_MERKLE_ROOT   0x18
 #define PSBT_OUT_REDEEM_SCRIPT    0x00
 #define PSBT_OUT_WITNESS_SCRIPT   0x01
 #define PSBT_OUT_BIP32_DERIVATION 0x02
+#define PSBT_OUT_TAP_INTERNAL_KEY 0x05
+#define PSBT_OUT_TAP_BIP32_DERIVATION 0x07
 
 #define XPUB_SERIALIZED_LEN       78
 
@@ -161,15 +168,23 @@ static void map_skip(reader_t *r) {
 #define PSBT_MAP_MAX_ENTRIES 64         // Also bounds the duplicate search
 enum { SCOPE_GLOBAL, SCOPE_INPUT, SCOPE_OUTPUT };
 
-static bool key_len_ok(uint8_t scope, uint8_t type, uint32_t key_len) {
+// The key, and for the Taproot fields the value, have the form BIP174 and
+// BIP371 give them. Unknown types are left alone.
+static bool field_ok(uint8_t scope, uint8_t type, uint32_t key_len, uint32_t val_len) {
     bool pubkey = false, known;
     if (scope == SCOPE_GLOBAL) {
         if (type == PSBT_GLOBAL_XPUB) return key_len == 1 + XPUB_SERIALIZED_LEN;
         known = type == PSBT_GLOBAL_UNSIGNED_TX || type == PSBT_GLOBAL_VERSION;
     } else if (scope == SCOPE_INPUT) {
+        if (type == PSBT_IN_TAP_KEY_SIG) return key_len == 1 && (val_len == 64 || val_len == 65);
+        if (type == PSBT_IN_TAP_SCRIPT_SIG) return key_len == 1 + 32 + 32 && (val_len == 64 || val_len == 65);
+        if (type == PSBT_IN_TAP_BIP32_DERIVATION) return key_len == 1 + 32;
+        if (type == PSBT_IN_TAP_INTERNAL_KEY || type == PSBT_IN_TAP_MERKLE_ROOT) return key_len == 1 && val_len == 32;
         pubkey = type == PSBT_IN_PARTIAL_SIG || type == PSBT_IN_BIP32_DERIVATION;
         known = type <= PSBT_IN_FINAL_WITNESS;
     } else {
+        if (type == PSBT_OUT_TAP_BIP32_DERIVATION) return key_len == 1 + 32;
+        if (type == PSBT_OUT_TAP_INTERNAL_KEY) return key_len == 1 && val_len == 32;
         pubkey = type == PSBT_OUT_BIP32_DERIVATION;
         known = type <= PSBT_OUT_BIP32_DERIVATION;
     }
@@ -185,7 +200,7 @@ static psbt_status_t map_check(reader_t *r, uint8_t scope) {
 
     while (map_next(r, &type, &key_len, &val, &val_len)) {
         const uint8_t *key = last_key;
-        if (++count > PSBT_MAP_MAX_ENTRIES || !key_len_ok(scope, type, key_len)) return PSBT_ERR_FORMAT;
+        if (++count > PSBT_MAP_MAX_ENTRIES || !field_ok(scope, type, key_len, val_len)) return PSBT_ERR_FORMAT;
 
         reader_t prev;
         rd_init(&prev, r->p, start, r->end);
@@ -216,18 +231,42 @@ static bool is_keypath(uint32_t key_len, uint32_t val_len, bool global) {
     return key_ok && val_len >= 4 && (val_len % 4) == 0;
 }
 
-// Finds the n-th BIP32 derivation of 'type' in the map at r
-static bool map_find_keypath(reader_t *r, uint8_t wanted, bool global, uint32_t n, psbt_keypath_t *kp) {
+// A Taproot BIP32 derivation (BIP371): x-only key; the value is the leaf
+// hashes the key is used in (none for the key path), then fingerprint and
+// path. Returns where the fingerprint starts in val, 0 if malformed.
+static uint32_t tap_keypath_start(uint32_t key_len, const uint8_t *val, uint32_t val_len, uint32_t *leaves) {
+    reader_t v;
+    if (key_len != 1 + 32) return 0;
+    rd_init(&v, val, 0, val_len);
+    *leaves = rd_varint(&v);
+    if (v.err || *leaves > (val_len - v.pos) / 32) return 0;
+    uint32_t start = v.pos + 32 * *leaves;
+    return (val_len - start >= 4 && (val_len - start) % 4 == 0) ? start : 0;
+}
+
+// Finds the n-th BIP32 derivation of 'type', or of 'tap_type' (Taproot,
+// 0 for none), in the map at r
+static bool map_find_keypath(reader_t *r, uint8_t wanted, uint8_t tap_type, bool global, uint32_t n,
+                             psbt_keypath_t *kp) {
     uint8_t type;
-    uint32_t key_len, val_len;
+    uint32_t key_len, val_len, start = 0, leaves = 0;
     const uint8_t *val;
 
     while (map_next(r, &type, &key_len, &val, &val_len)) {
-        if (type != wanted || !is_keypath(key_len, val_len, global)) continue;
+        if (type == wanted && is_keypath(key_len, val_len, global)) {
+            start = 0;
+            leaves = 0;
+        } else if (tap_type == 0 || type != tap_type ||
+                   (start = tap_keypath_start(key_len, val, val_len, &leaves)) == 0) {
+            continue;
+        }
         if (n-- != 0) continue;
 
         kp->key = last_key + 1;     // Key data follows the type byte
-        kp->key_len = key_len - 1;
+        kp->key_len = key_len - 1;  // 32: x-only Taproot key
+        kp->leaf_count = leaves;
+        val += start;
+        val_len -= start;
         kp->fingerprint = ((uint32_t)val[0] << 24) | ((uint32_t)val[1] << 16) |
                           ((uint32_t)val[2] << 8) | val[3];
         kp->path = val + 4;
@@ -403,6 +442,9 @@ bool psbt_get_input(const psbt_t *psbt, uint32_t index, psbt_input_t *in) {
             in->partial_sig_count++;
         } else if (type == PSBT_IN_BIP32_DERIVATION) {
             if (is_keypath(key_len, val_len, false)) in->keypath_count++;
+        } else if (type == PSBT_IN_TAP_BIP32_DERIVATION) {
+            uint32_t leaves;
+            if (tap_keypath_start(key_len, val, val_len, &leaves) != 0) in->keypath_count++;
         } else if (key_len != 1) {
             continue;
         } else if (type == PSBT_IN_WITNESS_UTXO) {
@@ -423,6 +465,12 @@ bool psbt_get_input(const psbt_t *psbt, uint32_t index, psbt_input_t *in) {
             in->witness_script_len = val_len;
         } else if (type == PSBT_IN_FINAL_SCRIPTSIG || type == PSBT_IN_FINAL_WITNESS) {
             in->finalized = true;
+        } else if (type == PSBT_IN_TAP_KEY_SIG) {
+            in->tap_key_sig = true;
+        } else if (type == PSBT_IN_TAP_INTERNAL_KEY) {
+            in->tap_internal_key = val;             // 32 bytes (psbt_parse checked it)
+        } else if (type == PSBT_IN_TAP_MERKLE_ROOT) {
+            in->tap_merkle_root = val;
         }
     }
     if (r.err) return false;
@@ -483,6 +531,9 @@ bool psbt_get_output(const psbt_t *psbt, uint32_t index, psbt_output_t *out) {
     while (map_next(&r, &type, &key_len, &val, &val_len)) {
         if (type == PSBT_OUT_BIP32_DERIVATION) {
             if (is_keypath(key_len, val_len, false)) out->keypath_count++;
+        } else if (type == PSBT_OUT_TAP_BIP32_DERIVATION) {
+            uint32_t leaves;
+            if (tap_keypath_start(key_len, val, val_len, &leaves) != 0) out->keypath_count++;
         } else if (key_len != 1) {
             continue;
         } else if (type == PSBT_OUT_REDEEM_SCRIPT) {
@@ -491,6 +542,8 @@ bool psbt_get_output(const psbt_t *psbt, uint32_t index, psbt_output_t *out) {
         } else if (type == PSBT_OUT_WITNESS_SCRIPT) {
             out->witness_script = val;
             out->witness_script_len = val_len;
+        } else if (type == PSBT_OUT_TAP_INTERNAL_KEY) {
+            out->tap_internal_key = val;
         }
     }
     return !r.err;
@@ -500,21 +553,21 @@ bool psbt_input_keypath(const psbt_t *psbt, uint32_t index, uint32_t n, psbt_key
     if (psbt == NULL || psbt->buf == NULL || index >= psbt->input_count) return false;
     reader_t r;
     map_seek(&r, psbt, psbt->input_maps_ofs, index);
-    return map_find_keypath(&r, PSBT_IN_BIP32_DERIVATION, false, n, kp);
+    return map_find_keypath(&r, PSBT_IN_BIP32_DERIVATION, PSBT_IN_TAP_BIP32_DERIVATION, false, n, kp);
 }
 
 bool psbt_output_keypath(const psbt_t *psbt, uint32_t index, uint32_t n, psbt_keypath_t *kp) {
     if (psbt == NULL || psbt->buf == NULL || index >= psbt->output_count) return false;
     reader_t r;
     map_seek(&r, psbt, psbt->output_maps_ofs, index);
-    return map_find_keypath(&r, PSBT_OUT_BIP32_DERIVATION, false, n, kp);
+    return map_find_keypath(&r, PSBT_OUT_BIP32_DERIVATION, PSBT_OUT_TAP_BIP32_DERIVATION, false, n, kp);
 }
 
 bool psbt_global_xpub(const psbt_t *psbt, uint32_t n, psbt_keypath_t *kp) {
     if (psbt == NULL || psbt->buf == NULL) return false;
     reader_t r;
     rd_init(&r, psbt->buf, 5, psbt->len);   // Global map starts after the magic
-    return map_find_keypath(&r, PSBT_GLOBAL_XPUB, true, n, kp);
+    return map_find_keypath(&r, PSBT_GLOBAL_XPUB, 0, true, n, kp);
 }
 
 uint32_t psbt_path_element(const psbt_keypath_t *kp, uint32_t i) {
@@ -604,6 +657,7 @@ bool psbt_input_has_sig_from(const psbt_t *psbt, uint32_t index, const uint8_t *
 
 const char *psbt_sighash_name(uint32_t sighash) {
     switch (sighash) {
+        case PSBT_SIGHASH_DEFAULT:                              return "DEFAULT";
         case PSBT_SIGHASH_ALL:                                  return "ALL";
         case PSBT_SIGHASH_NONE:                                 return "NONE";
         case PSBT_SIGHASH_SINGLE:                               return "SINGLE";
@@ -708,33 +762,40 @@ bool psbt_tx_txid_body(const uint8_t *tx, uint32_t len, uint32_t *body_ofs, uint
     return true;
 }
 
-uint32_t psbt_add_partial_sig(uint8_t *buf, uint32_t capacity, const psbt_t *psbt, uint32_t index,
-                              const uint8_t *pubkey, uint32_t pubkey_len,
-                              const uint8_t *sig, uint32_t sig_len) {
-    if (psbt->buf != buf || index >= psbt->input_count || pubkey_len + 1 >= 0xFD || sig_len >= 0xFD) return 0;
+uint32_t psbt_add_input_field(uint8_t *buf, uint32_t capacity, const psbt_t *psbt, uint32_t index,
+                              uint8_t type, const uint8_t *key_data, uint32_t key_data_len,
+                              const uint8_t *value, uint32_t value_len) {
+    if (psbt->buf != buf || index >= psbt->input_count || key_data_len + 1 >= 0xFD || value_len >= 0xFD) return 0;
 
     // Position of this input map's 0x00 separator
     reader_t r;
-    uint8_t type;
-    uint32_t key_len, val_len;
-    const uint8_t *val;
     map_seek(&r, psbt, psbt->input_maps_ofs, index);
-    while (map_next(&r, &type, &key_len, &val, &val_len)) {
-    }
+    map_skip(&r);
     if (r.err) return 0;
     uint32_t at = r.pos - 1;
 
-    // <keylen> 0x02 <pubkey> <siglen> <sig>
-    uint32_t add = 1 + 1 + pubkey_len + 1 + sig_len;
+    // <keylen> <type> <key data> <value len> <value>
+    uint32_t add = 1 + 1 + key_data_len + 1 + value_len;
     if (psbt->len + add > capacity) return 0;
     memmove(&buf[at + add], &buf[at], psbt->len - at);
-    buf[at++] = (uint8_t)(pubkey_len + 1);
-    buf[at++] = PSBT_IN_PARTIAL_SIG;
-    memcpy(&buf[at], pubkey, pubkey_len);
-    at += pubkey_len;
-    buf[at++] = (uint8_t)sig_len;
-    memcpy(&buf[at], sig, sig_len);
+    buf[at++] = (uint8_t)(key_data_len + 1);
+    buf[at++] = type;
+    if (key_data_len > 0) memcpy(&buf[at], key_data, key_data_len);
+    at += key_data_len;
+    buf[at++] = (uint8_t)value_len;
+    memcpy(&buf[at], value, value_len);
     return psbt->len + add;
+}
+
+uint32_t psbt_add_partial_sig(uint8_t *buf, uint32_t capacity, const psbt_t *psbt, uint32_t index,
+                              const uint8_t *pubkey, uint32_t pubkey_len,
+                              const uint8_t *sig, uint32_t sig_len) {
+    return psbt_add_input_field(buf, capacity, psbt, index, PSBT_IN_PARTIAL_SIG, pubkey, pubkey_len, sig, sig_len);
+}
+
+uint32_t psbt_add_tap_key_sig(uint8_t *buf, uint32_t capacity, const psbt_t *psbt, uint32_t index,
+                              const uint8_t *sig, uint32_t sig_len) {
+    return psbt_add_input_field(buf, capacity, psbt, index, PSBT_IN_TAP_KEY_SIG, NULL, 0, sig, sig_len);
 }
 
 bool psbt_signals_rbf(const psbt_t *psbt) {

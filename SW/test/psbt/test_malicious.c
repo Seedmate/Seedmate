@@ -61,9 +61,11 @@ static uint32_t bip84_account_index = 0;
 static bool bip84_multisig_mode = false;
 #define SCRIPT_NESTED 1
 #define SCRIPT_NATIVE 2
+#define SCRIPT_TAPROOT 3
 static uint8_t bip84_script = SCRIPT_NATIVE;    // m/84' keys below (setup_wallet)
 static HDNode bip84_receive_node_cache, bip84_change_node_cache;
 static HDNode native_receive, native_change, nested_receive, nested_change;    // m/84' and m/49'
+static HDNode taproot_receive, taproot_change;                                  // m/86'
 static HDNode ms_receive_node_cache, ms_change_node_cache;
 static HDNode ms2_receive, ms2_change, ms1_receive, ms1_change;     // m/48'/0'/0'/2' and /1'
 static bool ms_account_cached = true;
@@ -118,6 +120,15 @@ static void setup_wallet(void) {
     nested_change = n;
     hdnode_private_ckd(&nested_change, 1);
 
+    n = root;                                   // m/86'/0'/0' for the taproot mode
+    hdnode_private_ckd(&n, 86 | H);
+    hdnode_private_ckd(&n, 0 | H);
+    hdnode_private_ckd(&n, 0 | H);
+    taproot_receive = n;
+    hdnode_private_ckd(&taproot_receive, 0);
+    taproot_change = n;
+    hdnode_private_ckd(&taproot_change, 1);
+
     n = root;
     hdnode_private_ckd(&n, 48 | H);
     hdnode_private_ckd(&n, 0 | H);
@@ -141,8 +152,8 @@ static void setup_wallet(void) {
 }
 
 // --- One run ---------------------------------------------------------------------
-enum { MODE_SINGLE, MODE_MULTI, MODE_MULTI_DESC, MODE_NESTED, MODE_NMULTI, MODE_NMULTI_DESC, MODE_COUNT };
-static const char *mode_name[MODE_COUNT] = {"single", "multi", "multi+desc", "nested", "nmulti", "nmulti+desc"};
+enum { MODE_SINGLE, MODE_MULTI, MODE_MULTI_DESC, MODE_NESTED, MODE_NMULTI, MODE_NMULTI_DESC, MODE_TAPROOT, MODE_COUNT };
+static const char *mode_name[MODE_COUNT] = {"single", "multi", "multi+desc", "nested", "nmulti", "nmulti+desc", "taproot"};
 
 static bool mode_desc(int mode) { return mode == MODE_MULTI_DESC || mode == MODE_NMULTI_DESC; }
 
@@ -161,9 +172,10 @@ static void run(const uint8_t *data, uint32_t len, int mode, outcome_t *r) {
     memcpy(buf, data, len);
     bool nested = mode == MODE_NESTED || mode == MODE_NMULTI || mode == MODE_NMULTI_DESC;
     bip84_multisig_mode = mode == MODE_MULTI || mode == MODE_MULTI_DESC || mode == MODE_NMULTI || mode == MODE_NMULTI_DESC;
-    bip84_script = nested ? SCRIPT_NESTED : SCRIPT_NATIVE;    // Nested segwit, single and multi sig
-    bip84_receive_node_cache = nested ? nested_receive : native_receive;
-    bip84_change_node_cache = nested ? nested_change : native_change;
+    bool taproot = mode == MODE_TAPROOT;
+    bip84_script = nested ? SCRIPT_NESTED : taproot ? SCRIPT_TAPROOT : SCRIPT_NATIVE;
+    bip84_receive_node_cache = nested ? nested_receive : taproot ? taproot_receive : native_receive;
+    bip84_change_node_cache = nested ? nested_change : taproot ? taproot_change : native_change;
     ms_receive_node_cache = nested ? ms1_receive : ms2_receive;
     ms_change_node_cache = nested ? ms1_change : ms2_change;
     ms_wallet_loaded = mode_desc(mode);

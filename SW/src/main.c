@@ -269,9 +269,10 @@ char bip84_cached_zpub[115] = {0};
 
 HDNode bip84_receive_node_cache;
 HDNode bip84_change_node_cache;
-static char shown_addr[44];                 // Address on screen, see shown_address(); bc1q... is 42 characters
+static char shown_addr[64];                 // Address on screen, see shown_address(); bc1p... is 62 characters
 static uint32_t shown_addr_chain, shown_addr_index;
-static bool shown_addr_nested, shown_addr_valid;
+static uint8_t shown_addr_script;
+static bool shown_addr_valid;
 
 HDNode bip84_account_node;
 uint32_t bip84_master_fingerprint = 0;
@@ -282,8 +283,8 @@ uint32_t bip84_account_parent_fingerprint = 0;
 static bool bip84_multisig_mode = false;
 
 // Script type of the wallet, chosen in CONFIG for the session. NATIVE SEGWIT
-// and NESTED SEGWIT work, single and multi sig; the others show where they
-// will go and say "NOT AVAILABLE YET".
+// and NESTED SEGWIT work, single and multi sig, and TAPROOT single sig (BIP86
+// key path); LEGACY shows where it will go and says "NOT AVAILABLE YET".
 #define SCRIPT_LEGACY   0       // m/44', 1... addresses
 #define SCRIPT_NESTED   1       // m/49', 3... (multisig P2SH-P2WSH, m/48'/0'/n'/1')
 #define SCRIPT_NATIVE   2       // m/84', bc1q... (multisig P2WSH, m/48'/0'/n'/2')
@@ -294,17 +295,22 @@ static const char *const script_key[4] = {"LEG", "NEST", "NATV", "TAPR"};      /
 static const char *const script_prefix[4] = {"1...", "3...", "BC1Q...", "BC1P..."};
 
 static bool script_ready(void) {
-    return bip84_script == SCRIPT_NATIVE || bip84_script == SCRIPT_NESTED;
+    return bip84_script == SCRIPT_NATIVE || bip84_script == SCRIPT_NESTED ||
+           (bip84_script == SCRIPT_TAPROOT && !bip84_multisig_mode);
 }
 
-// Single sig account: m/49' (P2SH-P2WPKH, 3...) for NESTED SEGWIT, otherwise
-// m/84' (P2WPKH, bc1q...)
+// Single sig account: m/49' (P2SH-P2WPKH, 3...) for NESTED SEGWIT, m/86'
+// (P2TR, bc1p...) for TAPROOT, otherwise m/84' (P2WPKH, bc1q...)
 static bool single_nested(void) {
     return bip84_script == SCRIPT_NESTED;
 }
 
+static bool single_taproot(void) {
+    return bip84_script == SCRIPT_TAPROOT;
+}
+
 static uint32_t single_purpose(void) {
-    return single_nested() ? 49 : 84;
+    return single_nested() ? 49 : single_taproot() ? 86 : 84;
 }
 
 // BIP48 script type of the multisig account: 1' P2SH-P2WSH for NESTED
@@ -2039,8 +2045,9 @@ static void derive_multisig_account(const HDNode *root) {
     derive_multisig_from_coin();
 }
 
-// m/84'/0'/account' (m/49'/0'/account' for nested) from the cached coin node,
-// its xpub and zpub (ypub) strings and the receive/change branches. One public key.
+// m/84'/0'/account' (m/49'/0'/account' for nested, m/86' for taproot) from the
+// cached coin node, its xpub and zpub (ypub) strings and the receive/change
+// branches. One public key.
 static void derive_bip84_account(void) {
     bip84_account_node = bip84_coin_node;
     hdnode_private_ckd(&bip84_account_node, bip84_account_index | 0x80000000);
@@ -2048,8 +2055,11 @@ static void derive_bip84_account(void) {
     key_progress_step();
 
     hdnode_serialize_public(&bip84_account_node, bip84_account_parent_fingerprint, 0x0488B21E, bip84_cached_xpub, sizeof(bip84_cached_xpub));
-    hdnode_serialize_public(&bip84_account_node, bip84_account_parent_fingerprint,
-                            (bip84_coin_purpose == 49) ? 0x049D7CB2 : 0x04B24746, bip84_cached_zpub, sizeof(bip84_cached_zpub));
+    bip84_cached_zpub[0] = '\0';           // Taproot (BIP86) has only the xpub
+    if (bip84_coin_purpose != 86) {
+        hdnode_serialize_public(&bip84_account_node, bip84_account_parent_fingerprint,
+                                (bip84_coin_purpose == 49) ? 0x049D7CB2 : 0x04B24746, bip84_cached_zpub, sizeof(bip84_cached_zpub));
+    }
 
     // This saves one heavy HMAC-SHA512 derivation per address request
     shown_addr_valid = false;               // The address shown came from the old branches
@@ -2200,7 +2210,9 @@ static void account_key_text(bool zpub, char *out) {
     out[0] = '[';
     for (int i = 0; i < 8; i++) out[1 + i] = hex[(bip84_master_fingerprint >> (28 - 4 * i)) & 0x0F];
     out[9] = '\0';
-    strcat(out, bip84_multisig_mode ? "/48h/0h/" : single_nested() ? "/49h/0h/" : "/84h/0h/");
+    strcat(out, "/");
+    strcat_num(out, bip84_multisig_mode ? 48 : single_purpose());
+    strcat(out, "h/0h/");
     strcat_num(out, bip84_account_index);
     strcat(out, bip84_multisig_mode ? (single_nested() ? "h/1h]" : "h/2h]") : "h]");
     if (bip84_multisig_mode) {
@@ -2214,7 +2226,7 @@ static void account_key_text(bool zpub, char *out) {
 }
 
 // The single sig keys follow the script type chosen in CONFIG: switching
-// between NATIVE and NESTED derives the account of the other purpose from
+// between NATIVE, NESTED and TAPROOT derives the account of that purpose from
 // the root (kept while the wallet is loaded, else the PBKDF2 again, BACK
 // cancels). False if cancelled: the keys stay as they were.
 static bool single_purpose_refresh(void) {
@@ -2223,7 +2235,9 @@ static bool single_purpose_refresh(void) {
     black_screen();
     draw_title("LOADING WALLET", ST7735_LIGHTGREY);
     text_at(5, 25, "DERIVING THE KEYS", ST7735_CYAN);
-    strcpy(text, single_nested() ? "m/49'/0'/" : "m/84'/0'/");
+    strcpy(text, "m/");
+    strcat_num(text, single_purpose());
+    strcat(text, "'/0'/");
     strcat_num(text, bip84_account_index);
     strcat(text, "'");
     text_at(5, 35, text, ST7735_CYAN);
@@ -2296,6 +2310,7 @@ static void show_account_qr(void) {
     key.path_len = bip84_multisig_mode ? 4 : 3;
     key.multisig = bip84_multisig_mode;
     key.nested = single_nested();
+    key.taproot = single_taproot() && !bip84_multisig_mode;
 
     white_screen();
     if (!xpub_qr_ur) {
@@ -2314,6 +2329,45 @@ static void show_account_qr(void) {
         return;
     }
     drawtext(138, 60, "UR", ST7735_BLACK, ST7735_WHITE, 1);            // Format, right margin
+}
+
+static void sd_save_file(const uint8_t *data, uint32_t len, const char *stem, const char *what);
+
+// Text of the account key file (SAVE on the XPUB page), ending in a line
+// break. Single sig: the wallet descriptor with its BIP380 checksum, which
+// Sparrow imports as a watch-only wallet with nothing left to choose,
+// e.g. tr([73c5da0a/86h/0h/0h]xpub.../<0;1>/*)#xf07c0qd. Multisig: the key
+// with its origin, as the QR text, for the coordinator. stem gets the file
+// name without extension, e.g. "73c5da0a-tr-acc0". out must hold 200 chars.
+static void account_file_text(char *out, char *stem) {
+    static const char *const kind[4] = {"pkh", "sh-wpkh", "wpkh", "tr"};
+    char key[140];
+    account_key_text(bip84_extended_key_page != 0, key);
+    memcpy(stem, &key[1], 8);                   // The fingerprint
+    stem[8] = '\0';
+    strcat(stem, bip84_multisig_mode ? (single_nested() ? "-ms-sh-wsh" : "-ms-wsh") : "-");
+    if (!bip84_multisig_mode) strcat(stem, kind[bip84_script]);
+    strcat(stem, "-acc");
+    strcat_num(stem, bip84_account_index);
+    if (bip84_multisig_mode) {
+        strcpy(out, key);
+    } else {
+        strcpy(out, single_nested() ? "sh(wpkh(" : single_taproot() ? "tr(" : "wpkh(");
+        strcat(out, key);
+        strcat(out, single_nested() ? "/<0;1>/*))" : "/<0;1>/*)");
+        size_t n = strlen(out);
+        out[n] = '#';
+        out[n + 9] = '\0';
+        if (!desc_checksum(out, (uint32_t)n, &out[n + 1])) out[n] = '\0';     // Never: plain ASCII
+    }
+    strcat(out, "\n");
+}
+
+static void save_account_file(void) {
+    char text[200], stem[32];
+    account_file_text(text, stem);
+    sd_save_file((const uint8_t *)text, (uint32_t)strlen(text), stem,
+                 bip84_multisig_mode ? "ACCOUNT KEY" : "DESCRIPTOR");
 }
 
 static bool get_current_bip84_result(uint32_t chain, uint32_t address_index, BitcoinBip84Result *result)
@@ -2345,7 +2399,12 @@ static bool get_current_bip84_result(uint32_t chain, uint32_t address_index, Bit
     hdnode_fill_public_key(&node);
     memzero(node.private_key, sizeof(node.private_key));   // Only the public key is needed now
 
-    // 4. HASHING & ENCODING: bc1q... (P2WPKH) or 3... (P2SH-P2WPKH)
+    // 4. HASHING & ENCODING: bc1q... (P2WPKH), 3... (P2SH-P2WPKH) or bc1p... (P2TR, BIP86)
+    if (single_taproot()) {
+        uint8_t qx[32];
+        return psbt_taproot_output_key(node.public_key, qx) &&
+               segwit_addr_encode(result->address, "bc", 1, qx, 32) != 0;
+    }
     uint8_t payload[21];
     single_script_hash(node.public_key, single_nested(), &payload[1]);
     if (single_nested()) {
@@ -2362,7 +2421,7 @@ static bool get_current_bip84_result(uint32_t chain, uint32_t address_index, Bit
 static const char *shown_address(uint32_t chain, uint32_t index)
 {
     if (!(bip84_account_cached && shown_addr_valid && shown_addr_chain == chain &&
-          shown_addr_index == index && shown_addr_nested == single_nested())) {
+          shown_addr_index == index && shown_addr_script == bip84_script)) {
         BitcoinBip84Result result;
         shown_addr_valid = false;
         if (!get_current_bip84_result(chain, index, &result) || strlen(result.address) >= sizeof(shown_addr)) {
@@ -2371,7 +2430,7 @@ static const char *shown_address(uint32_t chain, uint32_t index)
         strcpy(shown_addr, result.address);
         shown_addr_chain = chain;
         shown_addr_index = index;
-        shown_addr_nested = single_nested();
+        shown_addr_script = bip84_script;
         shown_addr_valid = true;
     }
     return shown_addr;
@@ -2553,8 +2612,9 @@ static void print_bip84_info_screen(void)
     if (bip84_option() == cBIP84_ADDRESSES) {
         grid_pager("QR");                   // UP / DOWN: address index
     } else {                                // XPUB: LEFT / RIGHT the other format
-        grid_labels("BACK", NULL, "QR", bip84_extended_key_page ? "XPUB" : NULL, NULL,
-                    bip84_extended_key_page ? NULL : single_nested() ? "YPUB" : "ZPUB");
+        grid_labels("BACK", NULL, "QR",
+                    (single_taproot() && !bip84_multisig_mode) ? NULL :     // Taproot: the xpub only
+                    bip84_extended_key_page ? "XPUB" : single_nested() ? "YPUB" : "ZPUB", NULL, "SD");
     }
     estado = SHOW_BIP84_INFO;
 }
@@ -4654,18 +4714,25 @@ typedef enum {
 PSBT_OWNER_MISMATCH     // Our fingerprint and path, but a different key or script
 } psbt_owner_t;
 
+// A sighash type other than ALL (or DEFAULT, which is ALL, on a taproot input)
+static bool psbt_odd_sighash(const psbt_input_t *in) {
+    return in->has_sighash && in->sighash != PSBT_SIGHASH_ALL &&
+           !(in->sighash == PSBT_SIGHASH_DEFAULT && psbt_script_type(in->script, in->script_len) == PSBT_SCRIPT_P2TR);
+}
+
 static bool psbt_fp_is_mine(uint32_t fingerprint) {
     return bip84_account_cached && fingerprint == bip84_master_fingerprint;
 }
 
-// m/84'/0'/account'/chain/index or m/49'/... (single sig, native or nested)
-// with chain 0 (receive) or 1 (change), any account (returned in *account)
+// m/84'/0'/account'/chain/index, m/49'/... or m/86'/... (single sig: native,
+// nested or taproot) with chain 0 (receive) or 1 (change), any account
+// (returned in *account)
 static bool psbt_bip84_path(const psbt_keypath_t *kp, uint32_t *account) {
     *account = 0;
     if (kp->path == NULL || kp->path_len != 5) return false;
     *account = psbt_path_element(kp, 2) & ~PSBT_HARDENED;
-    return
-           (psbt_path_element(kp, 0) == (84 | PSBT_HARDENED) || psbt_path_element(kp, 0) == (49 | PSBT_HARDENED)) &&
+    uint32_t purpose = psbt_path_element(kp, 0) & ~PSBT_HARDENED;
+    return (psbt_path_element(kp, 0) & PSBT_HARDENED) && (purpose == 84 || purpose == 49 || purpose == 86) &&
            psbt_path_element(kp, 1) == PSBT_HARDENED &&
            (psbt_path_element(kp, 2) & PSBT_HARDENED) &&
            psbt_path_element(kp, 3) <= 1 &&
@@ -4687,12 +4754,21 @@ static bool psbt_multisig_path(const psbt_keypath_t *kp, uint32_t *account) {
            psbt_path_element(kp, 5) < PSBT_HARDENED;
 }
 
-// A path of the other script type: single sig m/49' while native or m/84'
-// while nested, multisig .../1'/ while native or .../2'/ while nested
+// A path of another script type: single sig m/49', m/84' or m/86' that is
+// not the one chosen, multisig .../1'/ while native or .../2'/ while nested
+// (or any while taproot)
 static bool psbt_other_single_script(const psbt_keypath_t *kp) {
     uint32_t account;
-    if (psbt_multisig_path(kp, &account)) return psbt_path_element(kp, 3) != (ms_script_index() | PSBT_HARDENED);
+    if (psbt_multisig_path(kp, &account)) {
+        return single_taproot() || psbt_path_element(kp, 3) != (ms_script_index() | PSBT_HARDENED);
+    }
     return psbt_bip84_path(kp, &account) && psbt_path_element(kp, 0) != (single_purpose() | PSBT_HARDENED);
+}
+
+// The refusal that names the script type of such a path
+static const char *psbt_switch_text(const psbt_keypath_t *kp) {
+    uint32_t e = psbt_path_element(kp, (kp->path_len == 6) ? 3 : 0) & ~PSBT_HARDENED;
+    return (e == 49 || e == 1) ? "SWITCH TO NESTED SEGWIT" : (e == 86) ? "SWITCH TO TAPROOT" : "SWITCH TO NATIVE SEGWIT";
 }
 
 // The same, restricted to the selected account and script type
@@ -4703,22 +4779,30 @@ static bool psbt_is_bip84_path(const psbt_keypath_t *kp) {
 
 // Derives the path's key from the cached account and checks that it is the
 // key in the PSBT and that the script is the P2WPKH paying to it (P2SH-P2WPKH
-// for nested: the script hash of OP_0 <key hash>)
+// for nested: the script hash of OP_0 <key hash>; for taproot the P2TR of its
+// BIP86 output key, the PSBT key being x-only and for the key path only).
+// TAP_INTERNAL_KEY and TAP_MERKLE_ROOT are not used: the key path is signed
+// for the output key derived here, which the script must already be.
 static bool psbt_bip84_key_matches(const psbt_keypath_t *kp, const uint8_t *script, uint32_t script_len) {
-    bool nested = single_nested();
-    if (kp->key_len != 33 ||
-        psbt_script_type(script, script_len) != (nested ? PSBT_SCRIPT_P2SH : PSBT_SCRIPT_P2WPKH)) return false;
+    bool nested = single_nested(), taproot = single_taproot();
+    if (kp->key_len != (taproot ? 32u : 33u) || (taproot && kp->leaf_count != 0) ||
+        psbt_script_type(script, script_len) !=
+            (nested ? PSBT_SCRIPT_P2SH : taproot ? PSBT_SCRIPT_P2TR : PSBT_SCRIPT_P2WPKH)) return false;
 
     HDNode node = (psbt_path_element(kp, 3) == 0) ? bip84_receive_node_cache : bip84_change_node_cache;
     bool match = hdnode_private_ckd(&node, psbt_path_element(kp, 4)) != 0;
     if (match) {
         hdnode_fill_public_key(&node);
-        match = memcmp(node.public_key, kp->key, 33) == 0;
+        match = memcmp(taproot ? &node.public_key[1] : node.public_key, kp->key, kp->key_len) == 0;
     }
     if (match) {
-        uint8_t hash[20];               // At offset 2 in both scripts
-        single_script_hash(node.public_key, nested, hash);
-        match = memcmp(hash, &script[2], 20) == 0;
+        uint8_t hash[32];               // At offset 2 in every script
+        if (taproot) {
+            match = psbt_taproot_output_key(node.public_key, hash) && memcmp(hash, &script[2], 32) == 0;
+        } else {
+            single_script_hash(node.public_key, nested, hash);
+            match = memcmp(hash, &script[2], 20) == 0;
+        }
     }
     memzero(&node, sizeof(node));   // Holds a private key
     return match;
@@ -5284,8 +5368,8 @@ static void psbt_view_details(const psbt_t *psbt) {
 
     for (uint32_t i = 0; i < psbt->input_count; i++) {
         if (!psbt_get_input(psbt, i, &in)) continue;
-        if (in.finalized || in.partial_sig_count > 0) signed_inputs++;
-        if (in.has_sighash && in.sighash != PSBT_SIGHASH_ALL) odd_sighash++;
+        if (in.finalized || in.partial_sig_count > 0 || in.tap_key_sig) signed_inputs++;
+        if (psbt_odd_sighash(&in)) odd_sighash++;
         for (uint32_t n = 0; psbt_input_keypath(psbt, i, n, &kp); n++) {
             if (psbt_fp_is_mine(kp.fingerprint)) {
                 my_inputs++;
@@ -5391,10 +5475,11 @@ static void psbt_view_input(const psbt_t *psbt, uint32_t index) {
     if (in.finalized) {
         strcpy(line, "FINAL");
     } else {
+        uint32_t sigs = in.partial_sig_count + (in.tap_key_sig ? 1 : 0);
         strcpy(line, "SIGS:");
-        fast_itoa(in.partial_sig_count > 99 ? 99 : in.partial_sig_count, &line[5]);
+        fast_itoa(sigs > 99 ? 99 : sigs, &line[5]);
     }
-    bool odd_sighash = in.has_sighash && in.sighash != PSBT_SIGHASH_ALL;
+    bool odd_sighash = psbt_odd_sighash(&in);
     strcat(line, " SIGHASH:");
     strcat(line, in.has_sighash ? psbt_sighash_name(in.sighash) : "ALL");
     text_at(5, 72, line, odd_sighash ? ST7735_RED : ST7735_WHITE);
@@ -5991,7 +6076,8 @@ typedef struct {
     uint32_t already_signed;    // Our inputs that already carry a signature
     uint32_t foreign;           // Inputs of other keys (cosigners, other wallets)
     uint32_t other_mode;        // Ours, but for the other single/multi sig mode
-    uint32_t other_script;      // Ours, of the other script type (native / nested segwit)
+    uint32_t other_script;      // Ours, of another script type (native / nested segwit, taproot)
+    const char *switch_text;    // Which one, as the refusal names it
     uint32_t other_account;     // Ours, but for another account index
     uint32_t other_account_index;
     char refuse_text[24];       // Built refusal reason (refuse points here)
@@ -6122,7 +6208,7 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
             plan->refuse = "PREV TX MISMATCH";
             return;
         }
-        if (in.prev_tx == NULL) plan->amounts_unverified = true;
+        if (in.prev_tx == NULL) plan->amounts_unverified = true;     // Cleared below for taproot
 
         psbt_owner_t owner = psbt_check_owner(psbt, true, i, in.script, in.script_len,
                                               in.witness_script, in.witness_script_len, &kp);
@@ -6145,8 +6231,9 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
         }
         psbt_script_type_t type = psbt_script_type(in.script, in.script_len);
         if (!mine && ((owner == PSBT_OWNER_FP_ONLY && !single_path && !multi_path) ||
-                      (type != PSBT_SCRIPT_P2WPKH && type != PSBT_SCRIPT_P2WSH && type != PSBT_SCRIPT_P2SH))) {
-            other_type = true;                  // Taproot, legacy, nested multisig (m/86', 44', 48'/../1')
+                      (type != PSBT_SCRIPT_P2WPKH && type != PSBT_SCRIPT_P2WSH && type != PSBT_SCRIPT_P2SH &&
+                       type != PSBT_SCRIPT_P2TR))) {
+            other_type = true;                  // Legacy (m/44'), a script we do not sign
         }
         if (owner != PSBT_OWNER_FP_ONLY && !mine) {
             plan->foreign++;
@@ -6156,14 +6243,17 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
             plan->other_mode++;
         } else if (psbt_other_single_script(&kp)) {
             plan->other_script++;
+            plan->switch_text = psbt_switch_text(&kp);
         } else if (account != bip84_account_index) {
             plan->other_account++;
             plan->other_account_index = account;
         } else if (!mine) {
             plan->foreign++;
-        } else if (in.finalized || psbt_input_has_sig_from(psbt, i, kp.key, kp.key_len)) {
+        } else if (in.finalized || psbt_input_has_sig_from(psbt, i, kp.key, kp.key_len) ||
+                   (kp.key_len == 32 && in.tap_key_sig)) {
             plan->already_signed++;
-        } else if (in.has_sighash && in.sighash != PSBT_SIGHASH_ALL) {
+        } else if (in.has_sighash && in.sighash != PSBT_SIGHASH_ALL &&
+                   !(kp.key_len == 32 && in.sighash == PSBT_SIGHASH_DEFAULT)) {
             plan->refuse = "SIGHASH NOT ALL";
             return;
         } else {
@@ -6174,7 +6264,7 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
         if (plan->other_mode > 0) {
             plan->refuse = bip84_multisig_mode ? "SWITCH TO SINGLE SIG" : "SWITCH TO MULTI SIG";
         } else if (plan->other_script > 0) {
-            plan->refuse = single_nested() ? "SWITCH TO NATIVE SEGWIT" : "SWITCH TO NESTED SEGWIT";
+            plan->refuse = plan->switch_text;
         } else if (plan->other_account > 0) {
             char num[12];
             strcpy(plan->refuse_text, "SWITCH TO ACCOUNT ");
@@ -6186,6 +6276,9 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
         }
         return;
     }
+    // A taproot signature commits to the amount and script of every input
+    // (BIP341): a wrong amount makes it invalid, so no previous tx is needed
+    if (single_taproot()) plan->amounts_unverified = false;
 
     for (uint32_t o = 0; o < psbt->output_count; o++) {
         psbt_count_label("OUTPUT ", o, psbt->output_count, label);
@@ -6429,7 +6522,8 @@ static uint32_t psbt_sign_inputs(uint8_t *buf, uint32_t len, uint32_t capacity, 
                                               in.witness_script, in.witness_script_len, &kp);
         bool multi = owner == PSBT_OWNER_VERIFIED_MULTI;
         if (multi != bip84_multisig_mode || (owner != PSBT_OWNER_VERIFIED && !multi)) continue;
-        if (psbt_input_has_sig_from(&psbt, i, kp.key, kp.key_len)) continue;
+        bool taproot = kp.key_len == 32;
+        if (psbt_input_has_sig_from(&psbt, i, kp.key, kp.key_len) || (taproot && in.tap_key_sig)) continue;
 
         psbt_count_label("INPUT ", i, psbt.input_count, label);
         psbt_format_path(&kp, path);
@@ -6448,13 +6542,17 @@ static uint32_t psbt_sign_inputs(uint8_t *buf, uint32_t len, uint32_t capacity, 
         if (ok) {
             hdnode_fill_public_key(&node);
             memcpy(pubkey, node.public_key, 33);
-            ok = memcmp(pubkey, kp.key, 33) == 0;
+            ok = memcmp(taproot ? &pubkey[1] : pubkey, kp.key, kp.key_len) == 0;
             *why = "DERIVED KEY MISMATCH";
         }
         if (ok) {
             psbt_progress_step(label, path, "COMPUTING SIGHASH", step++, total);
             *why = "SIGHASH ERROR";
-            if (multi) {
+            // Taproot: SIGHASH_DEFAULT unless the PSBT asks for ALL (the plan allows no other)
+            uint8_t hash_type = (taproot && in.has_sighash) ? (uint8_t)in.sighash : PSBT_SIGHASH_DEFAULT;
+            if (taproot) {
+                ok = psbt_sighash_taproot(&psbt, i, hash_type, digest);
+            } else if (multi) {
                 ok = psbt_sighash_segwit_v0(&psbt, i, in.witness_script, in.witness_script_len,
                                             in.amount, PSBT_SIGHASH_ALL, digest);
             } else {
@@ -6469,15 +6567,22 @@ static uint32_t psbt_sign_inputs(uint8_t *buf, uint32_t len, uint32_t capacity, 
                 sign_progress.step = step++;
                 sign_progress.total = total;
                 *why = "SIGNATURE CHECK FAILED";
-                ok = psbt_ecdsa_sign(node.private_key, pubkey, digest, PSBT_SIGHASH_ALL, sig, &sig_len,
-                                     psbt_show_verifying);
+                if (taproot) {
+                    ok = psbt_taproot_sign(node.private_key, pubkey, digest, sig, psbt_show_verifying);
+                    sig[64] = hash_type;            // Only sent for SIGHASH_ALL
+                    sig_len = (hash_type == PSBT_SIGHASH_DEFAULT) ? 64 : 65;
+                } else {
+                    ok = psbt_ecdsa_sign(node.private_key, pubkey, digest, PSBT_SIGHASH_ALL, sig, &sig_len,
+                                         psbt_show_verifying);
+                }
             }
         }
         memzero(&node, sizeof(node));   // Holds the private key
         if (!ok) return 0;
 
         psbt_progress_step(label, path, "ADDING TO PSBT", step++, total);
-        len = psbt_add_partial_sig(buf, capacity, &psbt, i, pubkey, 33, sig, sig_len);
+        len = taproot ? psbt_add_tap_key_sig(buf, capacity, &psbt, i, sig, sig_len) :
+                        psbt_add_partial_sig(buf, capacity, &psbt, i, pubkey, 33, sig, sig_len);
         if (len == 0) {
             *why = "NO ROOM IN BUFFER";
             return 0;
@@ -6498,7 +6603,9 @@ static void psbt_save_progress(bool verifying, uint32_t done, uint32_t total) {
 
 // Writes the signed PSBT as a new file, after a confirmation with its name and
 // size, and reads it back. Never on a seed card, never over another file.
-static void psbt_save_to_sd(const uint8_t *psbt, uint32_t len) {
+// stem: the file is stem.txt (stem-2.txt...); NULL: a signed PSBT named
+// after the file it came from. what: the kind of file, on the confirmation.
+static void sd_save_file(const uint8_t *data, uint32_t len, const char *stem, const char *what) {
     char name[SD_FILES_NAME_LEN];
     char text[28];
     char num[12];
@@ -6521,7 +6628,7 @@ static void psbt_save_to_sd(const uint8_t *psbt, uint32_t len) {
         psbt_sd_message("SD CARD ERROR", "NO FAT16/32 ON THE CARD");
         return;
     }
-    if (!sd_files_new_name(psbt_source_name, name)) {
+    if (!(stem ? sd_files_free_name(stem, ".txt", name) : sd_files_new_name(psbt_source_name, name))) {
         sd_files_unmount();
         psbt_sd_message("SD CARD ERROR", "NO FREE FILE NAME");
         return;
@@ -6534,7 +6641,8 @@ static void psbt_save_to_sd(const uint8_t *psbt, uint32_t len) {
     draw_bip84_wrapped_text(name, 5, 28, 25, 3);
     fast_itoa(len, num);
     strcpy(text, num);
-    strcat(text, " BYTES, SIGNED PSBT");
+    strcat(text, " BYTES, ");
+    strcat(text, what);
     text_at(5, 62, text, ST7735_WHITE);
     text_at(5, 80, "WRITE IT TO THE CARD?", ST7735_WHITE);
     grid_confirm("SAVE");
@@ -6545,7 +6653,7 @@ static void psbt_save_to_sd(const uint8_t *psbt, uint32_t len) {
 
     psbt_progress_begin("SAVE TO SD CARD");
     progress_line(25, name);
-    sd_save_t r = sd_files_save(name, psbt, len, psbt_save_progress);
+    sd_save_t r = sd_files_save(name, data, len, psbt_save_progress);
     sd_files_unmount();
     if (r != SD_SAVE_OK) {
         psbt_sd_message((r == SD_SAVE_VERIFY_ERROR) ? "VERIFY FAILED" : "WRITE FAILED",
@@ -6560,6 +6668,10 @@ static void psbt_save_to_sd(const uint8_t *psbt, uint32_t len) {
     text_at(5, 56, "WRITTEN AND VERIFIED", ST7735_GREEN);
     grid_OK_only();
     while (psbt_wait_key() != OK_BT) { }
+}
+
+static void psbt_save_to_sd(const uint8_t *psbt, uint32_t len) {
+    sd_save_file(psbt, len, NULL, "SIGNED PSBT");
 }
 
 // After signing: QR or SD, as many times as wanted; BACK leaves
@@ -7316,14 +7428,19 @@ void test_prng_to_screen(void) {
 
 #define ADDRESS_CHECK_COUNT 20      // First receive and change addresses checked
 
-// The 20 bytes the address of m/purpose'/0'/account'/chain/index pays to
-// (from the cached branch): key hash, or script hash for nested
-static bool bip84_address_hash(uint32_t chain, uint32_t index, uint8_t hash160[20]) {
+// What the address of m/purpose'/0'/account'/chain/index pays to (from the
+// cached branch): the 20 byte key hash (script hash for nested), or for
+// taproot the 32 byte output key
+static bool bip84_address_hash(uint32_t chain, uint32_t index, uint8_t prog[32]) {
     HDNode node = (chain == 0) ? bip84_receive_node_cache : bip84_change_node_cache;
     bool ok = hdnode_private_ckd(&node, index) != 0;
     if (ok) {
         hdnode_fill_public_key(&node);
-        single_script_hash(node.public_key, single_nested(), hash160);
+        if (single_taproot()) {
+            ok = psbt_taproot_output_key(node.public_key, prog);
+        } else {
+            single_script_hash(node.public_key, single_nested(), prog);
+        }
     }
     memzero(&node, sizeof(node));   // Holds a private key
     return ok;
@@ -7393,7 +7510,7 @@ static void check_scanned_address(void) {
     char text[100];
     char line[32];
     uint8_t prog[40];
-    uint8_t hash[20];
+    uint8_t hash[32];
     size_t prog_len = 0;
     int ver = -1;
 
@@ -7434,8 +7551,8 @@ static void check_scanned_address(void) {
         grid_confirm("SCAN");
         return;
     }
-    if (!single_nested() && (ver != 0 || prog_len != 20)) {
-        text_at(5, 50, "NOT A BC1Q ADDRESS", ST7735_YELLOW);
+    if (!single_nested() && (single_taproot() ? (ver != 1 || prog_len != 32) : (ver != 0 || prog_len != 20))) {
+        text_at(5, 50, single_taproot() ? "NOT A BC1P ADDRESS" : "NOT A BC1Q ADDRESS", ST7735_YELLOW);
         text_at(5, 60, "NOT FROM THIS WALLET", ST7735_WHITE);
         grid_confirm("SCAN");
         return;
@@ -7462,7 +7579,7 @@ static void check_scanned_address(void) {
                 BitcoinBip84Result r;
                 same = get_current_bip84_result(chain, i, &r) && strcmp(r.address, addr) == 0;
             } else {
-                same = bip84_address_hash(chain, i, hash) && memcmp(hash, prog, 20) == 0;
+                same = bip84_address_hash(chain, i, hash) && memcmp(hash, prog, prog_len) == 0;
             }
             if (same) {
                 found_chain = (int)chain;
@@ -7482,7 +7599,9 @@ static void check_scanned_address(void) {
         strcpy(line, found_chain ? "CHANGE " : "RECEIVE ");
         strcat_num(line, found_index);
         text_at(5, 60, line, ST7735_GREEN);
-        strcpy(line, single_nested() ? "m/49'/0'/" : "m/84'/0'/");
+        strcpy(line, "m/");
+        strcat_num(line, single_purpose());
+        strcat(line, "'/0'/");
         strcat_num(line, bip84_account_index);
         strcat(line, found_chain ? "'/1/" : "'/0/");
         strcat_num(line, found_index);
@@ -7908,7 +8027,7 @@ static void config_draw(bool full, uint8_t row, uint32_t account, bool multi, ui
     text_at(1, 64, text, ST7735_CYAN);
     if (locked) {
         text_at(1, 78, "SET BY THE DESCRIPTOR", ST7735_CYAN);
-    } else if (script != SCRIPT_NATIVE && script != SCRIPT_NESTED) {
+    } else if (script == SCRIPT_LEGACY) {
         text_at(1, 78, "NOT AVAILABLE YET", ST7735_YELLOW);
     }
 
@@ -7994,6 +8113,7 @@ static void config_run(void) {
         uint8_t old = bip84_script;
         bip84_script = script;
         bip84_address_index = 0;
+        bip84_extended_key_page = 0;            // Taproot has no zpub page
         if (!single_purpose_refresh()) bip84_script = old;      // Cancelled
         ms_script_refresh();                                     // The multisig account of that type
     }
@@ -13098,10 +13218,15 @@ int SSS_N = 9;
                             print_bip84_info_screen();
                         }
                         break;
-                    case LEFT_BT:
-                    case RIGHT_BT:                  // LEFT: XPUB, RIGHT: ZPUB
-                        if (bip84_option() == cBIP84_XPUB && (bip84_extended_key_page != 0) != (pulsed_bt == RIGHT_BT)) {
-                            bip84_extended_key_page = (pulsed_bt == RIGHT_BT);
+                    case LEFT_BT:                   // The other format: XPUB <-> ZPUB (YPUB)
+                        if (bip84_option() == cBIP84_XPUB && !(single_taproot() && !bip84_multisig_mode)) {
+                            bip84_extended_key_page = !bip84_extended_key_page;
+                            print_bip84_info_screen();
+                        }
+                        break;
+                    case RIGHT_BT:                  // The account key file on the SD card
+                        if (bip84_option() == cBIP84_XPUB) {
+                            save_account_file();
                             print_bip84_info_screen();
                         }
                         break;

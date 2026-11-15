@@ -3,7 +3,7 @@
  * File:        psbt_sign.h
  *
  * Summary:
- *   Cryptography for signing PSBT inputs (SegWit v0, P2WPKH).
+ *   Cryptography for signing PSBT inputs (SegWit v0 and Taproot key path).
  *
  * Description:
  *   - BIP143 signature hash, streamed from the PSBT buffer (no copies).
@@ -56,6 +56,29 @@ bool psbt_prev_tx_matches(const psbt_input_t *in);
 // interface can show both steps.
 bool psbt_ecdsa_sign(const uint8_t priv_key[32], const uint8_t pub_key[33], const uint8_t digest[32],
                      uint8_t sighash_type, uint8_t *sig, uint32_t *sig_len, void (*on_verify)(void));
+
+// BIP341 signature hash of input 'index' spent by the key path (no annex),
+// for hash type SIGHASH_DEFAULT (0) or SIGHASH_ALL (1). Every input needs its
+// amount and script (WITNESS_UTXO or NON_WITNESS_UTXO): they are all signed,
+// so a wrong amount of any input makes the signature invalid.
+bool psbt_sighash_taproot(const psbt_t *psbt, uint32_t index, uint8_t hash_type, uint8_t digest[32]);
+
+// BIP86 output key of a single key (no script tree): x(P + hash_TapTweak(x(P))*G),
+// P the even-y point of the compressed key pub33. The P2TR script is
+// OP_1 <32 bytes>, the bc1p address its bech32m.
+bool psbt_taproot_output_key(const uint8_t pub33[33], uint8_t q_x[32]);
+
+// Schnorr signature (BIP340) of the Taproot key path for the BIP86 output key
+// of pub_key, with priv_key its secret: 64 bytes, nonce from 32 zero bytes of
+// auxiliary randomness (deterministic). Verified against the output key
+// computed from pub_key before it is returned, as psbt_ecdsa_sign() does.
+bool psbt_taproot_sign(const uint8_t priv_key[32], const uint8_t pub_key[33], const uint8_t digest[32],
+                       uint8_t sig[64], void (*on_verify)(void));
+
+// Plain BIP340 signing and verification of a 32 byte message (host tests,
+// against the BIP340 vectors). pub_x is an x-only public key.
+bool psbt_bip340_sign(const uint8_t seckey[32], const uint8_t msg[32], const uint8_t aux[32], uint8_t sig[64]);
+bool psbt_bip340_verify(const uint8_t pub_x[32], const uint8_t msg[32], const uint8_t sig[64]);
 
 // BIP32 public child derivation (non-hardened index) of an extended public
 // key given as chain code and compressed key. The outputs may be the input

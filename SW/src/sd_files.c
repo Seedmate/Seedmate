@@ -199,39 +199,46 @@ int32_t sd_files_read(void *dst, uint32_t len) {
 // Writing
 // ============================================================================
 
-bool sd_files_new_name(const char *src, char *name) {
+bool sd_files_free_name(const char *stem, const char *ext, char *name) {
     budget_reset(SD_FILES_FILE_BUDGET);
-    static const char suffix[] = "-signed";
-    const size_t room = SD_FILES_NAME_LEN - 1 - (sizeof(suffix) - 1) - 2 - 5;     // "-2" ".psbt"
-    size_t n = 0;
+    size_t n = strlen(stem), e = strlen(ext);
     FILINFO info;
 
-    if (src != NULL) {
-        const char *dot = strrchr(src, '.');
-        n = (dot != NULL) ? (size_t)(dot - src) : strlen(src);
-        if (n > room) n = room;
-    }
+    if (n + 2 + e >= SD_FILES_NAME_LEN) return false;
     for (int k = 1; k <= 9; k++) {
         size_t len = n;
-        memcpy(name, src, n);
-        if (n > 0) {
-            memcpy(&name[len], suffix, sizeof(suffix) - 1);
-            len += sizeof(suffix) - 1;
-        } else {
-            memcpy(name, "signed", 6);                  // A PSBT that came from a QR
-            len = 6;
-        }
+        memcpy(name, stem, n);
         if (k > 1) {
             name[len++] = '-';
             name[len++] = (char)('0' + k);
         }
-        memcpy(&name[len], ".psbt", 6);
+        memcpy(&name[len], ext, e + 1);
 
         FRESULT r = f_stat(name, &info);
         if (r == FR_NO_FILE) return true;
         if (r != FR_OK) return false;
     }
     return false;
+}
+
+bool sd_files_new_name(const char *src, char *name) {
+    static const char suffix[] = "-signed";
+    const size_t room = SD_FILES_NAME_LEN - 1 - (sizeof(suffix) - 1) - 2 - 5;     // "-2" ".psbt"
+    char stem[SD_FILES_NAME_LEN];
+    size_t n = 0;
+
+    if (src != NULL) {
+        const char *dot = strrchr(src, '.');
+        n = (dot != NULL) ? (size_t)(dot - src) : strlen(src);
+        if (n > room) n = room;
+    }
+    if (n > 0) {
+        memcpy(stem, src, n);
+        memcpy(&stem[n], suffix, sizeof(suffix));
+    } else {
+        memcpy(stem, "signed", 7);                      // A PSBT that came from a QR
+    }
+    return sd_files_free_name(stem, ".psbt", name);
 }
 
 sd_save_t sd_files_save(const char *name, const uint8_t *data, uint32_t len,

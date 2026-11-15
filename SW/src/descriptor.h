@@ -110,4 +110,8 @@ uint32_t desc_pack(const desc_wallet_t *w, uint8_t *out);
 // compressed keys. On false *out is cleared.
 bool desc_unpack(const uint8_t *in, uint32_t len, desc_wallet_t *out);
 
+// BIP380 checksum of the descriptor text s[0..n) (8 characters, no NUL).
+// False if s has a character descriptors cannot hold.
+bool desc_checksum(const char *s, uint32_t n, char out[8]);
+
 #endif // DESCRIPTOR_H

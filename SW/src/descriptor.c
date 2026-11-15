@@ -161,7 +161,7 @@ static uint64_t desc_polymod(uint64_t c, uint32_t val) {
 }
 
 // BIP380 descriptor checksum of s[0..n)
-static bool desc_checksum(const char *s, uint32_t n, char out[8]) {
+bool desc_checksum(const char *s, uint32_t n, char out[8]) {
     static const char input_charset[] =
         "0123456789()[],'/*abcdefgh@:$%{}"
         "IJKLMNOPQRSTUVWXYZ&+-.;<=>?!^_|~"

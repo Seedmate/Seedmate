@@ -3,7 +3,8 @@
  * File:        psbt_sign.c
  *
  * Summary:
- *   BIP143 sighash, previous-tx check and RFC6979 ECDSA. See psbt_sign.h.
+ *   BIP143 sighash, previous-tx check and RFC6979 ECDSA; BIP341 sighash, BIP86
+ *   output key and BIP340 Schnorr for Taproot. See psbt_sign.h.
  *
  * License:     MIT, same as main.c
  ******************************************************************************/
@@ -22,6 +23,7 @@ int scalar_multiply(const ecdsa_curve *curve, const bignum256 *k, curve_point *r
 int point_multiply(const ecdsa_curve *curve, const bignum256 *k, const curve_point *p, curve_point *res);
 void point_add(const ecdsa_curve *curve, const curve_point *cp1, curve_point *cp2);
 int point_is_infinity(const curve_point *p);
+void point_set_infinity(curve_point *p);
 
 // ============================================================================
 // Hash helpers
@@ -325,6 +327,263 @@ bool psbt_ecdsa_sign(const uint8_t priv_key[32], const uint8_t pub_key[33], cons
     }
     memzero(&s, sizeof(s));
     return ok;
+}
+
+// ============================================================================
+// Taproot: BIP341 signature hash, BIP86 output key, BIP340 Schnorr
+// ============================================================================
+
+// SHA256(SHA256(tag) || SHA256(tag) || ...): the BIP340 tagged hash, ready
+// for the data
+static void tagged_init(SHA256_CTX *ctx, const char *tag) {
+    uint8_t t[32];
+    sha256_init(ctx);
+    sha256_update(ctx, (const BYTE *)tag, strlen(tag));
+    sha256_final(ctx, t);
+    sha256_init(ctx);
+    sha256_update(ctx, t, 32);
+    sha256_update(ctx, t, 32);
+}
+
+// CompactSize length of a script, as hashed in sha_scriptpubkeys
+static void sha256_script(SHA256_CTX *ctx, const uint8_t *script, uint32_t len) {
+    uint8_t n[3];
+    if (len < 0xFD) {
+        n[0] = (uint8_t)len;
+        sha256_update(ctx, n, 1);
+    } else {
+        n[0] = 0xFD;
+        n[1] = (uint8_t)len;
+        n[2] = (uint8_t)(len >> 8);
+        sha256_update(ctx, n, 3);
+    }
+    sha256_update(ctx, script, len);
+}
+
+bool psbt_sighash_taproot(const psbt_t *psbt, uint32_t index, uint8_t hash_type, uint8_t digest[32]) {
+    uint8_t sha[5][32];                     // prevouts, amounts, scriptpubkeys, sequences, outputs
+    uint8_t buf[8];
+    psbt_input_t in;
+    SHA256_CTX ctx;
+    const uint8_t *outputs;
+    uint32_t outputs_len;
+
+    if (hash_type != PSBT_SIGHASH_DEFAULT && hash_type != PSBT_SIGHASH_ALL) return false;
+    if (index >= psbt->input_count || !psbt_tx_outputs(psbt, &outputs, &outputs_len)) return false;
+
+    // One pass over the inputs per hash: every input's amount and script are signed
+    for (int h = 0; h < 4; h++) {
+        sha256_init(&ctx);
+        for (uint32_t i = 0; i < psbt->input_count; i++) {
+            if (!psbt_get_input(psbt, i, &in) || !in.has_amount || in.script == NULL ||
+                in.script_len > 0xFFFF) return false;
+            if (h == 0) {
+                sha256_update(&ctx, in.prev_txid, 36);    // txid + vout are contiguous
+            } else if (h == 1) {
+                le32_write(buf, (uint32_t)in.amount);
+                le32_write(&buf[4], (uint32_t)(in.amount >> 32));
+                sha256_update(&ctx, buf, 8);
+            } else if (h == 2) {
+                sha256_script(&ctx, in.script, in.script_len);
+            } else {
+                le32_write(buf, in.sequence);
+                sha256_update(&ctx, buf, 4);
+            }
+        }
+        sha256_final(&ctx, sha[h]);
+    }
+    sha256_init(&ctx);                      // The outputs, without their count
+    sha256_update(&ctx, outputs, outputs_len);
+    sha256_final(&ctx, sha[4]);
+
+    // Epoch 0, hash type, version, locktime, the five hashes, spend type 0
+    // (key path, no annex), input index
+    tagged_init(&ctx, "TapSighash");
+    buf[0] = 0x00;
+    buf[1] = hash_type;
+    sha256_update(&ctx, buf, 2);
+    le32_write(buf, psbt->tx_version);
+    le32_write(&buf[4], psbt->locktime);
+    sha256_update(&ctx, buf, 8);
+    sha256_update(&ctx, &sha[0][0], sizeof(sha));
+    buf[0] = 0x00;
+    le32_write(&buf[1], index);
+    sha256_update(&ctx, buf, 5);
+    sha256_final(&ctx, digest);
+    return true;
+}
+
+// y = p - y: the same point with the other y (the "negation")
+static void point_negate_y(const ecdsa_curve *curve, curve_point *pt) {
+    bn_subtract(&curve->prime, &pt->y, &pt->y);
+}
+
+// Tagged hash of up to three 32 byte parts, as a scalar mod n (BIP340 e and k)
+static void tagged_scalar(const char *tag, const uint8_t *a, const uint8_t *b, const uint8_t *c,
+                          bignum256 *out) {
+    uint8_t h[32];
+    SHA256_CTX ctx;
+    tagged_init(&ctx, tag);
+    sha256_update(&ctx, a, 32);
+    if (b != NULL) sha256_update(&ctx, b, 32);
+    if (c != NULL) sha256_update(&ctx, c, 32);
+    sha256_final(&ctx, h);
+    bn_read_be(h, out);
+    bn_mod(out, &secp256k1.order);
+    memzero(h, sizeof(h));
+}
+
+// BIP86 output key point Q = P + t*G, P the even-y point of the internal key
+// (given compressed) and t = hash_TapTweak(x(P)). t is returned too.
+static bool taproot_output_point(const uint8_t pub33[33], bignum256 *t, curve_point *q) {
+    const ecdsa_curve *curve = &secp256k1;
+    uint8_t h[32];
+    curve_point p;
+    SHA256_CTX ctx;
+
+    if (!ecdsa_read_pubkey(curve, pub33, &p)) return false;
+    if (p.y.val[0] & 1) point_negate_y(curve, &p);
+    tagged_init(&ctx, "TapTweak");
+    sha256_update(&ctx, &pub33[1], 32);
+    sha256_final(&ctx, h);
+    bn_read_be(h, t);
+    if (!bn_is_less(t, &curve->order)) return false;    // Never for a real key (p < 2^-127)
+    scalar_multiply(curve, t, q);
+    point_add(curve, &p, q);
+    return !point_is_infinity(q);
+}
+
+bool psbt_taproot_output_key(const uint8_t pub33[33], uint8_t q_x[32]) {
+    bignum256 t;
+    curve_point q;
+    if (!taproot_output_point(pub33, &t, &q)) return false;
+    bn_write_be(&q.x, q_x);
+    return true;
+}
+
+// BIP340 verification against the even-y point p with x bytes px:
+// R = s*G - e*P must have even y and x(R) = r
+static bool bip340_verify_point(const curve_point *p, const uint8_t px[32], const uint8_t msg[32],
+                                const uint8_t sig[64]) {
+    const ecdsa_curve *curve = &secp256k1;
+    bignum256 r, s, e;
+    curve_point sg, ep;
+
+    bn_read_be(sig, &r);
+    bn_read_be(&sig[32], &s);
+    if (!bn_is_less(&r, &curve->prime) || !bn_is_less(&s, &curve->order)) return false;
+    tagged_scalar("BIP0340/challenge", sig, px, msg, &e);
+    scalar_multiply(curve, &s, &sg);
+    if (bn_is_zero(&e)) {
+        point_set_infinity(&ep);
+    } else if (point_multiply(curve, &e, p, &ep) != 0) {
+        return false;
+    } else {
+        point_negate_y(curve, &ep);
+    }
+    point_add(curve, &ep, &sg);             // s*G - e*P (handles infinity)
+    return !point_is_infinity(&sg) && (sg.y.val[0] & 1) == 0 && bn_is_equal(&sg.x, &r);
+}
+
+bool psbt_bip340_verify(const uint8_t px[32], const uint8_t msg[32], const uint8_t sig[64]) {
+    uint8_t pub33[33];
+    curve_point p;
+    pub33[0] = 0x02;                        // lift_x: the even y
+    memcpy(&pub33[1], px, 32);
+    if (!ecdsa_read_pubkey(&secp256k1, pub33, &p)) return false;
+    return bip340_verify_point(&p, px, msg, sig);
+}
+
+// BIP340 signing with secret d, already negated so that d*G has even y, and
+// px = x(d*G). sig = R || s.
+static bool bip340_sign_even(bignum256 *d, const uint8_t px[32], const uint8_t msg[32],
+                             const uint8_t aux[32], uint8_t sig[64]) {
+    const ecdsa_curve *curve = &secp256k1;
+    uint8_t t[32], dbytes[32];
+    bignum256 k, e;
+    curve_point r;
+    SHA256_CTX ctx;
+    bool ok = false;
+
+    // t = bytes(d) xor hash_aux(aux); k = hash_nonce(t || px || msg) mod n
+    tagged_init(&ctx, "BIP0340/aux");
+    sha256_update(&ctx, aux, 32);
+    sha256_final(&ctx, t);
+    bn_write_be(d, dbytes);
+    for (int i = 0; i < 32; i++) t[i] ^= dbytes[i];
+    tagged_scalar("BIP0340/nonce", t, px, msg, &k);
+    if (!bn_is_zero(&k)) {
+        scalar_multiply(curve, &k, &r);
+        if (r.y.val[0] & 1) bn_subtract(&curve->order, &k, &k);
+        bn_write_be(&r.x, sig);
+        // s = k + e*d mod n
+        tagged_scalar("BIP0340/challenge", sig, px, msg, &e);
+        bn_multiply(d, &e, &curve->order);
+        bn_mod(&e, &curve->order);
+        bn_addmod(&e, &k, &curve->order);
+        bn_mod(&e, &curve->order);
+        bn_write_be(&e, &sig[32]);
+        ok = true;
+    }
+    memzero(t, sizeof(t));
+    memzero(dbytes, sizeof(dbytes));
+    memzero(&k, sizeof(k));
+    memzero(&e, sizeof(e));
+    return ok;
+}
+
+bool psbt_bip340_sign(const uint8_t seckey[32], const uint8_t msg[32], const uint8_t aux[32], uint8_t sig[64]) {
+    const ecdsa_curve *curve = &secp256k1;
+    uint8_t px[32];
+    bignum256 d;
+    curve_point p;
+    bool ok;
+
+    bn_read_be(seckey, &d);
+    if (bn_is_zero(&d) || !bn_is_less(&d, &curve->order)) return false;
+    scalar_multiply(curve, &d, &p);
+    if (p.y.val[0] & 1) {
+        bn_subtract(&curve->order, &d, &d);
+        point_negate_y(curve, &p);
+    }
+    bn_write_be(&p.x, px);
+    ok = bip340_sign_even(&d, px, msg, aux, sig) && bip340_verify_point(&p, px, msg, sig);
+    memzero(&d, sizeof(d));
+    return ok;
+}
+
+bool psbt_taproot_sign(const uint8_t priv_key[32], const uint8_t pub_key[33], const uint8_t digest[32],
+                       uint8_t sig[64], void (*on_verify)(void)) {
+    const ecdsa_curve *curve = &secp256k1;
+    static const uint8_t zero_aux[32];      // Deterministic nonces (BIP340 allows it)
+    uint8_t qx[32];
+    bignum256 d, t;
+    curve_point q;
+    bool ok = false;
+
+    bn_read_be(priv_key, &d);
+    if (bn_is_zero(&d) || !bn_is_less(&d, &curve->order)) return false;
+
+    // Q from the public key alone; the tweaked secret must give the same point
+    if (taproot_output_point(pub_key, &t, &q)) {
+        if (pub_key[0] == 0x03) bn_subtract(&curve->order, &d, &d);     // Even-y internal key
+        bn_addmod(&d, &t, &curve->order);                               // d + t
+        bn_mod(&d, &curve->order);
+        ok = !bn_is_zero(&d);
+    }
+    if (ok) {
+        if (q.y.val[0] & 1) {                                           // Even-y output key
+            bn_subtract(&curve->order, &d, &d);
+            point_negate_y(curve, &q);
+        }
+        bn_write_be(&q.x, qx);
+        ok = bip340_sign_even(&d, qx, digest, zero_aux, sig);
+    }
+    memzero(&d, sizeof(d));
+
+    // Checked with the output key before it is released (see psbt_ecdsa_sign)
+    if (ok && on_verify != NULL) on_verify();
+    return ok && bip340_verify_point(&q, qx, digest, sig);
 }
 
 // ============================================================================

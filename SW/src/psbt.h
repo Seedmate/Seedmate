@@ -54,6 +54,7 @@ typedef struct {
 } psbt_t;
 
 // Sighash types (low 5 bits) and the ANYONECANPAY flag
+#define PSBT_SIGHASH_DEFAULT        0x00    // Taproot only: ALL, 64 byte signature
 #define PSBT_SIGHASH_ALL            0x01
 #define PSBT_SIGHASH_NONE           0x02
 #define PSBT_SIGHASH_SINGLE         0x03
@@ -84,6 +85,9 @@ typedef struct {
     uint32_t redeem_script_len;
     const uint8_t *witness_script;  // P2WSH witness script (NULL if absent)
     uint32_t witness_script_len;
+    bool tap_key_sig;               // TAP_KEY_SIG present: the Taproot key path is signed
+    const uint8_t *tap_internal_key;    // TAP_INTERNAL_KEY, 32 bytes x-only (NULL if absent)
+    const uint8_t *tap_merkle_root;     // TAP_MERKLE_ROOT, 32 bytes (NULL if absent)
 } psbt_input_t;
 
 typedef struct {
@@ -95,17 +99,20 @@ typedef struct {
     uint32_t redeem_script_len;
     const uint8_t *witness_script;
     uint32_t witness_script_len;
+    const uint8_t *tap_internal_key;    // TAP_INTERNAL_KEY, 32 bytes x-only (NULL if absent)
 } psbt_output_t;
 
 // One BIP32 derivation record: a key plus the master fingerprint and path
 // it was derived from. For inputs/outputs the key is a public key (33 or 65
-// bytes); for PSBT_GLOBAL_XPUB it is the 78-byte serialized extended key.
+// bytes, or 32 x-only for a Taproot derivation, BIP371); for
+// PSBT_GLOBAL_XPUB it is the 78-byte serialized extended key.
 typedef struct {
     const uint8_t *key;
     uint32_t key_len;
     uint32_t fingerprint;       // As usually displayed: first byte is the MSB
     const uint8_t *path;        // path_len little-endian uint32 elements
     uint32_t path_len;
+    uint32_t leaf_count;        // Taproot: script leaves the key is used in (0: key path only)
 } psbt_keypath_t;
 
 #define PSBT_HARDENED 0x80000000u
@@ -156,6 +163,7 @@ void psbt_format_txid(const uint8_t *txid, char *out);
 
 // Reads the n-th (0-based) BIP32 derivation of an input, an output, or the
 // global map (PSBT_GLOBAL_XPUB). Return false when there is no such entry.
+// For inputs and outputs the Taproot derivations count too (key_len 32).
 bool psbt_input_keypath(const psbt_t *psbt, uint32_t index, uint32_t n, psbt_keypath_t *kp);
 bool psbt_output_keypath(const psbt_t *psbt, uint32_t index, uint32_t n, psbt_keypath_t *kp);
 bool psbt_global_xpub(const psbt_t *psbt, uint32_t n, psbt_keypath_t *kp);
@@ -203,6 +211,16 @@ bool psbt_tx_txid_body(const uint8_t *tx, uint32_t len, uint32_t *body_ofs, uint
 uint32_t psbt_add_partial_sig(uint8_t *buf, uint32_t capacity, const psbt_t *psbt, uint32_t index,
                               const uint8_t *pubkey, uint32_t pubkey_len,
                               const uint8_t *sig, uint32_t sig_len);
+
+// The same for PSBT_IN_TAP_KEY_SIG (BIP371): the Schnorr signature of the
+// Taproot key path, 64 bytes, or 65 with a sighash type other than DEFAULT.
+uint32_t psbt_add_tap_key_sig(uint8_t *buf, uint32_t capacity, const psbt_t *psbt, uint32_t index,
+                              const uint8_t *sig, uint32_t sig_len);
+
+// Any field of input 'index': <type><key_data> = <value>, as above
+uint32_t psbt_add_input_field(uint8_t *buf, uint32_t capacity, const psbt_t *psbt, uint32_t index,
+                              uint8_t type, const uint8_t *key_data, uint32_t key_data_len,
+                              const uint8_t *value, uint32_t value_len);
 
 // Streaming base64 decoder for PSBTs stored as text (they start "cHNidP8").
 // Whitespace is skipped, so line-wrapped files work. Feed the text in chunks

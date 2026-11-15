@@ -8,7 +8,7 @@ SRC = '../../src/main.c'
 OUT = 'plan_extract.inc'
 
 REGIONS = [
-    ("// Single sig account: m/49' (P2SH-P2WPKH, 3...) for NESTED SEGWIT, otherwise",
+    ("// Single sig account: m/49' (P2SH-P2WPKH, 3...) for NESTED SEGWIT, m/86'",
      'static bool ms_account_cached = false;'),
     ('// Who owns an input or output, checked against the loaded seed',
      '// Ownership line at y and, when there is one'),

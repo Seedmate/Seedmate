@@ -66,6 +66,10 @@ int32_t sd_files_read(void *dst, uint32_t len);
 // "-signed-9.psbt". False if all are taken or the card fails.
 bool sd_files_new_name(const char *src, char *name);
 
+// "stem" + ext, then stem + "-2" + ext .. "-9": the first name not on the
+// card. False if all are taken, the name is too long or the card fails.
+bool sd_files_free_name(const char *stem, const char *ext, char *name);
+
 typedef enum {
     SD_SAVE_OK = 0,
     SD_SAVE_EXISTS,         // The name is taken: nothing written

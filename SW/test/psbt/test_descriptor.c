@@ -208,9 +208,25 @@ static void test_nested_multisig(void) {
     printf("nested multisig: descriptor, Coldcard and CBOR agree\n");
 }
 
+// The single sig wallet descriptors the XPUB page saves to the SD card, with
+// the checksums of the BIP380 reference code (gen_descriptor.py)
+static void test_single_sig_checksums(void) {
+    static const char *const descs[3] = {
+        "wpkh([73c5da0a/84h/0h/0h]xpub6CatWdiZiodmUeTDp8LT5or8nmbKNcuyvz7WyksVFkKB4RHwCD3XyuvPEbvqAQY3rAPshWcMLoP2fMFMKHPJ4ZeZXYVUhLv1VMrjPC7PW6V/<0;1>/*)#qf45pmyh",
+        "sh(wpkh([73c5da0a/49h/0h/0h]xpub6C6nQwHaWbSrzs5tZ1q7m5R9cPK9eYpNMFesiXsYrgc1P8bvLLAet9JfHjYXKjToD8cBRswJXXbbFpXgwsswVPAZzKMa1jUp2kVkGVUaJa7/<0;1>/*))#zmygnj3e",
+        "tr([73c5da0a/86h/0h/0h]xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ/<0;1>/*)#xf07c0qd",
+    };
+    for (int i = 0; i < 3; i++) {
+        char sum[8];
+        uint32_t n = (uint32_t)(strchr(descs[i], '#') - descs[i]);
+        CHECK(desc_checksum(descs[i], n, sum) && memcmp(sum, descs[i] + n + 1, 8) == 0, "single sig descriptor checksum");
+    }
+}
+
 int main(void) {
     check_repeated_key_array();
     test_nested_multisig();
+    test_single_sig_checksums();
     desc_wallet_t w;
     uint8_t script[3 + 34 * DESC_MAX_KEYS];
     static const int abc[3] = {0, 1, 2}, cab[3] = {2, 0, 1};

@@ -11,6 +11,7 @@
 #include "nested_vectors.h"
 #include "descriptor.h"
 #include "ms_nested_vectors.h"
+#include "taproot_vectors.h"
 #include "sha256.h"
 #include "crypto/ripemd160.h"
 
@@ -244,6 +245,101 @@ static void test_low_r_grinding(void) {
     printf("Low R: %d signatures match, %u needed retries\n", UR_TEST_GRIND_COUNT, retried);
 }
 
+static void hexn(const char *hex, uint8_t *out, int n) {
+    for (int i = 0; i < n; i++) {
+        unsigned v;
+        sscanf(&hex[2 * i], "%2x", &v);
+        out[i] = (uint8_t)v;
+    }
+}
+
+// BIP340 test vectors: every signing vector byte-identical, every
+// verification result as expected
+static void test_bip340_vectors(void) {
+    uint8_t sk[32], pk[32], aux[32], msg[32], sig[64], out[64];
+    int signs = 0;
+    for (size_t i = 0; i < sizeof(bip340_vectors) / sizeof(bip340_vectors[0]); i++) {
+        const bip340_vector_t *v = &bip340_vectors[i];
+        hexn(v->pk, pk, 32);
+        hexn(v->msg, msg, 32);
+        hexn(v->sig, sig, 64);
+        if (v->sk[0]) {
+            hexn(v->sk, sk, 32);
+            hexn(v->aux, aux, 32);
+            CHECK(psbt_bip340_sign(sk, msg, aux, out));
+            CHECK(memcmp(out, sig, 64) == 0);
+            signs++;
+        }
+        bool ok = psbt_bip340_verify(pk, msg, sig);
+        if (ok != (v->valid != 0)) {
+            printf("FAIL BIP340 vector %u: verify %d\n", (unsigned)i, ok);
+            failures++;
+        }
+    }
+    printf("BIP340: %d signing vectors, %u verifications\n", signs,
+           (unsigned)(sizeof(bip340_vectors) / sizeof(bip340_vectors[0])));
+}
+
+// BIP341 key path vectors: the sighash of SIGHASH_ALL and SIGHASH_DEFAULT
+// inputs of a 9 input transaction, and their signatures from the tweaked key
+static void test_bip341_vectors(void) {
+    static const uint8_t zero[32];
+    uint8_t want[32], key[32], digest[32], sig[65], out[64];
+    psbt_t p;
+    CHECK(psbt_parse(bip341_psbt, sizeof(bip341_psbt), &p) == PSBT_OK);
+    for (size_t i = 0; i < sizeof(bip341_cases) / sizeof(bip341_cases[0]); i++) {
+        const bip341_case_t *c = &bip341_cases[i];
+        hexn(c->sighash, want, 32);
+        CHECK(psbt_sighash_taproot(&p, c->index, c->hash_type, digest));
+        CHECK(memcmp(digest, want, 32) == 0);
+        hexn(c->tweaked, key, 32);
+        hexn(c->sig, sig, c->hash_type ? 65 : 64);
+        CHECK(psbt_bip340_sign(key, digest, zero, out));
+        CHECK(memcmp(out, sig, 64) == 0);
+    }
+    CHECK(!psbt_sighash_taproot(&p, 0, PSBT_SIGHASH_NONE, digest));    // Only DEFAULT and ALL
+}
+
+// The abandon taproot PSBT: output key of m/86'/0'/0'/0/0 (BIP86 vector),
+// then both inputs signed exactly as the Python signer did
+static void test_sign_taproot(void) {
+    uint8_t buf[sizeof(taproot_signed_psbt) + 16];
+    uint8_t digest[32], qx[32], sig[64];
+    uint32_t len = sizeof(taproot_psbt);
+    psbt_t p;
+    psbt_input_t in;
+    psbt_keypath_t kp;
+
+    CHECK(psbt_taproot_output_key(taproot_pub_0_0, qx));
+    CHECK(memcmp(qx, &taproot_spk_0_0[2], 32) == 0);
+
+    memcpy(buf, taproot_psbt, len);
+    CHECK(psbt_parse(buf, len, &p) == PSBT_OK);
+    CHECK(psbt_get_input(&p, 0, &in) && in.tap_internal_key != NULL && in.tap_merkle_root == NULL && !in.tap_key_sig);
+    CHECK(memcmp(in.tap_internal_key, &taproot_pub_0_0[1], 32) == 0);
+    CHECK(in.keypath_count == 1 && psbt_input_keypath(&p, 0, 0, &kp) && kp.key_len == 32 && kp.leaf_count == 0);
+    CHECK(kp.fingerprint == 0x73c5da0a && kp.path_len == 5 && psbt_path_element(&kp, 0) == (86 | PSBT_HARDENED));
+    CHECK(memcmp(kp.key, &taproot_pub_0_0[1], 32) == 0);
+    CHECK(!psbt_input_keypath(&p, 0, 1, &kp));
+    CHECK(psbt_output_keypath(&p, 1, 0, &kp) && kp.key_len == 32 && psbt_path_element(&kp, 3) == 1);
+
+    const uint8_t *priv[2] = {taproot_priv_0_0, taproot_priv_0_1};
+    const uint8_t *pub[2] = {taproot_pub_0_0, taproot_pub_0_1};
+    for (uint32_t i = 0; i < 2; i++) {
+        CHECK(psbt_sighash_taproot(&p, i, PSBT_SIGHASH_DEFAULT, digest));
+        if (i == 0) CHECK(memcmp(digest, taproot_sighash_0, 32) == 0);
+        CHECK(!psbt_taproot_sign(priv[i], pub[1 - i], digest, sig, NULL));     // Not its key: refused
+        CHECK(psbt_taproot_sign(priv[i], pub[i], digest, sig, NULL));
+        len = psbt_add_tap_key_sig(buf, sizeof(buf), &p, i, sig, 64);
+        CHECK(len != 0);
+        CHECK(psbt_parse(buf, len, &p) == PSBT_OK);
+    }
+    CHECK(len == sizeof(taproot_signed_psbt));
+    CHECK(memcmp(buf, taproot_signed_psbt, sizeof(taproot_signed_psbt)) == 0);
+    CHECK(psbt_get_input(&p, 1, &in) && in.tap_key_sig);
+    printf("Taproot: BIP341 vectors and the signed PSBT identical to the Python signer (%u bytes)\n", len);
+}
+
 int main(void) {
     (void)expected_txid_v1_in0;     // Shared vector file; unused here
     test_bip143_vector();
@@ -253,6 +349,9 @@ int main(void) {
     test_sign_nested();
     test_sign_ms_nested();
     test_low_r_grinding();
+    test_bip340_vectors();
+    test_bip341_vectors();
+    test_sign_taproot();
     printf(failures ? "\n%d FAILURE(S)\n" : "\nALL TESTS PASSED\n", failures);
     return failures != 0;
 }
