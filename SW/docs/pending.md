@@ -49,7 +49,7 @@ UPDATE FIRMWARE, QR READER on a Compact SeedQR, BIP85 PASSWORD with index 10.
 | Skewed dice warning | Maybe (2026-11-08): a count per face, no floating point, about 400 B |
 | User documentation | Which card for what: keep the seed card apart from the card for updates and PSBTs, so it never goes into a PC (the device refuses to write files on a seed card, but a PC would offer to format it); the file card FAT16 (the bootloader needs FAT16, PSBTs also work on FAT32), updates, the camera icons (green safe / red not safe for a phone: the start screen legend was removed), SD seeds are not encrypted |
 | Version 2.0 final | Release notes, `cVersion` |
-| Reproducible build | Check that two builds give the same `.hex`, document XC32 / MPLAB versions and the expected hash, publish it per release (WalletScrutiny verification). Do not use XC32 PRO `-Os`: verifiers would need the PRO license |
+| Reproducible build | Checked on 2026-11-15 (commit 1ff84f6): two fresh clones, one in a path with a space, and the working tree gave the same `.hex` (SHA-256 e337388c...561befef); procedure, tool versions and the table of releases in `docs/reproducible-build.md`. To do at the first release: repeat it on the release tag, ideally also on another computer with a clean MPLAB X 6.35 / XC32 5.10 install, and publish the hash with its LMS index (WalletScrutiny verification). Do not use XC32 PRO `-Os`: verifiers would need the PRO license |
 
 ## 2. Bitcoin features
 
