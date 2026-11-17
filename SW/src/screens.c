@@ -152,8 +152,8 @@ void grid_menuwr(){
     print_down_arrow(106,123, ST7735_WHITE);
     print_ok();
     print_back();
-    drawtext(125,117, "PAGE+", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(65,117, "PAGE-", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(126,117, "PAG+", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(66,117, "PAG-", ST7735_WHITE, ST7735_WHITE, 1);
 }
 
 void print_back(){
@@ -175,8 +175,15 @@ void grid_menuSD(){
     print_down_arrow(106,123, ST7735_WHITE);
     print_ok();
     print_back();
-    drawtext(125,117, "PAGE+", ST7735_WHITE, ST7735_WHITE, 1);
-    drawtext(65,117, "PAGE-", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(126,117, "PAG+", ST7735_WHITE, ST7735_WHITE, 1);
+    drawtext(66,117, "PAG-", ST7735_WHITE, ST7735_WHITE, 1);
+}
+
+void grid_page_keys(bool prev, bool next) {
+    rectan(64, 116, 92, 124, ST7735_BLACK);         // Inside of the two cells, outlines kept
+    rectan(124, 116, 152, 124, ST7735_BLACK);
+    if (prev) text_at(66, 117, "PAG-", ST7735_WHITE);
+    if (next) text_at(126, 117, "PAG+", ST7735_WHITE);
 }
 
 void grid_menu2_merge(){

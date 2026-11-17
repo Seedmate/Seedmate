@@ -5985,12 +5985,13 @@ static bool sd_pick_row(uint32_t index, uint32_t entry, uint32_t first, bool sel
     strcat(line, " ");
     strcat(line, num);
     strcat(line, "B");
-    text_at(5, 17 + (int)(index - first) * 10, line, selected ? ST7735_ORANGE : ST7735_WHITE);
+    text_at(5, 14 + (int)(index - first) * 10, line, selected ? ST7735_ORANGE : ST7735_WHITE);
     return true;
 }
 
 // Lists the files of the SD root with one of 'exts', with their sizes, in
-// alphabetical order (case ignored). UP/DOWN move, OK picks the file (name,
+// alphabetical order (case ignored). UP/DOWN move (repeating while held), LEFT/RIGHT change page
+// (PAG- / PAG+, shown only when there is one), OK picks the file (name,
 // size and *sel set, true), BACK returns false. No card, no file and a card
 // taken out while the list is shown are explained on screen.
 static bool sd_pick_file(const char *title, const char *none_title, const char *none_detail,
@@ -6035,10 +6036,11 @@ static bool sd_pick_file(const char *title, const char *none_title, const char *
         uint32_t first = *sel - *sel % PSBT_SD_LIST_ROWS;
         bool ok = true;
         if (first != shown_first) {
-            rectan(0, 17, 159, 14 + PSBT_SD_LIST_ROWS * 10, ST7735_BLACK);    // Rows only: the grid starts at y 105
+            rectan(0, 14, 159, 11 + PSBT_SD_LIST_ROWS * 10, ST7735_BLACK);    // Rows only (last ends at y 101): the grid starts at y 105
             for (uint32_t i = 0; ok && i < PSBT_SD_LIST_ROWS && first + i < count; i++) {
                 ok = sd_pick_row(first + i, order[first + i], first, first + i == *sel, exts, ext_count, name, size);
             }
+            grid_page_keys(first > 0, first + PSBT_SD_LIST_ROWS < count);
             shown_first = first;
         } else if (*sel != shown_sel) {
             ok = sd_pick_row(shown_sel, order[shown_sel], first, false, exts, ext_count, name, size) &&
@@ -6046,12 +6048,20 @@ static bool sd_pick_file(const char *title, const char *none_title, const char *
         }
         shown_sel = *sel;
 
-        int key = ok ? psbt_wait_key() : NONE;
+        int key = ok ? wait_any_key() : NONE;       // All six keys; UP / DOWN repeat while held
         if (key == BACK_BT) return false;
         if (key == UP_BT) {
             *sel = (*sel == 0) ? count - 1 : *sel - 1;
         } else if (key == DOWN_BT) {
             *sel = (*sel + 1) % count;
+        } else if (key == LEFT_BT || key == RIGHT_BT) {
+            // Page by page as the seed slots, same row; the last page may be shorter
+            if (key == LEFT_BT && first > 0) {
+                *sel -= PSBT_SD_LIST_ROWS;
+            } else if (key == RIGHT_BT && first + PSBT_SD_LIST_ROWS < count) {
+                *sel += PSBT_SD_LIST_ROWS;
+                if (*sel >= count) *sel = count - 1;
+            }
         } else if (ok && sd_files_find(order[*sel], exts, ext_count, name, size)) {
             return true;
         } else if (!ok || key == OK_BT) {
@@ -6434,7 +6444,10 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
             plan->refuse = "PREV TX MISMATCH";
             return;
         }
-        if (in.prev_tx == NULL) plan->amounts_unverified = true;     // Cleared below for taproot
+        // Verified only when the amount was read from that previous tx: with an
+        // output index past its outputs, the amount comes from WITNESS_UTXO (audit R1)
+        bool amount_verified = in.has_amount && !in.amount_from_witness;
+        if (!amount_verified) plan->amounts_unverified = true;      // Cleared below for taproot
 
         psbt_owner_t owner = psbt_check_owner(psbt, true, i, in.script, in.script_len,
                                               in.witness_script, in.witness_script_len, &kp);
@@ -6482,9 +6495,9 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
                    !(kp.key_len == 32 && in.sighash == PSBT_SIGHASH_DEFAULT)) {
             plan->refuse = "SIGHASH NOT ALL";
             return;
-        } else if (single_legacy() && in.prev_tx == NULL) {
-            // A legacy signature does not commit to the amount: without the
-            // previous tx the amount and the fee could be anything
+        } else if (single_legacy() && !amount_verified) {
+            // A legacy signature does not commit to the amount: unless it was
+            // read from the previous tx, the amount and the fee could be anything
             plan->refuse = "LEGACY NEEDS PREV TX";
             return;
         } else {

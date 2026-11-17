@@ -390,6 +390,9 @@ const TESTS = [
   { id: 'SD-05', sec: 'SD', rev: 1, title: 'File list and card removal',
     steps: ['On a FAT32 file card with mixed-case names, open SIGN > FROM SD.', 'Take the card out while the list is shown and press DOWN.'],
     expect: ['Files in alphabetical order, case ignored; long names cut with "..".', 'Card removed: "SD CARD ERROR / CARD REMOVED OR CHANGED" within seconds.'] },
+  { id: 'SD-07', sec: 'SD', rev: 1, title: 'File list pages',
+    steps: ['Put 20 small .psbt files on a FAT card (names 01.psbt to 20.psbt), SIGN > FROM SD.', 'Move to the 3rd file, press RIGHT twice, then LEFT twice.', 'On the last page press RIGHT; on the first press LEFT.', 'Hold DOWN for a few seconds.', 'A card with 5 files.'],
+    expect: ['9 files per page, the first row 3 px under the title and the last one clear of the grid.', 'Page 1: only PAG+ in the grid; page 2: PAG- and PAG+; page 3 (files 19-20): only PAG-.', 'RIGHT keeps the row (file 12), then the last file of the shorter page (file 20); LEFT returns to files 11 and 2.', 'RIGHT on the last page and LEFT on the first do nothing and open no file.', 'DOWN held: after half a second the cursor runs down about 8 files a second, across pages, and wraps from file 20 to 1.', '5 files: neither PAG- nor PAG+.'] },
   { id: 'SD-06', sec: 'SD', rev: 1, title: 'File card with more than 99 files',
     steps: ['Put 120 small .psbt files on a FAT card (names 001.psbt to 120.psbt).', 'SIGN > FROM SD and page through the list.'],
     expect: ['The list is in order, and either shows every file or says that files were left out (audit R5: today it can end early with no notice).'] },
@@ -508,9 +511,9 @@ const TESTS = [
   { id: 'SIG-12', sec: 'SIG', rev: 1, title: 'Taproot attack PSBTs',
     steps: ['In TAPROOT, account 0, SIGN > FROM SD each file of test/psbt/malicious/: OWN-taproot_key_path, OWN-taproot_sighash_all, OWN-taproot_leaf_hash, OWN-taproot_input_script_tree, OWN-taproot_change_script_tree, OWN-taproot_sighash_none, OWN-taproot_sighash_acp, OWN-taproot_key_sig_present, OWN-taproot_plain_derivation.'],
     expect: ['key_path and sighash_all sign 1 of 1 inputs: 100,000 SAT sent, 99,000 SAT of verified change, fee 1,000 SAT.', 'leaf_hash, input_script_tree and plain_derivation: "INPUT KEY MISMATCH". change_script_tree: "CHANGE KEY MISMATCH".', 'sighash_none and sighash_acp: "SIGHASH NOT ALL". key_sig_present: "NOTHING TO SIGN".'] },
-  { id: 'SIG-13', sec: 'SIG', rev: 1, title: 'Legacy input whose previous tx has no such output',
+  { id: 'SIG-13', sec: 'SIG', rev: 2, title: 'Legacy input whose previous tx has no such output',
     steps: ['In LEGACY, account 0, SIGN > FROM SD test/psbt/malicious/OWN-legacy_prev_tx_bad_vout.psbt.', 'The same file in NATIVE.'],
-    expect: ['LEGACY: refused, since the amount comes from a witness UTXO that a legacy signature does not commit to (audit R1: signs until fixed).', 'NATIVE: "SWITCH TO LEGACY".'] },
+    expect: ['LEGACY: "LEGACY NEEDS PREV TX": the amount comes from a witness UTXO that a legacy signature does not commit to (audit R1).', 'NATIVE: "SWITCH TO LEGACY".'] },
 
   // ---------------------------------------------------------------- QR
   { id: 'QR-01', sec: 'QR', rev: 1, title: 'Animated UR scan under loss',

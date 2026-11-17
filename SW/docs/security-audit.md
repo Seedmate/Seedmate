@@ -74,7 +74,7 @@ refuse it).
 Nothing is open any more apart from the device tests.
 
 Second pass on 2026-11-16 over the code added since then: section 7 (five low
-findings, R1-R5, not fixed yet).
+findings, R1-R5; R1 fixed on 2026-11-17, the rest not yet).
 Third pass the same day on the signing code: section 8 (R1 confirmed by a
 test, S1 on power analysis).
 Fourth pass the same day on the bootloader: section 9 (B1 medium, B2-B5 low,
@@ -327,7 +327,7 @@ and nothing was tried on the board.
 
 | Id | Severity | Finding |
 |---|---|---|
-| R1 | Low | Legacy and "amounts verified" rely on `prev_tx != NULL`, not on where the amount was read |
+| R1 | Low | Legacy and "amounts verified" rely on `prev_tx != NULL`, not on where the amount was read. **Fixed on 2026-11-17** |
 | R2 | Low | The BBQr inflate path is the deepest stack use so far and has not been measured; there is no stack guard |
 | R3 | Low | CONFIG: a cancelled key derivation can leave multisig mode with LEGACY or TAPROOT |
 | R4 | Low | A BBQr series is fixed by the first code read, even one that fails; a single part UR read during an animated scan leaves the fountain state inconsistent |
@@ -351,6 +351,10 @@ transaction that passes `psbt_prev_tx_matches()` is an output index past its
 outputs (both parsers share the reader and the SegWit test), and such an
 outpoint does not exist, so the signed transaction can never be mined. The
 safety rests on that argument instead of a check.
+
+Fixed on 2026-11-17: `psbt_plan_signing()` takes an amount as verified only
+when it was read and not from WITNESS_UTXO (`amount_verified`), for both tests;
+`OWN-legacy_prev_tx_bad_vout` is refused in the legacy mode.
 
 Fix: in `psbt_plan_signing()` use `in.amount_from_witness` for both tests
 (`amounts_unverified`, and "LEGACY NEEDS PREV TX"). Add a vector to the
@@ -898,7 +902,7 @@ included, being told what differs from the library they know.
 ## 12. Work list from the passes of 2026-11-16
 
 Everything found in sections 7 to 11, in the order suggested for fixing it.
-Nothing here is done. "Open" means the user has not decided whether to do
+Done so far: item 1 (R1, 2026-11-17). "Open" means the user has not decided whether to do
 it. Each fix needs the build, the memory delta, the host tests and an entry
 in `docs/validation/firmware_validation.html` where a device test applies.
 
@@ -906,7 +910,7 @@ in `docs/validation/firmware_validation.html` where a device test applies.
 
 | # | Id | What to do | Where | Done when |
 |---|---|---|---|---|
-| 1 | R1 | Use `in.amount_from_witness` instead of `in.prev_tx == NULL` for `amounts_unverified` and for "LEGACY NEEDS PREV TX" | `psbt_plan_signing()` in `main.c` | `OWN-legacy_prev_tx_bad_vout` is refused in the legacy mode and marked unverified in the others; remove its line from `test/psbt/malicious_gaps.txt`, run `test_malicious.exe --update` and review the diff |
+| 1 | R1 | **Done on 2026-11-17**: `amount_verified` (an amount read and not from WITNESS_UTXO) sets `amounts_unverified` and refuses legacy; `OWN-legacy_prev_tx_bad_vout` now "LEGACY NEEDS PREV TX" in the legacy mode, its gap removed. Was: use `in.amount_from_witness` instead of `in.prev_tx == NULL` for `amounts_unverified` and for "LEGACY NEEDS PREV TX" | `psbt_plan_signing()` in `main.c` | `OWN-legacy_prev_tx_bad_vout` is refused in the legacy mode and marked unverified in the others; remove its line from `test/psbt/malicious_gaps.txt`, run `test_malicious.exe --update` and review the diff |
 | 2 | R2 | Measure the stack: STACK PEAK after VAULT > NEW ENTRY > MULTISIG DESCRIPTOR > FROM QR with a BBQr Z code, and after SIGN > FROM QR with a BBQr Z PSBT. Add the guard: `app_tasks()` stops with "STACK OVERFLOW" when the word at `stack_floor()` is not `STACK_FILL` | `main.c` (`app_tasks()`, `stack_paint()`); device | Figures written in `pending.md`; the guard shown to fire in a debug build |
 | 3 | B3 | Show in SETTINGS > MCU SERIAL NUMBER whether NVMPWP and NVMBWP hold the values the bootloader sets with both unlock bits clear: "FLASH LOCK OK" green / "FLASH NOT LOCKED" red | `main.c` or `settings.c`; values in `bootloader/src/main.c` `JumpToApp()` | Seen on a board started through the bootloader (and "NOT LOCKED" when run from the debugger) |
 | 4 | R3 | When `single_purpose_refresh()` is cancelled in `config_run()`, put the mode back as well (or clamp `bip84_script` to the mode's range) | `config_run()` in `main.c` | Multisig can never be left with LEGACY or TAPROOT |

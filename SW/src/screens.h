@@ -64,6 +64,8 @@ void grid_menuwr(void);
 void print_back(void);
 void grid_menu2(void);
 void grid_menuSD(void);
+// LEFT / RIGHT cells of a paged list: PAG- and PAG+ only when there is a page that way
+void grid_page_keys(bool prev, bool next);
 void grid_menu2_merge(void);
 void grid_nbits(void);
 void grid_nbits_noback(void);

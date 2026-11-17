@@ -1005,7 +1005,7 @@ OWN-legacy_prev_tx_bad_vout	nested	REFUSE SWITCH TO LEGACY
 OWN-legacy_prev_tx_bad_vout	nmulti	REFUSE SWITCH TO SINGLE SIG
 OWN-legacy_prev_tx_bad_vout	nmulti+desc	REFUSE SWITCH TO SINGLE SIG
 OWN-legacy_prev_tx_bad_vout	taproot	REFUSE SWITCH TO LEGACY
-OWN-legacy_prev_tx_bad_vout	legacy	SIGN 1/1 ours=0 send=199000 change=0 fee=1000
+OWN-legacy_prev_tx_bad_vout	legacy	REFUSE LEGACY NEEDS PREV TX
 OWN-taproot_key_path	single	REFUSE SWITCH TO TAPROOT
 OWN-taproot_key_path	multi	REFUSE SWITCH TO SINGLE SIG
 OWN-taproot_key_path	multi+desc	REFUSE SWITCH TO SINGLE SIG
