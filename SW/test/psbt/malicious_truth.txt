@@ -124,3 +124,13 @@ OWN-fee_tenth_under	parses	1		own	one sat under 1/10: no warning
 OWN-change_index_limit	parses	1		own	change at input index + 100: no warning
 OWN-change_index_over	parses	1		own	change at input index + 101: HIGH CHANGE INDEX
 OWN-legacy_no_prev_tx	reject_parser	-1	LEGACY_NO_PREV_TX	own	P2PKH input with a witness UTXO only: the amount is not committed by a legacy signature, refused without the previous tx
+OWN-legacy_prev_tx_bad_vout	reject_parser	-1	AMOUNT_NOT_COMMITTED	own	P2PKH input with its previous tx, which has no output at that index: amount and script come from the witness UTXO (audit R1)
+OWN-taproot_key_path	parses	1		own	control: BIP86 key path input and change, signs in the taproot mode only
+OWN-taproot_leaf_hash	reject_parser	-1	TAPROOT_SCRIPT_PATH	own	our key with a leaf hash: used in a script, not the key path
+OWN-taproot_input_script_tree	reject_parser	-1	TAPROOT_SCRIPT_PATH	own	input output key commits to a merkle root: not the BIP86 key
+OWN-taproot_change_script_tree	reject_parser	-1	TAPROOT_SCRIPT_PATH	own	change output key commits to a script tree someone else may spend: not ours
+OWN-taproot_sighash_none	reject_parser	-1	SIGHASH	own	SIGHASH_NONE on a taproot input
+OWN-taproot_sighash_acp	reject_parser	-1	SIGHASH	own	SIGHASH_ALL|ANYONECANPAY on a taproot input
+OWN-taproot_sighash_all	parses	1		own	explicit SIGHASH_ALL: allowed, 65 byte signature
+OWN-taproot_key_sig_present	reject_parser	-1	ALREADY_SIGNED	own	a TAP_KEY_SIG (64 zero bytes) is already there: nothing to sign
+OWN-taproot_plain_derivation	reject_parser	-1	KEY_FORM	own	m/86' key given as a 33 byte BIP32 derivation instead of the taproot one

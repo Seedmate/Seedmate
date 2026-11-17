@@ -189,6 +189,8 @@ const SECTIONS = [
   ['DER', 'Derive: BIP85 and Nostr'],
   ['UI', 'Interface rules'],
   ['SEC', 'Wiping and memory'],
+  ['COMP', 'Compatibility with other wallets'],
+  ['HOST', 'Host tests and release checks'],
 ];
 
 const ABANDON = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
@@ -222,6 +224,24 @@ const TESTS = [
   { id: 'BOOT-09', sec: 'BOOT', rev: 1, title: 'Reproducible build',
     steps: ['Build the release tag as described in SW/docs/reproducible-build.md.', 'Compare the SHA-256 of the .hex with the published one.'],
     expect: ['The hashes are equal.'] },
+  { id: 'BOOT-10', sec: 'BOOT', rev: 1, title: 'Update with no card, a wrong card or no file',
+    steps: ['SETTINGS > UPDATE FIRMWARE with no card in the slot.', 'Again with a FAT32 card.', 'Again with a FAT16 card that has no UPDATE.HEX.'],
+    expect: ['"SD CARD NOT READY", "SD CARD NOT FAT16" and "UPDATE.HEX NOT FOUND", each with "APP NOT TOUCHED".', 'OK starts the installed firmware, which works as before.'] },
+  { id: 'BOOT-11', sec: 'BOOT', rev: 1, title: 'Update cancelled at the confirmation',
+    steps: ['Start a signed update and press BACK at "ERASE APP AND WRITE?".'],
+    expect: ['"UPDATE CANCELLED / APP NOT TOUCHED"; OK starts the installed firmware.'] },
+  { id: 'BOOT-12', sec: 'BOOT', rev: 1, title: 'Update interrupted while writing (card removed)',
+    steps: ['Start a signed update and confirm with OK.', 'Take the card out during "WRITING THE NEW APP".', 'Press OK on the error screen.', 'Put the card back and let the update finish.'],
+    expect: ['An error screen says the app was erased and that OK retries.', 'OK starts the update again: a half written app is never started (audit B1: fails until the bootloader erases the reset page on this path).', 'With the card back the update completes as OFFICIAL FIRMWARE.'] },
+  { id: 'BOOT-13', sec: 'BOOT', rev: 1, title: 'Power cut during an update',
+    steps: ['Start a signed update, confirm, and cut the power during "WRITING THE NEW APP".', 'Power on.', 'Hold OK + BACK at power-on with the update card and finish the update.'],
+    expect: ['At power-on the device either goes to the update by itself ("NO APP INSTALLED") or shows "WARNING / UNOFFICIAL FIRMWARE / NO SIGNATURE RECORD": never a silent start as official.', 'The forced update recovers the device.'] },
+  { id: 'BOOT-14', sec: 'BOOT', rev: 1, title: 'Unit programmed with the PICkit (factory state)',
+    steps: ['Program bootloader.production.unified.hex with the PICkit.', 'Power on twice.', 'Install the signed update of the same version from a card.', 'Power on twice.'],
+    expect: ['Before the signed update every power-on shows "WARNING / UNOFFICIAL FIRMWARE / NO SIGNATURE RECORD" and OK starts the app.', 'After the signed update the app starts with no warning.'] },
+  { id: 'BOOT-15', sec: 'BOOT', rev: 1, title: 'Bootloader with no app',
+    steps: ['Program only the bootloader with the PICkit and power on with an update card.'],
+    expect: ['"FIRMWARE UPDATE / NO APP INSTALLED" and the update flow starts by itself; after it the app runs.', 'Without a card: the error says "NO APP: OK RETRIES" and OK starts again.'] },
 
   // ---------------------------------------------------------------- SET
   { id: 'SET-01', sec: 'SET', rev: 1, title: 'Factory defaults',
@@ -370,6 +390,9 @@ const TESTS = [
   { id: 'SD-05', sec: 'SD', rev: 1, title: 'File list and card removal',
     steps: ['On a FAT32 file card with mixed-case names, open SIGN > FROM SD.', 'Take the card out while the list is shown and press DOWN.'],
     expect: ['Files in alphabetical order, case ignored; long names cut with "..".', 'Card removed: "SD CARD ERROR / CARD REMOVED OR CHANGED" within seconds.'] },
+  { id: 'SD-06', sec: 'SD', rev: 1, title: 'File card with more than 99 files',
+    steps: ['Put 120 small .psbt files on a FAT card (names 001.psbt to 120.psbt).', 'SIGN > FROM SD and page through the list.'],
+    expect: ['The list is in order, and either shows every file or says that files were left out (audit R5: today it can end early with no notice).'] },
 
   // ---------------------------------------------------------------- WAL
   { id: 'WAL-01', sec: 'WAL', rev: 1, title: 'Load the wallet keys',
@@ -414,6 +437,9 @@ const TESTS = [
   { id: 'WAL-13', sec: 'WAL', rev: 1, title: 'CONFIG screen',
     steps: ['Move through ACCOUNT, MODE and SCRIPT with UP / DOWN; change values with LEFT / RIGHT; hold RIGHT on ACCOUNT.', 'BACK, then the same changes with SAVE.'],
     expect: ['The grid names the neighbour value; the path and address prefix update without flicker; ACCOUNT repeats while held.', 'BACK leaves without changes; SAVE applies them with progress.'] },
+  { id: 'WAL-14', sec: 'WAL', rev: 1, title: 'CONFIG: BACK while the keys are derived',
+    steps: ['In SINGLE SIG, TAPROOT: CONFIG, MODE to MULTI SIG, SAVE, and press BACK while the keys load.', 'Open CONFIG again and read MODE and SCRIPT.', 'Repeat from LEGACY.'],
+    expect: ['MODE and SCRIPT are a valid pair: multisig is never left with LEGACY or TAPROOT (audit R3).', 'The wallet menu line names the same mode and script type as CONFIG.'] },
 
   // ---------------------------------------------------------------- MS
   { id: 'MS-01', sec: 'MS', rev: 1, title: 'Multisig keys',
@@ -479,6 +505,12 @@ const TESTS = [
   { id: 'SIG-11', sec: 'SIG', rev: 1, title: 'PSBTs made by real wallets',
     steps: ['With a test wallet in Sparrow and in Nunchuk (single sig and multisig), create PSBTs and sign them by SD and by QR.'],
     expect: ['Nothing valid is refused; the review matches what the wallet shows; the signed PSBTs broadcast (testnet wallets cannot be used: mainnet only).'] },
+  { id: 'SIG-12', sec: 'SIG', rev: 1, title: 'Taproot attack PSBTs',
+    steps: ['In TAPROOT, account 0, SIGN > FROM SD each file of test/psbt/malicious/: OWN-taproot_key_path, OWN-taproot_sighash_all, OWN-taproot_leaf_hash, OWN-taproot_input_script_tree, OWN-taproot_change_script_tree, OWN-taproot_sighash_none, OWN-taproot_sighash_acp, OWN-taproot_key_sig_present, OWN-taproot_plain_derivation.'],
+    expect: ['key_path and sighash_all sign 1 of 1 inputs: 100,000 SAT sent, 99,000 SAT of verified change, fee 1,000 SAT.', 'leaf_hash, input_script_tree and plain_derivation: "INPUT KEY MISMATCH". change_script_tree: "CHANGE KEY MISMATCH".', 'sighash_none and sighash_acp: "SIGHASH NOT ALL". key_sig_present: "NOTHING TO SIGN".'] },
+  { id: 'SIG-13', sec: 'SIG', rev: 1, title: 'Legacy input whose previous tx has no such output',
+    steps: ['In LEGACY, account 0, SIGN > FROM SD test/psbt/malicious/OWN-legacy_prev_tx_bad_vout.psbt.', 'The same file in NATIVE.'],
+    expect: ['LEGACY: refused, since the amount comes from a witness UTXO that a legacy signature does not commit to (audit R1: signs until fixed).', 'NATIVE: "SWITCH TO LEGACY".'] },
 
   // ---------------------------------------------------------------- QR
   { id: 'QR-01', sec: 'QR', rev: 1, title: 'Animated UR scan under loss',
@@ -496,6 +528,9 @@ const TESTS = [
   { id: 'QR-05', sec: 'QR', rev: 1, title: 'Single part UR and BACK',
     steps: ['A small PSBT as a single part UR.', 'BACK during any scan, then use QR READER.'],
     expect: ['The single part PSBT is read.', 'BACK leaves the scan; QR READER works afterwards (the scanner settings were restored).'] },
+  { id: 'QR-06', sec: 'QR', rev: 1, title: 'BBQr: a second series and a new start',
+    steps: ['SIGN > FROM QR: show a BBQr series in the animator and, half way, switch to the series of another PSBT.', 'BACK, SIGN > FROM QR again and show one series to the end.'],
+    expect: ['The codes of the other series are named on screen ("BBQR OF ANOTHER FILE" or "BBQR PARTS DO NOT MATCH") and nothing is loaded.', 'After BACK the new scan reads its series and shows the review of that PSBT.'] },
 
   // ---------------------------------------------------------------- VLT
   { id: 'VLT-01', sec: 'VLT', rev: 1, title: 'Create and open the vault',
@@ -546,9 +581,34 @@ const TESTS = [
   { id: 'SEC-01', sec: 'SEC', rev: 1, title: 'Unload wipes everything',
     steps: ['Load the seed with a passphrase, a descriptor and the vault; UNLOAD SEED.', 'Open WALLET again with a new seed.'],
     expect: ['Nothing of the previous seed remains: passphrase, keys, descriptor and vault key are gone.'] },
-  { id: 'SEC-02', sec: 'SEC', rev: 1, title: 'Stack peak after the heaviest flows',
-    steps: ['Power on, sign abandon multisig.psbt with MSDESC.TXT loaded, scan a BBQr Z PSBT, sign the taproot PSBT.', 'SETTINGS > MCU SERIAL NUMBER: write the STACK PEAK in the note.'],
+  { id: 'SEC-02', sec: 'SEC', rev: 2, title: 'Stack peak after the heaviest flows',
+    steps: ['Power on, sign abandon multisig.psbt with MSDESC.TXT loaded, sign the taproot PSBT.', 'SIGN > FROM QR with a BBQr Z PSBT from the animator.', 'VAULT > NEW ENTRY > MULTISIG DESCRIPTOR > FROM QR with MSDESC.TXT as a BBQr Z text file from the animator.', 'SETTINGS > MCU SERIAL NUMBER: write the STACK PEAK in the note.'],
     expect: ['The peak stays below 7/8 of the stack (no yellow).'] },
+  { id: 'SEC-03', sec: 'SEC', rev: 1, title: 'UPDATE FIRMWARE wipes the session',
+    steps: ['Load the test seed with a passphrase and open the wallet menu.', 'SETTINGS > UPDATE FIRMWARE with no card, then OK on the bootloader error.'],
+    expect: ['The app starts again at the start screen with no seed, passphrase or keys loaded.'] },
+
+  // ---------------------------------------------------------------- COMP
+  { id: 'COMP-01', sec: 'COMP', rev: 1, title: 'Cove',
+    steps: ['Import the account of a test seed into Cove: the XPUB QR as text, as UR, and the EXPORT DESCRIPTOR file.', 'Compare receive and change addresses 0 to 2 with ADDRESSES on the device.', 'Make a PSBT in the wallet and bring it to the device by each way the wallet offers (file, UR QR, BBQr); sign; take it back by QR and by SD.'],
+    expect: ['The addresses are equal.', 'The review on the device shows the amounts, addresses and fee of the wallet.', 'The wallet accepts the signed PSBT as fully signed and ready to broadcast.', 'Write in the note what the wallet does not read (formats, script types).'] },
+  { id: 'COMP-02', sec: 'COMP', rev: 1, title: 'Specter Desktop',
+    steps: ['Import the account of a test seed into Specter Desktop: the XPUB QR as text, as UR, and the EXPORT DESCRIPTOR file.', 'Compare receive and change addresses 0 to 2 with ADDRESSES on the device.', 'Make a PSBT in the wallet and bring it to the device by each way the wallet offers (file, UR QR, BBQr); sign; take it back by QR and by SD. Multisig: import the wallet in the device (descriptor QR or file) and sign as one cosigner.'],
+    expect: ['The addresses are equal.', 'The review on the device shows the amounts, addresses and fee of the wallet.', 'The wallet accepts the signed PSBT as fully signed and ready to broadcast.', 'Write in the note what the wallet does not read (formats, script types).'] },
+  { id: 'COMP-03', sec: 'COMP', rev: 1, title: 'Electrum',
+    steps: ['Import the account of a test seed into Electrum: the XPUB QR as text, as UR, and the EXPORT DESCRIPTOR file.', 'Compare receive and change addresses 0 to 2 with ADDRESSES on the device.', 'Make a PSBT in the wallet and bring it to the device by each way the wallet offers (file, UR QR, BBQr); sign; take it back by QR and by SD. Multisig: export the cosigner key from the XPUB page and sign as one cosigner.'],
+    expect: ['The addresses are equal.', 'The review on the device shows the amounts, addresses and fee of the wallet.', 'The wallet accepts the signed PSBT as fully signed and ready to broadcast.', 'Write in the note what the wallet does not read (formats, script types).'] },
+
+  // ---------------------------------------------------------------- HOST
+  { id: 'HOST-01', sec: 'HOST', rev: 1, title: 'Host test benches',
+    steps: ['On the PC run every bench of SW/test (psbt, bbqr, vault, kef, kdf, derive, words, eff, settings, sdfiles, entropy, ur_anim, lms) and of bootloader/test (boot_sha, hex_flash, boot_lms), built from the sources of the version under test.'],
+    expect: ['Every bench ends in "ALL TESTS PASSED" (or its own pass line); write the date in the note.'] },
+  { id: 'HOST-02', sec: 'HOST', rev: 1, title: 'Hostile PSBT test suite',
+    steps: ['In SW/test/psbt: python extract_plan.py, build test_malicious.c as build_test.bat does, run test_malicious.exe.'],
+    expect: ['"0 problems" for the corpus, the 20 invalid BIP174 vectors refused, and no outcome changed against malicious_expected.txt.', 'Every line of malicious_gaps.txt still has a reason that holds; write the number of vectors and of gaps in the note.'] },
+  { id: 'HOST-03', sec: 'HOST', rev: 1, title: 'Signature of the release',
+    steps: ['Sign UPDATE.HEX with tools/lms_sign.html on an offline computer, with an index that SIGNATURES.md does not list.', 'Add the index, the file hash and the version to SIGNATURES.md before the signature is copied anywhere.', 'python test/lms/verify_lms.py with the public key of SIGNATURES.md, UPDATE.HEX and UPDATE.SIG.'],
+    expect: ['The page says VERIFIED and its public key is the one in SIGNATURES.md and in bootloader/src/boot_lms.c.', 'verify_lms.py prints "VERIFIED" with the same index.', 'The index appears once in SIGNATURES.md.'] },
 ];
 
 // ===========================================================================

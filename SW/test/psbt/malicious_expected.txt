@@ -998,6 +998,86 @@ OWN-legacy_no_prev_tx	nmulti	REFUSE SWITCH TO SINGLE SIG
 OWN-legacy_no_prev_tx	nmulti+desc	REFUSE SWITCH TO SINGLE SIG
 OWN-legacy_no_prev_tx	taproot	REFUSE SWITCH TO LEGACY
 OWN-legacy_no_prev_tx	legacy	REFUSE LEGACY NEEDS PREV TX
+OWN-legacy_prev_tx_bad_vout	single	REFUSE SWITCH TO LEGACY
+OWN-legacy_prev_tx_bad_vout	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-legacy_prev_tx_bad_vout	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-legacy_prev_tx_bad_vout	nested	REFUSE SWITCH TO LEGACY
+OWN-legacy_prev_tx_bad_vout	nmulti	REFUSE SWITCH TO SINGLE SIG
+OWN-legacy_prev_tx_bad_vout	nmulti+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-legacy_prev_tx_bad_vout	taproot	REFUSE SWITCH TO LEGACY
+OWN-legacy_prev_tx_bad_vout	legacy	SIGN 1/1 ours=0 send=199000 change=0 fee=1000
+OWN-taproot_key_path	single	REFUSE SWITCH TO TAPROOT
+OWN-taproot_key_path	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_key_path	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_key_path	nested	REFUSE SWITCH TO TAPROOT
+OWN-taproot_key_path	nmulti	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_key_path	nmulti+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_key_path	taproot	SIGN 1/1 ours=1 send=100000 change=99000 fee=1000
+OWN-taproot_key_path	legacy	REFUSE SWITCH TO TAPROOT
+OWN-taproot_leaf_hash	single	REFUSE SWITCH TO TAPROOT
+OWN-taproot_leaf_hash	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_leaf_hash	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_leaf_hash	nested	REFUSE SWITCH TO TAPROOT
+OWN-taproot_leaf_hash	nmulti	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_leaf_hash	nmulti+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_leaf_hash	taproot	REFUSE INPUT KEY MISMATCH
+OWN-taproot_leaf_hash	legacy	REFUSE SWITCH TO TAPROOT
+OWN-taproot_input_script_tree	single	REFUSE SWITCH TO TAPROOT
+OWN-taproot_input_script_tree	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_input_script_tree	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_input_script_tree	nested	REFUSE SWITCH TO TAPROOT
+OWN-taproot_input_script_tree	nmulti	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_input_script_tree	nmulti+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_input_script_tree	taproot	REFUSE INPUT KEY MISMATCH
+OWN-taproot_input_script_tree	legacy	REFUSE SWITCH TO TAPROOT
+OWN-taproot_change_script_tree	single	REFUSE SWITCH TO TAPROOT
+OWN-taproot_change_script_tree	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_change_script_tree	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_change_script_tree	nested	REFUSE SWITCH TO TAPROOT
+OWN-taproot_change_script_tree	nmulti	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_change_script_tree	nmulti+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_change_script_tree	taproot	REFUSE CHANGE KEY MISMATCH
+OWN-taproot_change_script_tree	legacy	REFUSE SWITCH TO TAPROOT
+OWN-taproot_sighash_none	single	REFUSE SWITCH TO TAPROOT
+OWN-taproot_sighash_none	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_sighash_none	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_sighash_none	nested	REFUSE SWITCH TO TAPROOT
+OWN-taproot_sighash_none	nmulti	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_sighash_none	nmulti+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_sighash_none	taproot	REFUSE SIGHASH NOT ALL
+OWN-taproot_sighash_none	legacy	REFUSE SWITCH TO TAPROOT
+OWN-taproot_sighash_acp	single	REFUSE SWITCH TO TAPROOT
+OWN-taproot_sighash_acp	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_sighash_acp	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_sighash_acp	nested	REFUSE SWITCH TO TAPROOT
+OWN-taproot_sighash_acp	nmulti	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_sighash_acp	nmulti+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_sighash_acp	taproot	REFUSE SIGHASH NOT ALL
+OWN-taproot_sighash_acp	legacy	REFUSE SWITCH TO TAPROOT
+OWN-taproot_sighash_all	single	REFUSE SWITCH TO TAPROOT
+OWN-taproot_sighash_all	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_sighash_all	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_sighash_all	nested	REFUSE SWITCH TO TAPROOT
+OWN-taproot_sighash_all	nmulti	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_sighash_all	nmulti+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_sighash_all	taproot	SIGN 1/1 ours=1 send=100000 change=99000 fee=1000
+OWN-taproot_sighash_all	legacy	REFUSE SWITCH TO TAPROOT
+OWN-taproot_key_sig_present	single	REFUSE SWITCH TO TAPROOT
+OWN-taproot_key_sig_present	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_key_sig_present	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_key_sig_present	nested	REFUSE SWITCH TO TAPROOT
+OWN-taproot_key_sig_present	nmulti	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_key_sig_present	nmulti+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_key_sig_present	taproot	REFUSE NOTHING TO SIGN
+OWN-taproot_key_sig_present	legacy	REFUSE SWITCH TO TAPROOT
+OWN-taproot_plain_derivation	single	REFUSE SWITCH TO TAPROOT
+OWN-taproot_plain_derivation	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_plain_derivation	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_plain_derivation	nested	REFUSE SWITCH TO TAPROOT
+OWN-taproot_plain_derivation	nmulti	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_plain_derivation	nmulti+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-taproot_plain_derivation	taproot	REFUSE INPUT KEY MISMATCH
+OWN-taproot_plain_derivation	legacy	REFUSE SWITCH TO TAPROOT
 BIP174 Network transaction, not PSBT format	parser	NOT A PSBT
 BIP174 PSBT missing outputs	parser	TRUNCATED
 BIP174 PSBT where one input has a filled scriptSig in the unsigned tx	parser	BAD FORMAT

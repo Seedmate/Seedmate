@@ -25,3 +25,4 @@ ENC-01.v2_keys_in_v0	v2 fields in a v0 PSBT are ignored: what is shown and signe
 ENC-02.v2_sequence_in_v0	v2 fields in a v0 PSBT are ignored: what is shown and signed is the global tx.
 ENC-04.scope_beyond_tx	v2 fields in a v0 PSBT are ignored: what is shown and signed is the global tx.
 ENC-10.v2_global_locktime_in_v0	v2 fields in a v0 PSBT are ignored: what is shown and signed is the global tx.
+OWN-legacy_prev_tx_bad_vout	Audit R1, open: signed as verified although the amount comes from the witness UTXO. Harmless today: an outpoint past the outputs of its tx does not exist, so the tx can never be mined. To be refused once the plan tests amount_from_witness.
