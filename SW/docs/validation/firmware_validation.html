@@ -606,9 +606,9 @@ const TESTS = [
   { id: 'HOST-02', sec: 'HOST', rev: 1, title: 'Hostile PSBT test suite',
     steps: ['In SW/test/psbt: python extract_plan.py, build test_malicious.c as build_test.bat does, run test_malicious.exe.'],
     expect: ['"0 problems" for the corpus, the 20 invalid BIP174 vectors refused, and no outcome changed against malicious_expected.txt.', 'Every line of malicious_gaps.txt still has a reason that holds; write the number of vectors and of gaps in the note.'] },
-  { id: 'HOST-03', sec: 'HOST', rev: 1, title: 'Signature of the release',
-    steps: ['Sign UPDATE.HEX with tools/lms_sign.html on an offline computer, with an index that SIGNATURES.md does not list.', 'Add the index, the file hash and the version to SIGNATURES.md before the signature is copied anywhere.', 'python test/lms/verify_lms.py with the public key of SIGNATURES.md, UPDATE.HEX and UPDATE.SIG.'],
-    expect: ['The page says VERIFIED and its public key is the one in SIGNATURES.md and in bootloader/src/boot_lms.c.', 'verify_lms.py prints "VERIFIED" with the same index.', 'The index appears once in SIGNATURES.md.'] },
+  { id: 'HOST-03', sec: 'HOST', rev: 2, title: 'Signature of the release',
+    steps: ['Add the row of UPDATE.HEX to SIGNATURES.md (the next index, date, version, language, SHA-256) and commit it.', 'On the offline signing computer: certutil -hashfile lms_sign.html SHA256 equals the hash in SIGNATURES.md.', 'Copy signatures/ to the signing computer; in its lms_sign.html press Open the signatures folder and choose it, drop UPDATE.HEX, sign with the index of the row, then Save into signatures/. Bring the folder back.', 'Try the index of an older row too, and sign with words of another seed.', 'python test/lms/verify_lms.py with the public key of SIGNATURES.md, UPDATE.HEX and UPDATE.SIG.'],
+    expect: ['The page proposes the next free index, says the index is recorded for this file and fills in its date and version; it says VERIFIED; signatures/ gets the folder of the row with UPDATE.HEX and UPDATE.SIG; back in the repository git status shows only that folder, and test_lms.js passes.', 'An older index is refused ("ALREADY SIGNED ANOTHER FILE"), and other words give "THESE WORDS ARE NOT THE KEY OF SIGNATURES.md".', 'verify_lms.py prints "VERIFIED" with the same index; the index appears once in SIGNATURES.md.'] },
 ];
 
 // ===========================================================================

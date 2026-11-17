@@ -1,0 +1,3 @@
+# The signing page is checked by its SHA-256 (SIGNATURES.md): git must give
+# it byte for byte as committed, never with the line endings changed
+lms_sign.html -text

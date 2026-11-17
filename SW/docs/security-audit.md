@@ -933,13 +933,13 @@ in `docs/validation/firmware_validation.html` where a device test applies.
 Items 13 to 17 need about 100 B in a bootloader with 96 B free: 13 first,
 then 14 (no code), then whatever fits; the rest wait for space.
 
-### Signing page and procedure (`tools/lms_sign.html`, `SIGNATURES.md`)
+### Signing page and procedure (`tools/lms_sign.html`, `SIGNATURES.md`; both in `signatures/` since 2026-11-17)
 
 | # | Id | What to do | Where | Done when |
 |---|---|---|---|---|
-| 19 | T1 | The page reads `SIGNATURES.md` and previous `UPDATE.SIG` files (index = first 4 bytes), refuses an index already used for another file hash and offers the next free one. Add the rule: record the index before the signature leaves the page, test signatures included | `lms_sign.html`, `SIGNATURES.md` | Cases in `test/lms/test_lms.js` for the parsing and the refusal |
-| 20 | T2 | SIGN disabled while online unless a second tick; the signing procedure written in `SIGNATURES.md` (offline computer, private window, no extensions, close the browser after) | same | - |
-| 21 | T3 | Publish the SHA-256 of `lms_sign.html` with each release and in `SIGNATURES.md`; check it before typing the words | docs, release procedure | - |
+| 19 | T1 | **Done on 2026-11-17** (host tests in `test_lms.js`; tried in a browser, not yet on the signing computer). The page reads `SIGNATURES.md` and previous `UPDATE.SIG` files (index = first 4 bytes), refuses an index already used for another file hash and offers the next free one. Add the rule: record the index before the signature leaves the page, test signatures included | `lms_sign.html`, `SIGNATURES.md` | Cases in `test/lms/test_lms.js` for the parsing and the refusal |
+| 20 | T2 | Open: `navigator.onLine` only says that a network adapter is up (cable, virtual or Bluetooth adapters), not that there is internet, so the signing computer shows "online" with Wi-Fi off; blocking on it would block always. The procedure part is done (`SIGNATURES.md`). Was: SIGN disabled while online unless a second tick; the signing procedure written in `SIGNATURES.md` (offline computer, private window, no extensions, close the browser after) | same | - |
+| 21 | T3 | **Done on 2026-11-17**: the hash is in `SIGNATURES.md`, `test_lms.js` fails when it is stale, `signatures/.gitattributes` keeps git from changing the line endings. Publish the SHA-256 of `lms_sign.html` with each release and in `SIGNATURES.md`; check it before typing the words | docs, release procedure | - |
 
 ### Device tests that these passes ask for
 

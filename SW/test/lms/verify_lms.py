@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independent check of what tools/lms_sign.html produces: an RFC 8554 verifier
+"""Independent check of what signatures/lms_sign.html produces: an RFC 8554 verifier
 written from the RFC, sharing nothing with the page. It also has to accept the
 RFC's own Test Case 2 signature (rfc_vector.json, written by test_lms.js).
 

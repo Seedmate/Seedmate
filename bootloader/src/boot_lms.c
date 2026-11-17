@@ -10,7 +10,7 @@
 #include "boot_lms.h"
 #include "boot_sha.h"
 
-// Release key (2026-11-11), made with SW/tools/lms_sign.html: LMS_SHA256_M32_H10,
+// Release key (2026-11-11), made with SW/signatures/lms_sign.html: LMS_SHA256_M32_H10,
 // LMOTS_SHA256_N32_W8. Each of its 1024 indexes signs one firmware only
 // (docs/pending.md: keep a record of the indexes used).
 const uint8_t boot_lms_public_key[BOOT_LMS_PUB_SIZE] = {

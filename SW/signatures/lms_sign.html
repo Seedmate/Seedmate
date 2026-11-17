@@ -19,12 +19,15 @@ h1 { font-size: 22px; margin: 0 0 4px; }
 section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 14px; }
 h2 { font-size: 15px; margin: 0 0 10px; }
 label { display: block; margin-bottom: 6px; }
-textarea, input[type=number] {
+textarea, input[type=number], input[type=text] {
   width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line);
   border-radius: 6px; padding: 10px; font: 15px/1.5 ui-monospace, Consolas, monospace;
 }
 textarea { height: 84px; resize: vertical; }
 input[type=number] { width: 120px; }
+.fields { display: flex; gap: 16px; margin-top: 12px; }
+.fields label { margin: 0; }
+.fields input[type=text] { display: block; width: 170px; margin-top: 4px; }
 button {
   background: #2b333c; color: var(--text); border: 1px solid var(--line); border-radius: 6px;
   padding: 9px 14px; font: inherit; cursor: pointer; margin: 8px 8px 0 0;
@@ -32,11 +35,12 @@ button {
 button:hover:not(:disabled) { border-color: var(--dim); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 button.main { background: #1f6f43; border-color: #2b9159; font-weight: 600; }
-#drop {
+#drop, #rec-drop {
   border: 2px dashed var(--line); border-radius: 8px; padding: 26px 12px; text-align: center;
   color: var(--dim); cursor: pointer;
 }
-#drop.over { border-color: var(--cyan); color: var(--text); }
+#rec-drop { padding: 12px; margin: 12px 0; }
+#drop.over, #rec-drop.over { border-color: var(--cyan); color: var(--text); }
 .mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; overflow-wrap: anywhere; }
 .msg { margin-top: 8px; min-height: 1.4em; }
 .ok { color: var(--green); } .err { color: var(--red); } .warn { color: var(--yellow); } .info { color: var(--cyan); }
@@ -71,9 +75,22 @@ button.main { background: #1f6f43; border-color: #2b9159; font-weight: 600; }
 
   <section>
     <h2>3. Sign</h2>
+    <p>Open the <b>signatures</b> folder this page is in: it reads SIGNATURES.md and the UPDATE.SIG of every subfolder, and the new signature is saved into it.</p>
+    <button id="dir-btn" class="main">Open the signatures folder</button>
+    <input id="dir-input" type="file" webkitdirectory class="hidden">
+    <div id="rec-drop" tabindex="0">Or drop SIGNATURES.md and the earlier UPDATE.SIG files here</div>
+    <input id="rec-file" type="file" accept=".md,.sig" multiple class="hidden">
+    <div id="rec-msg" class="msg"></div>
     <label for="index">Signature index, 0 to 1023. One index signs one file, once.</label>
     <input id="index" type="number" min="0" max="1023" step="1" autocomplete="off">
-    <label class="check"><input id="unused" type="checkbox"> <span>I checked SIGNATURES.md: this index has never signed a different file. Reusing it would let others forge signatures.</span></label>
+    <div id="index-msg" class="msg"></div>
+    <div class="fields">
+      <label>Date <input id="date" type="text" placeholder="YYYY-MM-DD" autocomplete="off" spellcheck="false"></label>
+      <label>Version <input id="version" type="text" placeholder="v2.0" autocomplete="off" spellcheck="false"></label>
+    </div>
+    <label class="check"><input id="test" type="checkbox"> <span>Test signature, not a release</span></label>
+    <div id="folder-name" class="msg"></div>
+    <label class="check"><input id="unused" type="checkbox"> <span>Every signature ever made with this key is in SIGNATURES.md or among the UPDATE.SIG files loaded above, test signatures included. Reusing an index would let others forge signatures.</span></label>
     <button id="sign-btn" class="main" disabled>Sign</button>
     <div id="sign-msg" class="msg"></div>
   </section>
@@ -91,8 +108,10 @@ button.main { background: #1f6f43; border-color: #2b9159; font-weight: 600; }
 
   <section id="result" class="hidden">
     <h2 id="result-title" class="ok"></h2>
-    <button id="sig-save" class="main">Save UPDATE.SIG</button>
-    <p>Add this line to SIGNATURES.md now:</p>
+    <button id="folder-save" class="main">Save the folder</button>
+    <button id="sig-save">Save UPDATE.SIG only</button>
+    <div id="folder-msg" class="msg"></div>
+    <p>The table of SIGNATURES.md:</p>
     <div id="log-line" class="mono"></div>
   </section>
 </main>
@@ -390,6 +409,128 @@ function hexProblem(bytes) {
   if (lines[lines.length - 1].toUpperCase() !== ":00000001FF") return "THE END RECORD IS MISSING: THE FILE IS CUT";
   return null;
 }
+
+// --- The record of the indexes used --------------------------------------
+// One index may sign one file only: two files signed with the same index let
+// anyone forge signatures. The page checks the index against SIGNATURES.md and
+// against earlier UPDATE.SIG files, instead of trusting a tick.
+
+// The table rows of SIGNATURES.md ("| index | ... | SHA-256 | ... |") and the
+// public key written there (112 hex digits on a line of their own)
+function parseRecord(text) {
+  const used = [];
+  let pub = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    const row = line.match(/^\|\s*(\d{1,4})\s*\|(.*)\|$/);
+    if (row) {
+      const q = Number(row[1]);
+      const hash = row[2].match(/(?:^|[^0-9A-Fa-f])([0-9A-Fa-f]{64})(?![0-9A-Fa-f])/);
+      if (q < 1024) used.push({ index: q, hash: hash ? hash[1].toLowerCase() : null, line });
+    } else if (pub === null && /^[0-9A-Fa-f]{112}$/.test(line)) {
+      pub = fromHex(line);
+    }
+  }
+  return { used, pub };
+}
+
+// The index of an UPDATE.SIG of the firmware parameters, or -1
+function sigIndex(sig) {
+  const { p } = OTS_W[PARAM_FIRMWARE.w];
+  if (sig.length !== 4 + 36 + p * 32 + 4 + PARAM_FIRMWARE.h * 32) return -1;
+  const q = readU32(sig, 0);
+  return q < (1 << PARAM_FIRMWARE.h) ? q : -1;
+}
+
+// Why index q must not sign the file whose SHA-256 is message, or null. A row
+// of the record with that index and another hash (or none) refuses it; so does
+// an earlier signature with that index that does not verify for this file
+// under pub, the key of the record: it was made for another file.
+function indexProblem(q, message, record, sigs, pub) {
+  const hash = toHex(message);
+  for (const r of record.used) {
+    if (r.index === q && r.hash !== hash) return "INDEX " + q + " ALREADY SIGNED ANOTHER FILE (SIGNATURES.md: " + r.line + ")";
+  }
+  for (const s of sigs) {
+    if (sigIndex(s.bytes) === q && !lmsVerify(pub, message, s.bytes)) {
+      return "INDEX " + q + " ALREADY SIGNED ANOTHER FILE (" + s.name + ")";
+    }
+  }
+  return null;
+}
+
+// The first index after every one used in the record and the signatures
+function nextFreeIndex(record, sigs) {
+  let next = 0;
+  for (const r of record.used) next = Math.max(next, r.index + 1);
+  for (const s of sigs) next = Math.max(next, sigIndex(s.bytes) + 1);
+  return next;
+}
+
+function recordHasIndex(record, q, message) {
+  const hash = toHex(message);
+  return record.used.some(r => r.index === q && r.hash === hash);
+}
+
+// The row to add to the table of SIGNATURES.md
+function recordRow(q, message, date, version, test) {
+  return "| " + q + " | " + date + " | " + version + " | LANGUAGE | " + toHex(message).toUpperCase() +
+         " | " + (test ? "Test signature, not a release " : "") + "|";
+}
+
+// Date, version and test mark of a row "| index | date | version | language | hash | notes |"
+function rowFields(line) {
+  const c = line.split("|").slice(1, -1).map(s => s.trim());
+  return { date: c[1] || "", version: c[2] || "", test: /\btest\b/i.test(c[5] || "") };
+}
+
+// The folder of a signature in signatures/ (SIGNATURES.md, "This folder"): the
+// index in three digits, the date, the version, and "_test" when not a release
+function folderName(q, date, version, test) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(date)) return { error: "DATE AS YYYY-MM-DD" };
+  if (version === "") return { error: "VERSION NEEDED" };
+  if (!/^[A-Za-z0-9.\-]{1,24}$/.test(version)) return { error: "VERSION: LETTERS, DIGITS, . AND - ONLY" };
+  return { name: String(q).padStart(3, "0") + "_" + date + "_" + version + (test ? "_test" : "") };
+}
+
+// --- A zip without compression --------------------------------------------
+// Only when the browser cannot write a folder (no showDirectoryPicker): the
+// folder goes out as one .zip of { name: "folder/FILE", bytes } entries.
+const CRC_TABLE = (() => {
+  const t = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c;
+  }
+  return t;
+})();
+function crc32(b) {
+  let c = -1;
+  for (let i = 0; i < b.length; i++) c = CRC_TABLE[(c ^ b[i]) & 255] ^ (c >>> 8);
+  return (c ^ -1) >>> 0;
+}
+function zipStore(entries) {
+  const u16 = v => [v & 255, (v >>> 8) & 255];
+  const u32 = v => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+  const parts = [], central = [];
+  let offset = 0;
+  for (const e of entries) {
+    const name = ascii(e.name), n = e.bytes.length;
+    // Version 1.0, no flags, stored, 1980-01-01 00:00, CRC, sizes, name length, no extra
+    const common = [...u16(10), ...u16(0), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc32(e.bytes)),
+                    ...u32(n), ...u32(n), ...u16(name.length), ...u16(0)];
+    const local = new Uint8Array([...u32(0x04034b50), ...common]);
+    parts.push(local, name, e.bytes);
+    central.push(new Uint8Array([...u32(0x02014b50), ...u16(10), ...common, ...u16(0), ...u16(0), ...u16(0),
+                                 ...u32(0), ...u32(offset)]), name);
+    offset += local.length + name.length + n;
+  }
+  const size = central.reduce((s, p) => s + p.length, 0);
+  const end = new Uint8Array([...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(entries.length),
+                              ...u16(entries.length), ...u32(size), ...u32(offset), ...u16(0)]);
+  return concat(...parts, ...central, end);
+}
 </script>
 
 <script>
@@ -397,9 +538,14 @@ function hexProblem(bytes) {
 const WORDLIST = "abandon ability able about above absent absorb abstract absurd abuse access accident account accuse achieve acid acoustic acquire across act action actor actress actual adapt add addict address adjust admit adult advance advice aerobic affair afford afraid again age agent agree ahead aim air airport aisle alarm album alcohol alert alien all alley allow almost alone alpha already also alter always amateur amazing among amount amused analyst anchor ancient anger angle angry animal ankle announce annual another answer antenna antique anxiety any apart apology appear apple approve april arch arctic area arena argue arm armed armor army around arrange arrest arrive arrow art artefact artist artwork ask aspect assault asset assist assume asthma athlete atom attack attend attitude attract auction audit august aunt author auto autumn average avocado avoid awake aware away awesome awful awkward axis baby bachelor bacon badge bag balance balcony ball bamboo banana banner bar barely bargain barrel base basic basket battle beach bean beauty because become beef before begin behave behind believe below belt bench benefit best betray better between beyond bicycle bid bike bind biology bird birth bitter black blade blame blanket blast bleak bless blind blood blossom blouse blue blur blush board boat body boil bomb bone bonus book boost border boring borrow boss bottom bounce box boy bracket brain brand brass brave bread breeze brick bridge brief bright bring brisk broccoli broken bronze broom brother brown brush bubble buddy budget buffalo build bulb bulk bullet bundle bunker burden burger burst bus business busy butter buyer buzz cabbage cabin cable cactus cage cake call calm camera camp can canal cancel candy cannon canoe canvas canyon capable capital captain car carbon card cargo carpet carry cart case cash casino castle casual cat catalog catch category cattle caught cause caution cave ceiling celery cement census century cereal certain chair chalk champion change chaos chapter charge chase chat cheap check cheese chef cherry chest chicken chief child chimney choice choose chronic chuckle chunk churn cigar cinnamon circle citizen city civil claim clap clarify claw clay clean clerk clever click client cliff climb clinic clip clock clog close cloth cloud clown club clump cluster clutch coach coast coconut code coffee coil coin collect color column combine come comfort comic common company concert conduct confirm congress connect consider control convince cook cool copper copy coral core corn correct cost cotton couch country couple course cousin cover coyote crack cradle craft cram crane crash crater crawl crazy cream credit creek crew cricket crime crisp critic crop cross crouch crowd crucial cruel cruise crumble crunch crush cry crystal cube culture cup cupboard curious current curtain curve cushion custom cute cycle dad damage damp dance danger daring dash daughter dawn day deal debate debris decade december decide decline decorate decrease deer defense define defy degree delay deliver demand demise denial dentist deny depart depend deposit depth deputy derive describe desert design desk despair destroy detail detect develop device devote diagram dial diamond diary dice diesel diet differ digital dignity dilemma dinner dinosaur direct dirt disagree discover disease dish dismiss disorder display distance divert divide divorce dizzy doctor document dog doll dolphin domain donate donkey donor door dose double dove draft dragon drama drastic draw dream dress drift drill drink drip drive drop drum dry duck dumb dune during dust dutch duty dwarf dynamic eager eagle early earn earth easily east easy echo ecology economy edge edit educate effort egg eight either elbow elder electric elegant element elephant elevator elite else embark embody embrace emerge emotion employ empower empty enable enact end endless endorse enemy energy enforce engage engine enhance enjoy enlist enough enrich enroll ensure enter entire entry envelope episode equal equip era erase erode erosion error erupt escape essay essence estate eternal ethics evidence evil evoke evolve exact example excess exchange excite exclude excuse execute exercise exhaust exhibit exile exist exit exotic expand expect expire explain expose express extend extra eye eyebrow fabric face faculty fade faint faith fall false fame family famous fan fancy fantasy farm fashion fat fatal father fatigue fault favorite feature february federal fee feed feel female fence festival fetch fever few fiber fiction field figure file film filter final find fine finger finish fire firm first fiscal fish fit fitness fix flag flame flash flat flavor flee flight flip float flock floor flower fluid flush fly foam focus fog foil fold follow food foot force forest forget fork fortune forum forward fossil foster found fox fragile frame frequent fresh friend fringe frog front frost frown frozen fruit fuel fun funny furnace fury future gadget gain galaxy gallery game gap garage garbage garden garlic garment gas gasp gate gather gauge gaze general genius genre gentle genuine gesture ghost giant gift giggle ginger giraffe girl give glad glance glare glass glide glimpse globe gloom glory glove glow glue goat goddess gold good goose gorilla gospel gossip govern gown grab grace grain grant grape grass gravity great green grid grief grit grocery group grow grunt guard guess guide guilt guitar gun gym habit hair half hammer hamster hand happy harbor hard harsh harvest hat have hawk hazard head health heart heavy hedgehog height hello helmet help hen hero hidden high hill hint hip hire history hobby hockey hold hole holiday hollow home honey hood hope horn horror horse hospital host hotel hour hover hub huge human humble humor hundred hungry hunt hurdle hurry hurt husband hybrid ice icon idea identify idle ignore ill illegal illness image imitate immense immune impact impose improve impulse inch include income increase index indicate indoor industry infant inflict inform inhale inherit initial inject injury inmate inner innocent input inquiry insane insect inside inspire install intact interest into invest invite involve iron island isolate issue item ivory jacket jaguar jar jazz jealous jeans jelly jewel job join joke journey joy judge juice jump jungle junior junk just kangaroo keen keep ketchup key kick kid kidney kind kingdom kiss kit kitchen kite kitten kiwi knee knife knock know lab label labor ladder lady lake lamp language laptop large later latin laugh laundry lava law lawn lawsuit layer lazy leader leaf learn leave lecture left leg legal legend leisure lemon lend length lens leopard lesson letter level liar liberty library license life lift light like limb limit link lion liquid list little live lizard load loan lobster local lock logic lonely long loop lottery loud lounge love loyal lucky luggage lumber lunar lunch luxury lyrics machine mad magic magnet maid mail main major make mammal man manage mandate mango mansion manual maple marble march margin marine market marriage mask mass master match material math matrix matter maximum maze meadow mean measure meat mechanic medal media melody melt member memory mention menu mercy merge merit merry mesh message metal method middle midnight milk million mimic mind minimum minor minute miracle mirror misery miss mistake mix mixed mixture mobile model modify mom moment monitor monkey monster month moon moral more morning mosquito mother motion motor mountain mouse move movie much muffin mule multiply muscle museum mushroom music must mutual myself mystery myth naive name napkin narrow nasty nation nature near neck need negative neglect neither nephew nerve nest net network neutral never news next nice night noble noise nominee noodle normal north nose notable note nothing notice novel now nuclear number nurse nut oak obey object oblige obscure observe obtain obvious occur ocean october odor off offer office often oil okay old olive olympic omit once one onion online only open opera opinion oppose option orange orbit orchard order ordinary organ orient original orphan ostrich other outdoor outer output outside oval oven over own owner oxygen oyster ozone pact paddle page pair palace palm panda panel panic panther paper parade parent park parrot party pass patch path patient patrol pattern pause pave payment peace peanut pear peasant pelican pen penalty pencil people pepper perfect permit person pet phone photo phrase physical piano picnic picture piece pig pigeon pill pilot pink pioneer pipe pistol pitch pizza place planet plastic plate play please pledge pluck plug plunge poem poet point polar pole police pond pony pool popular portion position possible post potato pottery poverty powder power practice praise predict prefer prepare present pretty prevent price pride primary print priority prison private prize problem process produce profit program project promote proof property prosper protect proud provide public pudding pull pulp pulse pumpkin punch pupil puppy purchase purity purpose purse push put puzzle pyramid quality quantum quarter question quick quit quiz quote rabbit raccoon race rack radar radio rail rain raise rally ramp ranch random range rapid rare rate rather raven raw razor ready real reason rebel rebuild recall receive recipe record recycle reduce reflect reform refuse region regret regular reject relax release relief rely remain remember remind remove render renew rent reopen repair repeat replace report require rescue resemble resist resource response result retire retreat return reunion reveal review reward rhythm rib ribbon rice rich ride ridge rifle right rigid ring riot ripple risk ritual rival river road roast robot robust rocket romance roof rookie room rose rotate rough round route royal rubber rude rug rule run runway rural sad saddle sadness safe sail salad salmon salon salt salute same sample sand satisfy satoshi sauce sausage save say scale scan scare scatter scene scheme school science scissors scorpion scout scrap screen script scrub sea search season seat second secret section security seed seek segment select sell seminar senior sense sentence series service session settle setup seven shadow shaft shallow share shed shell sheriff shield shift shine ship shiver shock shoe shoot shop short shoulder shove shrimp shrug shuffle shy sibling sick side siege sight sign silent silk silly silver similar simple since sing siren sister situate six size skate sketch ski skill skin skirt skull slab slam sleep slender slice slide slight slim slogan slot slow slush small smart smile smoke smooth snack snake snap sniff snow soap soccer social sock soda soft solar soldier solid solution solve someone song soon sorry sort soul sound soup source south space spare spatial spawn speak special speed spell spend sphere spice spider spike spin spirit split spoil sponsor spoon sport spot spray spread spring spy square squeeze squirrel stable stadium staff stage stairs stamp stand start state stay steak steel stem step stereo stick still sting stock stomach stone stool story stove strategy street strike strong struggle student stuff stumble style subject submit subway success such sudden suffer sugar suggest suit summer sun sunny sunset super supply supreme sure surface surge surprise surround survey suspect sustain swallow swamp swap swarm swear sweet swift swim swing switch sword symbol symptom syrup system table tackle tag tail talent talk tank tape target task taste tattoo taxi teach team tell ten tenant tennis tent term test text thank that theme then theory there they thing this thought three thrive throw thumb thunder ticket tide tiger tilt timber time tiny tip tired tissue title toast tobacco today toddler toe together toilet token tomato tomorrow tone tongue tonight tool tooth top topic topple torch tornado tortoise toss total tourist toward tower town toy track trade traffic tragic train transfer trap trash travel tray treat tree trend trial tribe trick trigger trim trip trophy trouble truck true truly trumpet trust truth try tube tuition tumble tuna tunnel turkey turn turtle twelve twenty twice twin twist two type typical ugly umbrella unable unaware uncle uncover under undo unfair unfold unhappy uniform unique unit universe unknown unlock until unusual unveil update upgrade uphold upon upper upset urban urge usage use used useful useless usual utility vacant vacuum vague valid valley valve van vanish vapor various vast vault vehicle velvet vendor venture venue verb verify version very vessel veteran viable vibrant vicious victory video view village vintage violin virtual virus visa visit visual vital vivid vocal voice void volcano volume vote voyage wage wagon wait walk wall walnut want warfare warm warrior wash wasp waste water wave way wealth weapon wear weasel weather web wedding weekend weird welcome west wet whale what wheat wheel when where whip whisper wide width wife wild will win window wine wing wink winner winter wire wisdom wise wish witness wolf woman wonder wood wool word work world worry worth wrap wreck wrestle wrist write wrong yard year yellow you young youth zebra zero zone zoo".split(" ");
 const $ = id => document.getElementById(id);
 let fileBytes = null, fileHash = null;
+let record = null;                          // parseRecord() of SIGNATURES.md: needed to sign
+let oldSigs = [];                           // Earlier UPDATE.SIG files: { name, bytes }
 let busy = false;
 const usedThisSession = new Map();          // Index to hash: lost on reload, SIGNATURES.md is the real record
 let sigUrl = null, pubUrl = null;
+let sigDir = null;                          // The signatures folder opened (Chrome, Edge): read and written
+let indexTouched = false;                  // Index typed by the user: no more proposing one
+let fieldsTouched = false;                // Date, version or test changed by hand: no more filling them in
 
 function setMsg(el, text, cls) { el.textContent = text; el.className = "msg " + (cls || ""); }
 
@@ -422,9 +568,211 @@ function refresh() {
     setMsg($("words-msg"), r.error, "err");
   }
   const index = indexValue();
+  // The record rows decide at once; the earlier signatures are verified when SIGN is pressed
+  let blocked = false;
+  if (!record) {
+    setMsg($("index-msg"), "LOAD SIGNATURES.md FIRST", "warn");
+    blocked = true;
+  } else if (index === null) {
+    setMsg($("index-msg"), "");
+  } else if (fileHash) {
+    const problem = indexProblem(index, fileHash, { used: record.used }, [], record.pub);
+    if (problem) {
+      setMsg($("index-msg"), problem, "err");
+      blocked = true;
+    } else if (recordHasIndex(record, index, fileHash)) {
+      setMsg($("index-msg"), "INDEX " + index + " IS RECORDED FOR THIS FILE", "ok");
+    } else {
+      setMsg($("index-msg"), "INDEX " + index + " IS NOT IN SIGNATURES.md: ADD ITS ROW BEFORE PUBLISHING", "warn");
+    }
+  } else {
+    setMsg($("index-msg"), "");
+  }
+  // Date, version and test mark: from the row of this index and file, else today,
+  // until the user changes them
+  if (!fieldsTouched) {
+    const row = record && fileHash && index !== null ?
+      record.used.find(r => r.index === index && r.hash === toHex(fileHash)) : null;
+    const f = row ? rowFields(row.line) : { date: today(), version: "", test: false };
+    $("date").value = f.date;
+    $("version").value = f.version;
+    $("test").checked = f.test;
+  }
+  const folder = currentFolder();
+  if (!folder) {
+    setMsg($("folder-name"), "");
+  } else if (folder.error) {
+    setMsg($("folder-name"), folder.error, "err");
+    blocked = true;
+  } else {
+    setMsg($("folder-name"), "FOLDER: " + folder.name, "info");
+  }
   $("pub-btn").disabled = busy || !r.entropy;
-  $("sign-btn").disabled = busy || !r.entropy || !fileBytes || index === null || !$("unused").checked;
+  $("sign-btn").disabled = busy || blocked || !r.entropy || !fileBytes || index === null || !$("unused").checked;
   $("words").disabled = busy;
+}
+
+function today() {
+  const d = new Date(), two = v => String(v).padStart(2, "0");
+  return d.getFullYear() + "-" + two(d.getMonth() + 1) + "-" + two(d.getDate());
+}
+
+function currentFolder() {
+  const index = indexValue();
+  return index === null ? null : folderName(index, $("date").value.trim(), $("version").value.trim(), $("test").checked);
+}
+
+// The signed pair as signatures/<folder>/UPDATE.HEX and UPDATE.SIG: written into a
+// folder chosen by the user where the browser allows it (Chrome, Edge), read back
+// and compared; elsewhere downloaded as <folder>.zip
+async function saveFolder(signed) {
+  const msg = $("folder-msg");
+  const files = [["UPDATE.HEX", signed.hex], ["UPDATE.SIG", signed.sig]];
+  if (!sigDir && !window.showDirectoryPicker) {
+    const zip = zipStore(files.map(([n, b]) => ({ name: signed.folder + "/" + n, bytes: b })));
+    const url = URL.createObjectURL(new Blob([zip], { type: "application/zip" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = signed.folder + ".zip";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    setMsg(msg, "THIS BROWSER CANNOT WRITE A FOLDER: SAVED AS " + signed.folder + ".zip, EXTRACT IT INTO signatures/", "warn");
+    return;
+  }
+  let parent = sigDir;
+  if (!parent) {
+    try {
+      parent = await window.showDirectoryPicker({ id: "seedmate-signatures", mode: "readwrite" });
+    } catch (e) {
+      setMsg(msg, "NO FOLDER CHOSEN: NOTHING SAVED", "warn");
+      return;
+    }
+  }
+  try {
+    const dir = await parent.getDirectoryHandle(signed.folder, { create: true });
+    const read = async name => new Uint8Array(await (await (await dir.getFileHandle(name)).getFile()).arrayBuffer());
+    const same = (a, b) => a.length === b.length && toHex(sha256(a)) === toHex(sha256(b));
+    for (const [name, bytes] of files) {
+      let old = null;
+      try { old = await read(name); } catch (e) { if (e.name !== "NotFoundError") throw e; }
+      if (old !== null) {
+        if (!same(old, bytes)) throw new Error(signed.folder + "/" + name + " ALREADY EXISTS WITH OTHER CONTENT: NOT OVERWRITTEN");
+        continue;
+      }
+      const w = await (await dir.getFileHandle(name, { create: true })).createWritable();
+      await w.write(bytes);
+      await w.close();
+    }
+    for (const [name, bytes] of files) {
+      if (!same(await read(name), bytes)) throw new Error(name + " READ BACK DIFFERENT");
+    }
+    setMsg(msg, "SAVED AND READ BACK: " + parent.name + "/" + signed.folder + " (UPDATE.HEX, UPDATE.SIG)", "ok");
+  } catch (e) {
+    setMsg(msg, "NOT SAVED: " + e.message, "err");
+  }
+}
+
+// SIGNATURES.md and earlier UPDATE.SIG files, told apart by their content
+async function takeRecords(files) {
+  if (busy || !files || files.length === 0) return;
+  const sigs = [];
+  let rec = null, recName = "", errors = [];
+  for (const file of files) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (sigIndex(bytes) >= 0) {
+      sigs.push({ name: file.name, bytes });
+      continue;
+    }
+    const parsed = parseRecord(new TextDecoder("utf-8").decode(bytes));
+    if (parsed.pub === null) {
+      errors.push(file.name + ": NOT SIGNATURES.md (NO PUBLIC KEY) AND NOT AN UPDATE.SIG");
+    } else if (rec !== null) {
+      errors.push(file.name + ": ONLY ONE SIGNATURES.md AT A TIME");
+    } else {
+      rec = parsed;
+      recName = file.name;
+    }
+  }
+  if (rec !== null) record = rec;
+  oldSigs = oldSigs.concat(sigs);
+  const msg = $("rec-msg");
+  msg.textContent = "";
+  msg.className = "msg";
+  const line = (text, cls) => {
+    const d = document.createElement("div");
+    d.textContent = text;
+    if (cls) d.className = cls;
+    msg.append(d);
+  };
+  if (record) {
+    const list = record.used.map(r => r.index).join(", ");
+    line((recName || "SIGNATURES.md") + ": " + record.used.length + " INDEX(ES) USED" + (list ? " (" + list + ")" : ""), "ok");
+  }
+  if (oldSigs.length) line(oldSigs.length + " EARLIER SIGNATURE(S), INDEXES " + oldSigs.map(s => sigIndex(s.bytes)).join(", "), "ok");
+  for (const e of errors) line(e, "err");
+  if (record) line("NEXT FREE INDEX: " + nextFreeIndex(record, oldSigs), "info");
+  proposeIndex();
+  refresh();
+}
+
+// The signatures folder: SIGNATURES.md and the UPDATE.SIG of each subfolder, in
+// place of what was loaded before. With showDirectoryPicker (Chrome, Edge) the
+// folder is kept open to save the new signature into it; elsewhere it is read
+// through a folder input, and the new folder is saved as a .zip.
+async function openFolder() {
+  if (busy) return;
+  if (!window.showDirectoryPicker) { $("dir-input").click(); return; }
+  let dir;
+  try {
+    dir = await window.showDirectoryPicker({ id: "seedmate-signatures", mode: "readwrite" });
+  } catch (e) {
+    return;                                 // Cancelled
+  }
+  const file = async (d, name) => {
+    try { return await (await d.getFileHandle(name)).getFile(); } catch (e) { return null; }
+  };
+  const rec = await file(dir, "SIGNATURES.md");
+  if (!rec) {
+    setMsg($("rec-msg"), "NO SIGNATURES.md IN " + dir.name + ": OPEN THE signatures FOLDER", "err");
+    return;
+  }
+  const files = [{ name: "SIGNATURES.md", arrayBuffer: () => rec.arrayBuffer() }];
+  for await (const [name, h] of dir.entries()) {
+    if (h.kind !== "directory") continue;
+    const sig = await file(h, "UPDATE.SIG");
+    if (sig) files.push({ name: name + "/UPDATE.SIG", arrayBuffer: () => sig.arrayBuffer() });
+  }
+  record = null;
+  oldSigs = [];
+  sigDir = dir;
+  await takeRecords(files);
+}
+
+function takeFolderInput(list) {
+  const files = [];
+  for (const f of list) {
+    const parts = (f.webkitRelativePath || f.name).split("/");
+    if ((parts.length === 2 && parts[1] === "SIGNATURES.md") ||
+        (parts.length === 3 && parts[2].toUpperCase() === "UPDATE.SIG")) {
+      files.push({ name: parts.slice(1).join("/"), arrayBuffer: () => f.arrayBuffer() });
+    }
+  }
+  if (!files.some(f => f.name === "SIGNATURES.md")) {
+    setMsg($("rec-msg"), "NO SIGNATURES.md IN THAT FOLDER: OPEN THE signatures FOLDER", "err");
+    return;
+  }
+  record = null;
+  oldSigs = [];
+  sigDir = null;
+  takeRecords(files);
+}
+
+// Until the user types an index: the row of this file when SIGNATURES.md has
+// one (the row is added before signing), otherwise the next free index
+function proposeIndex() {
+  if (indexTouched || !record) return;
+  const row = fileHash ? record.used.find(r => r.hash === toHex(fileHash)) : null;
+  $("index").value = String(row ? row.index : nextFreeIndex(record, oldSigs));
 }
 
 function indexValue() {
@@ -455,6 +803,7 @@ async function takeFile(file) {
     hash.textContent = toHex(fileHash);
     msg.append(head, hash);
   }
+  proposeIndex();
   refresh();
 }
 
@@ -467,9 +816,21 @@ drop.addEventListener("dragover", () => drop.classList.add("over"));
 drop.addEventListener("dragleave", () => drop.classList.remove("over"));
 drop.addEventListener("drop", e => { drop.classList.remove("over"); takeFile(e.dataTransfer.files[0]); });
 $("file").addEventListener("change", e => { takeFile(e.target.files[0]); e.target.value = ""; });
+const recDrop = $("rec-drop");
+recDrop.addEventListener("click", () => $("rec-file").click());
+recDrop.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") $("rec-file").click(); });
+recDrop.addEventListener("dragover", () => recDrop.classList.add("over"));
+recDrop.addEventListener("dragleave", () => recDrop.classList.remove("over"));
+recDrop.addEventListener("drop", e => { recDrop.classList.remove("over"); takeRecords(Array.from(e.dataTransfer.files)); });
+$("rec-file").addEventListener("change", e => { takeRecords(Array.from(e.target.files)); e.target.value = ""; });
+$("dir-btn").addEventListener("click", openFolder);
+$("dir-input").addEventListener("change", e => { takeFolderInput(Array.from(e.target.files)); e.target.value = ""; });
 $("words").addEventListener("input", refresh);
-$("index").addEventListener("input", refresh);
+$("index").addEventListener("input", () => { indexTouched = $("index").value.trim() !== ""; refresh(); });
 $("unused").addEventListener("change", refresh);
+for (const id of ["date", "version", "test"]) {
+  $(id).addEventListener(id === "test" ? "change" : "input", () => { fieldsTouched = true; refresh(); });
+}
 
 function showStep(text, part) {
   $("step").textContent = text;
@@ -536,27 +897,51 @@ $("sign-btn").addEventListener("click", () => {
     setMsg($("sign-msg"), "REFUSED: INDEX " + q + " ALREADY SIGNED ANOTHER FILE IN THIS SESSION", "err");
     return;
   }
-  setMsg($("sign-msg"), "");
   const message = fileHash;
+  const hex = fileBytes;
+  const folder = currentFolder();
+  const date = $("date").value.trim(), version = $("version").value.trim(), test = $("test").checked;
+  if (!folder || folder.error) return;
+  // Before the four minutes of the key tree: the record and the earlier signatures
+  const problem = indexProblem(q, message, record, oldSigs, record.pub);
+  if (problem) {
+    setMsg($("sign-msg"), "REFUSED: " + problem, "err");
+    return;
+  }
+  setMsg($("sign-msg"), "");
   withKey(async (key, tree) => {
+    const pub = publicKey(key.id, tree, PARAM_FIRMWARE);
+    if (toHex(pub) !== toHex(record.pub)) {
+      setMsg($("sign-msg"), "REFUSED: THESE WORDS ARE NOT THE KEY OF SIGNATURES.md (CHECK THE WORDS)", "err");
+      return;
+    }
     await showStep("SIGNING WITH INDEX " + q, 0.97);
     const C = deriveC(key.seed, q, message);
     const sig = lmsSign(key.id, key.seed, tree, PARAM_FIRMWARE, q, C, message);
-    const pub = publicKey(key.id, tree, PARAM_FIRMWARE);
     await showStep("VERIFYING SIGNATURE", 0.99);
     if (!lmsVerify(pub, message, sig)) {
       setMsg($("sign-msg"), "THE SIGNATURE DID NOT VERIFY: NOT SAVED", "err");
       return;
     }
     usedThisSession.set(q, hashHex);
+    const recorded = recordHasIndex(record, q, message);
+    oldSigs.push({ name: "UPDATE.SIG signed now", bytes: sig });     // Counts for the next one
     sigUrl = saveLink($("sig-save"), "UPDATE.SIG", sig, sigUrl);
+    const signed = { folder: folder.name, hex, sig };
+    $("folder-save").textContent = sigDir ? "Save into " + sigDir.name + "/" + folder.name : "Save the folder " + folder.name;
+    $("folder-save").onclick = () => saveFolder(signed);
+    setMsg($("folder-msg"), sigDir ? "" : "CHOOSE THE signatures FOLDER: " + folder.name + " IS CREATED IN IT", "info");
     $("result-title").textContent = "VERIFIED: " + sig.length + " BYTE SIGNATURE, INDEX " + q;
-    $("log-line").textContent = "index " + q + " sha256 " + hashHex + " pubkey " + toHex(pub);
+    $("log-line").textContent = recorded ? "Already recorded in SIGNATURES.md." :
+      recordRow(q, message, date, version, test) + "   (put the language in)";
     $("result").classList.remove("hidden");
     $("words").value = "";
     $("index").value = "";
     $("unused").checked = false;
-    setMsg($("sign-msg"), "INDEX " + q + " IS NOW USED. THE WORDS WERE CLEARED.", "warn");
+    fieldsTouched = false;
+    indexTouched = false;
+    setMsg($("sign-msg"), "INDEX " + q + " IS NOW USED. THE WORDS WERE CLEARED." +
+           (recorded ? "" : " ADD THE ROW BELOW TO SIGNATURES.md BEFORE THE SIGNATURE IS COPIED ANYWHERE."), "warn");
   });
 });
 

@@ -1,12 +1,12 @@
 // Writes lms_vectors.h for test_boot_lms.c: signatures made by the signing page's
-// own script (SW/tools/lms_sign.html), with the test words "abandon x11 about".
+// own script (SW/signatures/lms_sign.html), with the test words "abandon x11 about".
 //   node gen_lms_vectors.js
 "use strict";
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-const html = fs.readFileSync(path.join(__dirname, "../../SW/tools/lms_sign.html"), "utf8");
+const html = fs.readFileSync(path.join(__dirname, "../../SW/signatures/lms_sign.html"), "utf8");
 const core = html.match(/<script id="core">([\s\S]*?)<\/script>/)[1];
 const ctx = { TextDecoder, Uint8Array, Int32Array, Math, Array, Object, Number };
 vm.createContext(ctx);

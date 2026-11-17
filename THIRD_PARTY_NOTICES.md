@@ -273,7 +273,7 @@ These parts were written for this project from public specifications; they are l
 - Output descriptor checksum (BIP380): `main.c`, `descriptor.c`
 - Krux KEF encrypted mnemonic format (base43, PBKDF2-HMAC-SHA256, AES-GCM; `SW/docs/kef.md`): `kef.c`
 - Nostr keys (NIP-06 derivation, NIP-19 npub / nsec): `main.c`, `nostr.c`
-- LMS hash-based signatures (RFC 8554) for the firmware update check: `bootloader` (`boot_lms.c`) and `SW/tools/lms_sign.html`
+- LMS hash-based signatures (RFC 8554) for the firmware update check: `bootloader` (`boot_lms.c`) and `SW/signatures/lms_sign.html`
 - GM861S barcode reader serial protocol (GM861S User Manual V1.2.4): `main.c`
 
 ---

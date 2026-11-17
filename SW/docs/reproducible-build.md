@@ -37,7 +37,7 @@ sha256sum dist/v2/production/BIP39_MCC.X.production.hex
 The hash must be the one published for that release (table below), which is
 also the SHA-256 the bootloader shows before it installs `UPDATE.HEX`
 (`certutil -hashfile UPDATE.HEX SHA256` gives it on Windows). The signature
-`UPDATE.SIG` signs that hash; its LMS index is recorded in `../SIGNATURES.md`.
+`UPDATE.SIG` signs that hash; its LMS index is recorded in `../signatures/SIGNATURES.md`.
 
 ## What was checked
 

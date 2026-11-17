@@ -4,7 +4,7 @@
   Summary:
     RFC 8554 LMS verification of UPDATE.SIG against the public key below,
     LMS_SHA256_M32_H10 with LMOTS_SHA256_N32_W8. The signed message is the
-    32 byte SHA-256 of UPDATE.HEX. Made by SW/tools/lms_sign.html.
+    32 byte SHA-256 of UPDATE.HEX. Made by SW/signatures/lms_sign.html.
  *******************************************************************************/
 
 #ifndef BOOT_LMS_H
