@@ -24,6 +24,17 @@ static uint32_t ext_addr = 0;   // Extended address from type 02/04 records
 static uint32_t dw_addr = 0;    // Physical address of the pending double-word
 static uint8_t dw_bytes[8];     // Pending bytes, 0xFF where not provided
 static uint8_t dw_mask = 0;     // Bit i set = dw_bytes[i] came from the HEX file
+// The double-word at the reset block is kept here and programmed last, by
+// hexflash_commit(): until then app_missing() is true, so an update that stops
+// half way (read error, power cut, a card answering differently) never starts
+static uint8_t reset_dw[8];
+
+// The pending bytes over dst
+static void merge_dw(uint8_t *dst) {
+    for (int i = 0; i < 8; i++) {
+        if (dw_mask & (1u << i)) dst[i] = dw_bytes[i];
+    }
+}
 
 static bool dw_is_written(uint32_t phys) {
     uint32_t idx = (phys - HEXFLASH_APP_PHYS_BASE) >> 3;
@@ -64,9 +75,7 @@ static hexflash_status_t rewrite_page(void) {
     uint32_t ofs = dw_addr - page;
 
     nvm_read(page, page_buf, HEXFLASH_PAGE_SIZE);
-    for (int i = 0; i < 8; i++) {
-        if (dw_mask & (1u << i)) page_buf[ofs + i] = dw_bytes[i];
-    }
+    merge_dw(&page_buf[ofs]);
 
     if (!nvm_erase_page(page)) return HEXFLASH_ERR_NVM;
     for (uint32_t o = 0; o < HEXFLASH_PAGE_SIZE; o += 8) {
@@ -79,7 +88,8 @@ static hexflash_status_t rewrite_page(void) {
 static hexflash_status_t flush_dw(void) {
     hexflash_status_t st = HEXFLASH_OK;
     if (dw_mask != 0) {
-        st = dw_is_written(dw_addr) ? rewrite_page() : program_dw(dw_addr, dw_bytes);
+        if (dw_addr == HEXFLASH_APP_PHYS_RESET) merge_dw(reset_dw);     // Not in the flash before the commit
+        else st = dw_is_written(dw_addr) ? rewrite_page() : program_dw(dw_addr, dw_bytes);
         dw_mask = 0;
         memset(dw_bytes, 0xFF, sizeof(dw_bytes));
     }
@@ -121,6 +131,7 @@ hexflash_status_t hexflash_begin(void) {
     ext_addr = 0;
     dw_mask = 0;
     memset(dw_bytes, 0xFF, sizeof(dw_bytes));
+    memset(reset_dw, 0xFF, sizeof(reset_dw));
     memset(dw_written, 0, sizeof(dw_written));
 
     for (uint32_t page = HEXFLASH_APP_PHYS_BASE; page < HEXFLASH_APP_PHYS_END; page += HEXFLASH_PAGE_SIZE) {
@@ -180,6 +191,10 @@ hexflash_status_t hexflash_write_record(const uint8_t *rec) {
         default:
             return HEXFLASH_OK;     // Start address records (03/05) are not needed
     }
+}
+
+hexflash_status_t hexflash_commit(void) {
+    return program_dw(HEXFLASH_APP_PHYS_RESET, reset_dw);   // Blank: nothing written, the app stays missing
 }
 
 #ifndef HEXFLASH_HOST_TEST

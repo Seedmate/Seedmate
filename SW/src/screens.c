@@ -1784,6 +1784,14 @@ void print_mcu_serial_screen(void) {
     line[n] = '\0';
     text_at(1, 30, line, peak > size / 8 * 7 ? ST7735_YELLOW : ST7735_CYAN);
 
+    // The write protection the bootloader set, with both unlock bits clear so
+    // that nothing can lift it before the next reset (audit B3). Started from
+    // a programmer or debugger there is none.
+    bool locked = (NVMPWP & (_NVMPWP_PWP_MASK | _NVMPWP_PWPULOCK_MASK)) == BOOT_LOCK_PWP &&
+                  (NVMBWP & (_NVMBWP_BWP0_MASK | _NVMBWP_BWP1_MASK | _NVMBWP_BWP2_MASK | _NVMBWP_BWPULOCK_MASK)) == BOOT_LOCK_BWP;
+    if (locked) text_at(1, 42, "FLASH LOCK OK", ST7735_GREEN);
+    else text_at(1, 42, "FLASH NOT LOCKED", ST7735_RED);
+
     grid_OK_back();                 // Either key returns to SETTINGS
 }
 

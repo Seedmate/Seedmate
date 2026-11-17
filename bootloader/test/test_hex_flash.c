@@ -102,9 +102,23 @@ static hexflash_status_t check_hex_file(const char *path) {
     return st;
 }
 
+#define RESET_OFS (HEXFLASH_APP_PHYS_RESET - FLASH_PHYS_BASE)
+
+// The reset block double-word reads blank and was never programmed
+static bool reset_blank(void) {
+    static const uint8_t ff[8] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    return memcmp(&flash[RESET_OFS], ff, 8) == 0 && !dw_programmed[RESET_OFS / 8];
+}
+
 static void test_file(const char *path) {
     reset_all();
     CHECK(flash_hex_file(path, true) == HEXFLASH_OK);
+    // Everything but the reset block is written: the app cannot start yet
+    CHECK(reset_blank());
+    CHECK(memcmp(flash, expected, RESET_OFS) == 0);
+    CHECK(memcmp(&flash[RESET_OFS + 8], &expected[RESET_OFS + 8], sizeof(flash) - RESET_OFS - 8) == 0);
+    CHECK(memcmp(&expected[RESET_OFS], "\xFF\xFF\xFF\xFF", 4) != 0);
+    CHECK(hexflash_commit() == HEXFLASH_OK);
     CHECK(double_writes == 0);
     CHECK(memcmp(flash, expected, sizeof(flash)) == 0);
     printf("%s: %d page rewrites, %d double writes\n", path, page_rewrites, double_writes);
@@ -146,6 +160,65 @@ static void test_synthetic(void) {
     CHECK(hexflash_write_record(rec) == HEXFLASH_ERR_RECORD);
 }
 
+// Audit B1: the reset block is programmed only by hexflash_commit(), whatever
+// the record order, and an update that stops before it leaves it blank
+static void test_reset_last(const char *app_hex) {
+    uint8_t rec[64];
+    const uint8_t seg[2] = {0x1D, 0x00};
+    const uint8_t r0[4] = {0x10, 0x20, 0x30, 0x40}, r1[4] = {0x50, 0x60, 0x70, 0x80};
+    const uint8_t nb[8] = {1, 2, 3, 4, 5, 6, 7, 8}, nb2[2] = {9, 10};
+
+    // Reset block in two records, a neighbour in its page written twice
+    // (page rewrite while the reset block is held), then the commit
+    reset_all();
+    make_rec(rec, 4, 0, seg, 2);            CHECK(hexflash_write_record(rec) == HEXFLASH_OK);
+    make_rec(rec, 0, 0x3804, r1, 4);        CHECK(hexflash_write_record(rec) == HEXFLASH_OK);
+    make_rec(rec, 0, 0x3808, nb, 8);        CHECK(hexflash_write_record(rec) == HEXFLASH_OK);
+    make_rec(rec, 0, 0x3800, r0, 4);        CHECK(hexflash_write_record(rec) == HEXFLASH_OK);
+    make_rec(rec, 0, 0x3810, nb, 8);        CHECK(hexflash_write_record(rec) == HEXFLASH_OK);
+    make_rec(rec, 0, 0x380A, nb2, 2);       CHECK(hexflash_write_record(rec) == HEXFLASH_OK); // Page rewrite
+    make_rec(rec, 1, 0, NULL, 0);           CHECK(hexflash_write_record(rec) == HEXFLASH_OK);
+    CHECK(reset_blank());
+    CHECK(page_rewrites == 1);
+    CHECK(hexflash_commit() == HEXFLASH_OK);
+    const uint8_t want[16] = {0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 1, 2, 9, 10, 5, 6, 7, 8};
+    CHECK(memcmp(&flash[RESET_OFS], want, 16) == 0);
+    CHECK(double_writes == 0);
+
+    // A file with nothing at the reset block: the commit writes nothing
+    reset_all();
+    make_rec(rec, 4, 0, seg, 2);            CHECK(hexflash_write_record(rec) == HEXFLASH_OK);
+    make_rec(rec, 0, 0x4000, nb, 8);        CHECK(hexflash_write_record(rec) == HEXFLASH_OK);
+    make_rec(rec, 1, 0, NULL, 0);           CHECK(hexflash_write_record(rec) == HEXFLASH_OK);
+    CHECK(hexflash_commit() == HEXFLASH_OK && reset_blank());
+
+    // The real app, stopped after each tenth of its records (read error,
+    // power cut, a card that answers differently): the reset block stays blank
+    FILE *f = fopen(app_hex, "r");
+    char line[600];
+    int total = 0, stops = 0;
+    if (!f) { printf("cannot open %s\n", app_hex); failures++; return; }
+    while (fgets(line, sizeof(line), f)) total += (line[0] == ':');
+    for (int stop = total / 10; stop < total; stop += total / 10) {
+        reset_all();
+        rewind(f);
+        int n = 0;
+        while (n < stop && fgets(line, sizeof(line), f)) {
+            if (line[0] != ':') continue;
+            int k = 0;
+            for (char *p = line + 1; hexval(p[0]) >= 0 && hexval(p[0]) < 16 && hexval(p[1]) >= 0 && hexval(p[1]) < 16; p += 2) {
+                rec[k++] = (uint8_t)(hexval(p[0]) << 4 | hexval(p[1]));
+            }
+            CHECK(hexflash_write_record(rec) == HEXFLASH_OK);
+            n++;
+        }
+        CHECK(reset_blank());
+        stops++;
+    }
+    fclose(f);
+    printf("reset block last: held through a page rewrite, blank after %d stopped updates\n", stops);
+}
+
 // The target check: an app hex passes, anything else is refused
 static void test_target(const char *app_hex) {
     uint8_t rec[64];
@@ -185,6 +258,7 @@ int main(int argc, char **argv) {
     test_synthetic();
     for (int i = 1; i < argc; i++) test_file(argv[i]);
     for (int i = 1; i < argc; i++) test_target(argv[i]);
+    for (int i = 1; i < argc; i++) test_reset_last(argv[i]);
     printf(failures ? "\n%d FAILURE(S)\n" : "\nALL TESTS PASSED\n", failures);
     return failures != 0;
 }

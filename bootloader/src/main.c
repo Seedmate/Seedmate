@@ -100,13 +100,16 @@ void JumpToApp(void)
     SPI3CON = 0; 
 
     // Write protection until the next reset, which always starts the
-    // bootloader again: its 12 KB (with the state page that says "official")
-    // and the boot flash pages (code and configuration words). A running app
-    // can no longer rewrite them. Each register is set, then locked.
+    // bootloader again: the program flash below the settings page, so its 12 KB
+    // (with the state page that says "official") and the whole app (audit B2:
+    // an app taken over while it runs cannot rewrite itself and stay), and the
+    // boot flash pages (code and configuration words). Only the settings page
+    // stays writable. Each register is set, then locked. The app shows the
+    // result in SETTINGS > MCU SERIAL NUMBER (audit B3).
     nvm_protect(&NVMBWP, _NVMBWP_BWP0_MASK | _NVMBWP_BWP1_MASK | _NVMBWP_BWP2_MASK | _NVMBWP_BWPULOCK_MASK);
     nvm_protect(&NVMBWP, _NVMBWP_BWP0_MASK | _NVMBWP_BWP1_MASK | _NVMBWP_BWP2_MASK);
-    nvm_protect(&NVMPWP, (HEXFLASH_APP_PHYS_BASE & _NVMPWP_PWP_MASK) | _NVMPWP_PWPULOCK_MASK);
-    nvm_protect(&NVMPWP, HEXFLASH_APP_PHYS_BASE & _NVMPWP_PWP_MASK);
+    nvm_protect(&NVMPWP, (HEXFLASH_APP_PHYS_END & _NVMPWP_PWP_MASK) | _NVMPWP_PWPULOCK_MASK);
+    nvm_protect(&NVMPWP, HEXFLASH_APP_PHYS_END & _NVMPWP_PWP_MASK);
     
     // 3. Turn off LED before leaving
     LED = 0;
@@ -393,13 +396,15 @@ int main(void)
     if (err != 0) fail_app_erased(err, error_text(err));
 
     // What was written must be the file the user saw: the card could answer
-    // differently the second time. If not, the app is erased again.
+    // differently the second time. Until the commit below the reset block is
+    // blank, so a failure here or above leaves no app that can start (OK retries).
     uint8_t written_hash[32];
     boot_sha_final(written_hash);
     if (memcmp(written_hash, file_hash, sizeof(file_hash)) != 0) {
-        hexflash_begin();
         fail_app_erased(5, "FILE CHANGED");
     }
+    err = hexflash_commit();        // The reset block, last
+    if (err != 0) fail_app_erased(err, error_text(err));
 
     // Final verification check to ensure Flash is not entirely blank
     if (*(uint32_t *)USER_APP_RESET_ADDRESS == 0xFFFFFFFF) {

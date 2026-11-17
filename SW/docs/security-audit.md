@@ -77,8 +77,8 @@ Second pass on 2026-11-16 over the code added since then: section 7 (five low
 findings, R1-R5; R1 fixed on 2026-11-17, the rest not yet).
 Third pass the same day on the signing code: section 8 (R1 confirmed by a
 test, S1 on power analysis).
-Fourth pass the same day on the bootloader: section 9 (B1 medium, B2-B5 low,
-not fixed).
+Fourth pass the same day on the bootloader: section 9 (B1 medium, fixed on
+2026-11-17; B2-B5 low, B2 and B3 fixed the same day).
 Its Petit FatFs and SD layer: section 10 (P1, P2 low).
 The vendored cryptography against upstream: section 11 (no arithmetic
 changed; the side channel protections were removed). **The list of what to
@@ -625,7 +625,7 @@ the board, and the flash lock in particular has still never run on one.
 
 | Id | Severity | Finding |
 |---|---|---|
-| B1 | Medium | A write pass that fails leaves a half written app that OK then starts, under a screen that says "APP ERASED"; with a card that answers differently the second time, code nobody checked runs once, right after "OFFICIAL FIRMWARE" |
+| B1 | Medium | A write pass that fails leaves a half written app that OK then starts, under a screen that says "APP ERASED"; with a card that answers differently the second time, code nobody checked runs once, right after "OFFICIAL FIRMWARE" **Fixed on 2026-11-17** |
 | B2 | Low | The app area is not write protected, although the same register could cover it at no cost |
 | B3 | Low | The lock is not read back and has not been tried on a board |
 | B4 | Low | Programming is trusted to the error flags: the flash is never read back |
@@ -634,6 +634,11 @@ the board, and the flash lock in particular has still never run on one.
 ### 9.2 Medium
 
 **B1. A failed write pass does not erase what it wrote.**
+Fixed on 2026-11-17 the sturdier way (below): the reset block double-word is
+programmed last, by `hexflash_commit()`, after the hash comparison. Tried on
+a board the same day: card taken out while writing, OK retried the update;
+power cut while writing, the update started again at power-on.
+
 Pass 2 programs the flash record by record. It can stop half way with "SD
 READ ERROR", "FILE DAMAGED" or "FLASH WRITE FAILED" (`process_hex_file(true)`
 returning an error). `fail_app_erased()` then shows "APP ERASED: OK RETRIES",
@@ -667,6 +672,8 @@ interrupted update (a power cut included) leaves anything that can start.
 ### 9.3 Low
 
 **B2. The app area stays writable by the app.**
+Fixed on 2026-11-17: locked at `HEXFLASH_APP_PHYS_END`.
+
 `JumpToApp()` locks NVMPWP at `HEXFLASH_APP_PHYS_BASE`: the bootloader and
 its state page are protected, the app is not. An app that is taken over
 while it runs (a bug like C1) can rewrite itself and stay, and the state
@@ -683,6 +690,10 @@ the manual's wording on a boundary that is the first address of a page
 leaves room for doubt.
 
 **B3. The lock is taken on trust.**
+Fixed on 2026-11-17: SETTINGS > MCU SERIAL NUMBER reads it back. Seen on a
+board the same day: "FLASH LOCK OK" with the B2 limit, and a setting still saves;
+"FLASH NOT LOCKED" with a test bootloader locking at the old limit.
+
 `nvm_protect()` writes the registers and the jump follows; nothing reads
 them back, and per `pending.md` this code has not run on a board yet. If the
 unlock sequence did not take (the keys and the write are separate
@@ -902,7 +913,7 @@ included, being told what differs from the library they know.
 ## 12. Work list from the passes of 2026-11-16
 
 Everything found in sections 7 to 11, in the order suggested for fixing it.
-Done so far: item 1 (R1, 2026-11-17). "Open" means the user has not decided whether to do
+Done so far: items 1 (R1), 3 (B3), 13 (B1) and 14 (B2), 2026-11-17. "Open" means the user has not decided whether to do
 it. Each fix needs the build, the memory delta, the host tests and an entry
 in `docs/validation/firmware_validation.html` where a device test applies.
 
@@ -912,7 +923,7 @@ in `docs/validation/firmware_validation.html` where a device test applies.
 |---|---|---|---|---|
 | 1 | R1 | **Done on 2026-11-17**: `amount_verified` (an amount read and not from WITNESS_UTXO) sets `amounts_unverified` and refuses legacy; `OWN-legacy_prev_tx_bad_vout` now "LEGACY NEEDS PREV TX" in the legacy mode, its gap removed. Was: use `in.amount_from_witness` instead of `in.prev_tx == NULL` for `amounts_unverified` and for "LEGACY NEEDS PREV TX" | `psbt_plan_signing()` in `main.c` | `OWN-legacy_prev_tx_bad_vout` is refused in the legacy mode and marked unverified in the others; remove its line from `test/psbt/malicious_gaps.txt`, run `test_malicious.exe --update` and review the diff |
 | 2 | R2 | Measure the stack: STACK PEAK after VAULT > NEW ENTRY > MULTISIG DESCRIPTOR > FROM QR with a BBQr Z code, and after SIGN > FROM QR with a BBQr Z PSBT. Add the guard: `app_tasks()` stops with "STACK OVERFLOW" when the word at `stack_floor()` is not `STACK_FILL` | `main.c` (`app_tasks()`, `stack_paint()`); device | Figures written in `pending.md`; the guard shown to fire in a debug build |
-| 3 | B3 | Show in SETTINGS > MCU SERIAL NUMBER whether NVMPWP and NVMBWP hold the values the bootloader sets with both unlock bits clear: "FLASH LOCK OK" green / "FLASH NOT LOCKED" red | `main.c` or `settings.c`; values in `bootloader/src/main.c` `JumpToApp()` | Seen on a board started through the bootloader (and "NOT LOCKED" when run from the debugger) |
+| 3 | B3 | **Done on 2026-11-17** (+124 B): "FLASH LOCK OK" / "FLASH NOT LOCKED" under the stack peak, device tests BOOT-16 and SET-06. Was: show in SETTINGS > MCU SERIAL NUMBER whether NVMPWP and NVMBWP hold the values the bootloader sets with both unlock bits clear: "FLASH LOCK OK" green / "FLASH NOT LOCKED" red | `main.c` or `settings.c`; values in `bootloader/src/main.c` `JumpToApp()` | Seen on a board started through the bootloader (and "NOT LOCKED" when run from the debugger) |
 | 4 | R3 | When `single_purpose_refresh()` is cancelled in `config_run()`, put the mode back as well (or clamp `bip84_script` to the mode's range) | `config_run()` in `main.c` | Multisig can never be left with LEGACY or TAPROOT |
 | 5 | R4 | BBQr: set encoding, type, count and part length only after the first part decoded. UR: decode a single part code only while no fountain part was received, or `fountain_init()` when it fails | `bbqr_add_part()` in `bbqr.c`; `scan_ur_message()` in `main.c` | New cases in `test/bbqr/`: a damaged first code followed by a good series completes |
 | 6 | R5 | SD file list: skip a file whose directory position is 99 or more instead of ending the list, and say "MORE FILES NOT SHOWN" | `sd_pick_file()` in `main.c` | Case in `test/sdfiles/` or a device test with over 99 files |
@@ -923,19 +934,19 @@ in `docs/validation/firmware_validation.html` where a device test applies.
 | 11 | I2 | **Open** (the user has not decided; it is of the same family as item 10). Schnorr with auxiliary randomness from the key press pool instead of zeros | `psbt_taproot_sign()` | The byte-identical comparison with the Python signer would have to pass the same aux |
 | 12 | S3 | **Open.** Another label for an output to our own key of the other mode (single sig key while in multisig, and the reverse) | `psbt_check_owner()`, `psbt_output_kind()` | - |
 
-### Bootloader (`bootloader/src`, ask before touching; 96 B free; bump nothing: BOOT_VERSION stays 1.0 until units ship)
+### Bootloader (`bootloader/src`, ask before touching; full since B1 and B2; bump nothing: BOOT_VERSION stays 1.0 until units ship)
 
 | # | Id | What to do | Where | Done when |
 |---|---|---|---|---|
-| 13 | B1 | `fail_app_erased()` erases the page of the reset block (`nvm_erase_page(HEXFLASH_APP_PHYS_RESET & ~(HEXFLASH_PAGE_SIZE - 1u))`) before `finish()`, so OK retries instead of starting a half written app. Better if it fits: program the reset double-word last, after the hash comparison | `boot_ui.c`, `hex_flash.c` | Device: pull the card during "WRITING THE NEW APP"; the screen says erased and OK retries. Host case in `bootloader/test/test_hex_flash.c` if the logic moves to `hex_flash.c` |
-| 14 | B2 | Lock NVMPWP at `HEXFLASH_APP_PHYS_END` instead of `HEXFLASH_APP_PHYS_BASE` (the app area is protected too, the settings page is not) | `JumpToApp()` in `main.c` | Device: a setting still saves; item 3 shows the new value |
+| 13 | B1 | **Done on 2026-11-17**, the sturdier way: `hex_flash.c` keeps the reset block double-word in RAM (`reset_dw`) and `hexflash_commit()` programs it after the hash comparison; the extra erase on "FILE CHANGED" went (the reset block is still blank there). +92 B, 4 B left. Host test: the reset block stays blank through a page rewrite and after an update stopped at every tenth of the app's records. Was: `fail_app_erased()` erases the page of the reset block (`nvm_erase_page(HEXFLASH_APP_PHYS_RESET & ~(HEXFLASH_PAGE_SIZE - 1u))`) before `finish()`, so OK retries instead of starting a half written app. Better if it fits: program the reset double-word last, after the hash comparison | `boot_ui.c`, `hex_flash.c` | Device: pull the card during "WRITING THE NEW APP"; the screen says erased and OK retries. Host case in `bootloader/test/test_hex_flash.c` if the logic moves to `hex_flash.c` |
+| 14 | B2 | **Done on 2026-11-17**: locked at `HEXFLASH_APP_PHYS_END`; the bootloader is now full (the address takes one instruction more). Device test BOOT-16. Was: lock NVMPWP at `HEXFLASH_APP_PHYS_END` instead of `HEXFLASH_APP_PHYS_BASE` (the app area is protected too, the settings page is not) | `JumpToApp()` in `main.c` | Device: a setting still saves; item 3 shows the new value |
 | 15 | B5 | The checking pass refuses what the writing pass would: an extended address record whose length is not 2, a line of 190 characters or more, a character that is not a hex digit | `hexflash_check_record()`, `process_hex_file()`, `ConvertAsciiToHex()` | Cases in `test_hex_flash.c` |
 | 16 | P1 | `pf_mount()` returns `FR_NO_FILESYSTEM` unless sectors per cluster is a power of two (mark the edit: vendored) | `pff.c` | A card image with zero there says "SD CARD NOT FAT16" |
 | 17 | P2 | Refuse an UPDATE.HEX over 1 MB before reading it | `process_hex_file()` | "FILE DAMAGED" at once |
 | 18 | B4 | When there is room: compare each double-word after programming it | `program_dw()` in `hex_flash.c` | Host test with a mock that corrupts one write |
 
-Items 13 to 17 need about 100 B in a bootloader with 96 B free: 13 first,
-then 14 (no code), then whatever fits; the rest wait for space.
+Item 13 took 92 of the 96 B free and item 14 the last 4 (2026-11-17): the
+bootloader is full, 15 to 17 wait for space.
 
 ### Signing page and procedure (`tools/lms_sign.html`, `SIGNATURES.md`; both in `signatures/` since 2026-11-17)
 

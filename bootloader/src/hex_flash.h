@@ -53,8 +53,15 @@ hexflash_status_t hexflash_begin(void);
 hexflash_status_t hexflash_check_record(const uint8_t *rec);
 
 // Programs one binary HEX record: length, address (2 bytes), type, data,
-// checksum. Records outside the application area are ignored.
+// checksum. Records outside the application area are ignored. The double-word
+// at HEXFLASH_APP_PHYS_RESET is only kept in RAM: see hexflash_commit().
 hexflash_status_t hexflash_write_record(const uint8_t *rec);
+
+// Programs the reset block double-word, last, once the whole file was written
+// and found to be the one checked. Before this the app area has no reset
+// vector, so app_missing() is true: an update that stopped half way is retried
+// and never started.
+hexflash_status_t hexflash_commit(void);
 
 // Flash access layer. Implemented in hex_flash.c for the PIC32MM; a host
 // test build (HEXFLASH_HOST_TEST) provides its own versions.
