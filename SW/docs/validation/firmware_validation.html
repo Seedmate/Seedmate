@@ -212,9 +212,9 @@ const TESTS = [
   { id: 'BOOT-05', sec: 'BOOT', rev: 1, title: 'Forced update (OK + BACK at power-on)',
     steps: ['Hold OK + BACK and power on, with an update card inserted.'],
     expect: ['The LED flickers fast 10 times and the update flow starts (hash, signature, confirmation).'] },
-  { id: 'BOOT-06', sec: 'BOOT', rev: 1, title: 'Damaged or foreign HEX file',
-    steps: ['Try an UPDATE.HEX truncated in the middle.', 'Try the HEX of another device or flash layout.'],
-    expect: ['The whole file is checked before anything is erased: an error is shown and the installed firmware still works.', 'A foreign HEX gives "HEX NOT FOR THIS DEVICE" (9 LED blinks).'] },
+  { id: 'BOOT-06', sec: 'BOOT', rev: 2, title: 'Damaged or foreign HEX file',
+    steps: ['Run test/bootfiles/build_test.bat (it writes test/bootfiles/out/ and checks each file on the PC).', 'Copy each BOOT06_*.hex of out/ in turn to the SD card as UPDATE.HEX (with no UPDATE.SIG) and start an update (SETTINGS > UPDATE FIRMWARE, or OK + BACK at power-on).'],
+    expect: ['truncated, bad_checksum, short_record, not_a_hex: "FILE DAMAGED" (5 LED blinks).', 'bootloader_area, config_words, settings_page, past_the_end, no_reset_block: "HEX NOT FOR THIS DEVICE" (9 LED blinks).', 'Every one is refused while "CHECKING UPDATE.HEX", before anything is erased: the screen says "APP NOT TOUCHED" and OK starts the installed firmware, which still works.'] },
   { id: 'BOOT-07', sec: 'BOOT', rev: 1, title: 'Settings survive a firmware update',
     steps: ['Change two settings (e.g. AUTO UNLOAD and KEF ITERATIONS).', 'Install a firmware update.'],
     expect: ['Both settings keep their values after the update.'] },
@@ -245,6 +245,9 @@ const TESTS = [
   { id: 'BOOT-16', sec: 'BOOT', rev: 2, title: 'Flash write protection',
     steps: ['Power on normally (through the bootloader) and open SETTINGS > MCU SERIAL NUMBER.', 'Change a setting (for example AUTO UNLOAD) and power off and on.', 'With the PICkit, program a test bootloader that locks only below 0x1D003000 (the limit before audit B2), start, and open the same screen; then program the real one again.'],
     expect: ['Green "FLASH LOCK OK": the program flash below the settings page and the boot flash are write protected and locked (audit B2, B3).', 'The setting is saved and kept: the settings page is outside the lock (no "SETTING FAILED").', 'Red "FLASH NOT LOCKED": the check does not always say OK. (The app always starts through the bootloader, also with the debugger, so a test bootloader is the only way to see it.)'] },
+  { id: 'BOOT-17', sec: 'BOOT', rev: 1, title: 'Random code with valid addresses',
+    steps: ['Copy test/bootfiles/out/BOOT17_junk_app.hex to the SD card as UPDATE.HEX (no UPDATE.SIG) and start an update.', 'Choose to install it anyway, then OK.', 'Power off, hold OK + BACK at power-on with a good UPDATE.HEX on the card and update.'],
+    expect: ['It passes the file check (its addresses and reset block are valid) and only the signature tells: red "UNOFFICIAL FIRMWARE / NO UPDATE.SIG ON THE CARD", "INSTALL IT ANYWAY?".', 'After it, every power-on shows "WARNING / UNOFFICIAL FIRMWARE" with the file hash; OK starts the random code, which does nothing useful (frozen or blank screen, or back at the warning). The bootloader and its state page cannot be touched by it (flash lock, BOOT-16).', 'The forced update recovers the device.'] },
 
   // ---------------------------------------------------------------- SET
   { id: 'SET-01', sec: 'SET', rev: 1, title: 'Factory defaults',
@@ -537,6 +540,9 @@ const TESTS = [
   { id: 'QR-06', sec: 'QR', rev: 1, title: 'BBQr: a second series and a new start',
     steps: ['SIGN > FROM QR: show a BBQr series in the animator and, half way, switch to the series of another PSBT.', 'BACK, SIGN > FROM QR again and show one series to the end.'],
     expect: ['The codes of the other series are named on screen ("BBQR OF ANOTHER FILE" or "BBQR PARTS DO NOT MATCH") and nothing is loaded.', 'After BACK the new scan reads its series and shows the review of that PSBT.'] },
+  { id: 'QR-07', sec: 'QR', rev: 1, title: 'Scanner setting codes are ignored',
+    steps: ['TOOLS > QR READER: scan setting codes of the GM861 manual that would break the scanner: a baud rate (9600bps, section 2.1), Continuous mode, and the end character off or on.', 'Then scan a seed QR, a UR PSBT (SIGN > FROM QR) and an address (SCAN ADDRESS); power off and on and scan again.'],
+    expect: ['The scanner does not change: no beep of a setting accepted, and every later scan, also after power off, works at once at 115200 in command mode.', 'Fails until the scanner is locked against setting codes (pending.md, section 1).'] },
 
   // ---------------------------------------------------------------- VLT
   { id: 'VLT-01', sec: 'VLT', rev: 1, title: 'Create and open the vault',
