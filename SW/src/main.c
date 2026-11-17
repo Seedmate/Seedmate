@@ -7106,6 +7106,21 @@ static bool gm861_write_zone(uint16_t addr, uint8_t value) {
     return gm861_receive(reply, sizeof(reply)) && memcmp(reply, ack, sizeof(ack)) == 0;
 }
 
+// Zone bit 0x0003 bit 1 (manual 1.6, "Setup Code"): set, the scanner ignores
+// its own setting codes, so a QR on a screen or a sticker cannot change its
+// speed, mode or tail and leave it useless. Written to its RAM only, before
+// every scan: a reset of the scanner opens them again. With no reply (a
+// factory sensor, still at 9600 bps) nothing is done, so the setup codes of
+// docs/scanner-setup.md can be scanned.
+#define GM861_ZONE_SETUP        0x0003
+#define GM861_SETUP_CODES_OFF   0x02
+static void gm861_lock_setting_codes(void) {
+    uint8_t v;
+    if (gm861_read_zone(GM861_ZONE_SETUP, &v) && !(v & GM861_SETUP_CODES_OFF)) {
+        (void)gm861_write_zone(GM861_ZONE_SETUP, (uint8_t)(v | GM861_SETUP_CODES_OFF));
+    }
+}
+
 // A zone bit changed for the UR scan, with the value to put back
 typedef struct {
     uint16_t addr;
@@ -7273,6 +7288,7 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
     // command triggered mode and the scan uses triggers instead.
     gm861_backup_t gm861_regs[4];               // Restored in this order: mode first
     memset(gm861_regs, 0, sizeof(gm861_regs));
+    gm861_lock_setting_codes();                 // Continuous mode reads whatever is shown
     bool continuous =
         gm861_override(&gm861_regs[1], GM861_ZONE_OUTPUT, GM861_TAIL_TYPE_MASK | GM861_TAIL_ENABLE, GM861_TAIL_ENABLE) &&
         gm861_override(&gm861_regs[2], GM861_ZONE_BREAK, 0xFF, 0x00) &&
@@ -7784,6 +7800,7 @@ static int qr_read_raw(uint8_t *out, uint32_t cap, bool keep_tail) {
     bool ack_checked = false, too_long = false;
     uint8_t b;
 
+    gm861_lock_setting_codes();
     if (U2STAbits.OERR) U2STAbits.OERR = 0;
     while (U2STAbits.URXDA) (void)U2RXREG;
     scan_rx_start();
