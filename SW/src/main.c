@@ -99,6 +99,7 @@
 
 // The idle timer of AUTO UNLOAD runs in app_tasks(): every wait for a key calls it
 static void app_tasks(void);
+static void stack_check(void);
 static void idle_touch(void);
 static bool idle_expired(void);
 
@@ -539,6 +540,7 @@ int card_view_page = 0;
 #define LED_BUSY_MS 150u
 static void led_busy(void) {
     static uint32_t last;
+    stack_check();                  // Long operations are checked while they run
     idle_touch();                   // Working: this is not idle time
     if ((uint32_t)(_CP0_GET_COUNT() - last) >= LED_BUSY_MS * (CPU_CLOCK_FREQUENCY / 2000u)) {
         last = _CP0_GET_COUNT();
@@ -910,6 +912,7 @@ static bool idle_expired(void) {
 }
 
 static void app_tasks(void) {
+    stack_check();                  // Every wait for a key
     if (idle_jump_set && !idle_hold && idle_expired()) longjmp(idle_jump, 1);
 }
 
@@ -10773,6 +10776,21 @@ uint32_t stack_peak_bytes(void) {
     uint32_t used = (uint32_t)((uintptr_t)_stack - (uintptr_t)p);
     if (used > stack_peak) stack_peak = used;
     return stack_peak;
+}
+
+// Stack guard (audit R2): the lowest stack word is painted at power-on and by
+// every stack_wipe(), and nothing but a stack that grew past its limit writes
+// it. Checked in app_tasks() (every wait for a key) and led_busy() (every
+// progress step), so not at the moment of the overflow but at the next of
+// these: below the limit is the unused 512 B heap, then .bss. RAM can no longer
+// be trusted, so the device stops and says so, like tc_fault_handler().
+static __attribute__((noinline)) void stack_check(void) {
+    if (*stack_floor() == STACK_FILL) return;
+    black_screen();
+    draw_title("STACK OVERFLOW", ST7735_RED);
+    text_at(5, 30, "MEMORY MAY BE DAMAGED", ST7735_RED);
+    text_at(5, 45, "TURN THE DEVICE OFF", ST7735_WHITE);
+    while (1) { SYS_Tasks(); }
 }
 
 uint32_t stack_size_bytes(void) {

@@ -363,6 +363,12 @@ hostile PSBT test suite: a legacy input with a valid previous transaction,
 refused.
 
 **R2. Stack depth of the BBQr inflate is not measured.**
+Guard added on 2026-11-17 (`stack_check()`). Measured the same day on a board:
+the vault path with MSDESC.TXT as BBQr Z peaks at 5,968 of 8,264 B (72%,
+2,296 B left, plus the unused 512 B heap below); SIGN > FROM QR with a
+multisig BBQr Z PSBT, signed, 5,032 B (61%). Enough margin: R2 is closed.
+The guard seen on the board with a test build that fires at once (SEC-04).
+
 `bbqr_finish()` runs at the end of `scan_ur_message()`, whose frame still
 holds `burst_buffer` (850 B) and `decoded_bytes` (512 B). tinf adds about
 1.7 KB (two trees of 612 B, `lengths[320]`, its state). That is about 3.3 KB
@@ -913,7 +919,7 @@ included, being told what differs from the library they know.
 ## 12. Work list from the passes of 2026-11-16
 
 Everything found in sections 7 to 11, in the order suggested for fixing it.
-Done so far: items 1 (R1), 3 (B3), 13 (B1) and 14 (B2), 2026-11-17. "Open" means the user has not decided whether to do
+Done so far: items 1 (R1), 3 (B3), 13 (B1) and 14 (B2), and 2 (R2), 2026-11-17. "Open" means the user has not decided whether to do
 it. Each fix needs the build, the memory delta, the host tests and an entry
 in `docs/validation/firmware_validation.html` where a device test applies.
 
@@ -922,7 +928,7 @@ in `docs/validation/firmware_validation.html` where a device test applies.
 | # | Id | What to do | Where | Done when |
 |---|---|---|---|---|
 | 1 | R1 | **Done on 2026-11-17**: `amount_verified` (an amount read and not from WITNESS_UTXO) sets `amounts_unverified` and refuses legacy; `OWN-legacy_prev_tx_bad_vout` now "LEGACY NEEDS PREV TX" in the legacy mode, its gap removed. Was: use `in.amount_from_witness` instead of `in.prev_tx == NULL` for `amounts_unverified` and for "LEGACY NEEDS PREV TX" | `psbt_plan_signing()` in `main.c` | `OWN-legacy_prev_tx_bad_vout` is refused in the legacy mode and marked unverified in the others; remove its line from `test/psbt/malicious_gaps.txt`, run `test_malicious.exe --update` and review the diff |
-| 2 | R2 | Measure the stack: STACK PEAK after VAULT > NEW ENTRY > MULTISIG DESCRIPTOR > FROM QR with a BBQr Z code, and after SIGN > FROM QR with a BBQr Z PSBT. Add the guard: `app_tasks()` stops with "STACK OVERFLOW" when the word at `stack_floor()` is not `STACK_FILL` | `main.c` (`app_tasks()`, `stack_paint()`); device | Figures written in `pending.md`; the guard shown to fire in a debug build |
+| 2 | R2 | **Done on 2026-11-17**: measured on a board (vault path 5,968 B, SIGN 5,032 B of 8,264). Guard (+148 B): `stack_check()` in `app_tasks()` and `led_busy()` stops with "STACK OVERFLOW" when the lowest stack word lost `STACK_FILL`; device test SEC-04. Was: measure the stack: STACK PEAK after VAULT > NEW ENTRY > MULTISIG DESCRIPTOR > FROM QR with a BBQr Z code, and after SIGN > FROM QR with a BBQr Z PSBT. Add the guard: `app_tasks()` stops with "STACK OVERFLOW" when the word at `stack_floor()` is not `STACK_FILL` | `main.c` (`app_tasks()`, `stack_paint()`); device | Figures written in `pending.md`; the guard shown to fire in a debug build |
 | 3 | B3 | **Done on 2026-11-17** (+124 B): "FLASH LOCK OK" / "FLASH NOT LOCKED" under the stack peak, device tests BOOT-16 and SET-06. Was: show in SETTINGS > MCU SERIAL NUMBER whether NVMPWP and NVMBWP hold the values the bootloader sets with both unlock bits clear: "FLASH LOCK OK" green / "FLASH NOT LOCKED" red | `main.c` or `settings.c`; values in `bootloader/src/main.c` `JumpToApp()` | Seen on a board started through the bootloader (and "NOT LOCKED" when run from the debugger) |
 | 4 | R3 | When `single_purpose_refresh()` is cancelled in `config_run()`, put the mode back as well (or clamp `bip84_script` to the mode's range) | `config_run()` in `main.c` | Multisig can never be left with LEGACY or TAPROOT |
 | 5 | R4 | BBQr: set encoding, type, count and part length only after the first part decoded. UR: decode a single part code only while no fountain part was received, or `fountain_init()` when it fails | `bbqr_add_part()` in `bbqr.c`; `scan_ur_message()` in `main.c` | New cases in `test/bbqr/`: a damaged first code followed by a good series completes |
