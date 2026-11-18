@@ -12191,10 +12191,7 @@ int SSS_N = 9;
             case CONFIRM_WIPE_SD:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        black_screen();
-                        text_at(10, 30, "WIPING ENTIRE SD...", ST7735_RED);
-                        text_at(10, 50, "PLEASE WAIT", ST7735_CYAN);
-                        estado = PROCESS_WIPE_SD;
+                        estado = PROCESS_WIPE_SD;       // It draws its own screen
                         break;
                     case BACK_BT:
                         // Cancel and return to erase menu
@@ -12259,60 +12256,55 @@ int SSS_N = 9;
             }
 
             case PROCESS_WIPE_SD: {
-                uint8_t secure_wipe_buf[512]; 
-                
-                // Use alternating bit pattern (10101010) to prevent FTL compression 
-                for (int i = 0; i < 512; i++) {
-                    secure_wipe_buf[i] = 0xAA; 
-                }
-                
-                for (uint32_t current_sector = 0; current_sector < wipe_total_sectors; current_sector++) {
-                    SYS_Tasks(); // Keep MCU watchdog and tasks running
-                    idle_touch();                   // Can take hours on a big card
-                    
-                    if ((current_sector % 256) == 0) {
-                        LED = 1 - LED; 
+                // 0xAA in every sector from sector 0 (alternating bits, nothing for
+                // the card to compress): the seeds, the vault and the marker (the
+                // first 1 MB) go in the first seconds, the rest can take hours, so
+                // BACK stops it and says where
+                char line[32];
+                uint32_t sector = 0, step = wipe_total_sectors / 140u + 1u;
+                bool write_error = false;
+                black_screen();
+                draw_title("WIPE ALL CARD", ST7735_RED);
+                text_at(5, 25, "WRITING EVERY SECTOR", ST7735_CYAN);
+                rectan(9, 92, 151, 97, WHITE);
+                grid_labels("STOP", NULL, NULL, NULL, NULL, NULL);
+                memset(buffer, 0xAA, sizeof(buffer));
+                for (; sector < wipe_total_sectors && BT1 != 0; sector++) {
+                    SYS_Tasks();
+                    led_busy();                     // Also keeps AUTO UNLOAD away
+                    if (!sd_write_block(sector, buffer)) {
+                        write_error = true;
+                        break;
                     }
-
-                    if (!sd_write_block(current_sector, secure_wipe_buf)) {
-                        text_at(10, 90, "PHYSICAL WRITE ERROR", ST7735_RED);
-                        LED = 0;
-                        print_cursor_grid();
-                        print_ok();
-                        estado = END_MODE;
-                        goto wipe_end; 
-                    }
-                    
-                    // Update UI every 1000 sectors (~0.5 MB)
-                    if ((current_sector % 1000) == 0) {
-                        char progress_txt[32];
-                        uint32_t mb_erased = current_sector / 2048;
-                        
-                        size_t len1 = u16_to_str((unsigned int)mb_erased, progress_txt);
-                        progress_txt[len1] = ' ';
-                        progress_txt[len1 + 1] = '/';
-                        progress_txt[len1 + 2] = ' ';
-                        
-                        size_t len2 = u16_to_str((unsigned int)wipe_mb_total, &progress_txt[len1 + 3]);
-                        int pos = len1 + 3 + len2;
-                        
-                        progress_txt[pos++] = ' ';
-                        progress_txt[pos++] = 'M';
-                        progress_txt[pos++] = 'B';
-                        progress_txt[pos] = '\0';
-                        
-                        rectan(10, 70, 159, 78, BLACK); 
-                        text_at(10, 70, progress_txt, ST7735_CYAN);
+                    if ((sector % 1000u) == 0) {    // About every 0.5 MB
+                        u16_to_str(sector / 2048u, line);
+                        strcat(line, " / ");
+                        strcat_num(line, wipe_mb_total);
+                        strcat(line, " MB");
+                        progress_line(40, line);
+                        rectan(10, 93, 10 + sector / step, 96, ST7735_GREEN);
                     }
                 }
-                
-                text_at(10, 90, "SECURE WIPE FINISHED", ST7735_GREEN);
-
-            wipe_end:
-                LED = 0; 
+                led_done();
+                memzero(buffer, sizeof(buffer));
+                if (write_error) {
+                    text_at(5, 60, "PHYSICAL WRITE ERROR", ST7735_RED);
+                } else if (sector < wipe_total_sectors) {
+                    while (BT1 == 0) SYS_Tasks();   // STOP released before the result
+                    strcpy(line, "WIPE STOPPED AT ");
+                    strcat_num(line, sector / 2048u);
+                    strcat(line, " MB");
+                    text_at(5, 60, line, ST7735_RED);
+                    if (sector <= cSD_MARKER_SECTOR) text_at(5, 70, "SEEDS MAY REMAIN", ST7735_YELLOW);
+                } else {
+                    rectan(10, 93, 150, 96, ST7735_GREEN);
+                    text_at(5, 60, "SECURE WIPE FINISHED", ST7735_GREEN);
+                }
+                rectan(63, 105, 153, 125, BLACK);   // STOP gives way to OK
                 print_cursor_grid();
-                print_ok(); 
-                estado = END_MODE; 
+                print_ok();
+                pulsed_bt = NONE;
+                estado = END_MODE;
                 break;
             }
 
