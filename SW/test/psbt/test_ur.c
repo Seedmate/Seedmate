@@ -170,14 +170,15 @@ static void test_account(void) {
     for (int i = 0; i < UR_ACCOUNT_CASES; i++) {
         const ur_account_case_t *c = &ur_account_cases[i];
         ur_account_key_t key = { c->master_fp, c->parent_fp, c->pub, c->chain, c->path, c->path_len, c->multisig, c->nested,
-                                 c->taproot, c->legacy };
+                                 c->taproot, c->legacy, c->testnet };
         uint32_t len = ur_account_cbor(&key, cbor, sizeof(cbor));
         CHECK(len == c->cbor_len && memcmp(cbor, c->cbor, len) == 0);
         CHECK(ur_account_cbor(&key, cbor, len - 1) == 0);       // Too small: refused
 
         CHECK(ur_encoder_init_type(&e, "CRYPTO-ACCOUNT", cbor, len, false, 1000) && e.seq_len == 1);
         uint32_t chars = ur_encoder_part(&e, 1, text, sizeof(text));
-        CHECK(chars > 0 && chars <= 279);                       // Version 8, ECC L, alphanumeric
+        // Version 8 (ECC L, alphanumeric): 279; the device takes version 9 (335) past it, testnet only
+        CHECK(chars > 0 && chars <= (c->testnet ? 335u : 279u));
         CHECK(strncmp(text, "UR:CRYPTO-ACCOUNT/", 18) == 0 && strchr(text + 18, '/') == NULL);
         CHECK(decode_words(text, decoded, sizeof(decoded)) == (int)len && memcmp(decoded, cbor, len) == 0);
         printf("crypto-account %d: %u CBOR bytes, %u chars\n", i, len, chars);

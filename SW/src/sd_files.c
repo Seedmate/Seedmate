@@ -101,10 +101,15 @@ DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff) {
 // ============================================================================
 
 bool sd_files_mount(void) {
-    budget_reset(SD_FILES_FILE_BUDGET);
-    f_mount(NULL, "", 0);
-    card_ready = false;
-    return f_mount(&fs, "", 1) == FR_OK;    // Initializes the card and reads the volume now
+    // A card just put in (the vault card changed for a file card) often does
+    // not answer its first start: once more, as vault_load() does
+    for (int attempt = 0; attempt < 2; attempt++) {
+        budget_reset(SD_FILES_FILE_BUDGET);
+        f_mount(NULL, "", 0);
+        card_ready = false;
+        if (f_mount(&fs, "", 1) == FR_OK) return true;  // Initializes the card and reads the volume now
+    }
+    return false;
 }
 
 void sd_files_unmount(void) {

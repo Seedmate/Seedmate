@@ -37,6 +37,7 @@
 #include "crypto/ripemd160.h"
 #include "crypto/segwit_addr.h"
 #include "ms_nested_vectors.h"      // Expected multisig addresses (gen_ms_nested.py)
+#include "testnet_vectors.h"        // The testnet wallet and its addresses (gen_testnet.py)
 
 // --- What the extracted code needs from main.c ------------------------------
 #define PSBT_VIEW_LINE_CHARS 26
@@ -99,6 +100,7 @@ static HDNode bip84_receive_node_cache, bip84_change_node_cache;
 static HDNode native_receive, native_change, nested_receive, nested_change;    // m/84' and m/49'
 static HDNode taproot_receive, taproot_change;                                  // m/86'
 static HDNode legacy_receive, legacy_change;                                    // m/44'
+static HDNode testnet_receive, testnet_change;                                  // m/84'/1'/0'
 static HDNode ms_receive_node_cache, ms_change_node_cache;
 static HDNode ms2_receive, ms2_change, ms1_receive, ms1_change;     // m/48'/0'/0'/2' and /1'
 static bool ms_account_cached = true;
@@ -143,6 +145,15 @@ static void setup_wallet(void) {
     hdnode_private_ckd(&native_receive, 0);
     native_change = n;
     hdnode_private_ckd(&native_change, 1);
+
+    n = root;                                   // m/84'/1'/0' for the testnet mode
+    hdnode_private_ckd(&n, 84 | H);
+    hdnode_private_ckd(&n, 1 | H);
+    hdnode_private_ckd(&n, 0 | H);
+    testnet_receive = n;
+    hdnode_private_ckd(&testnet_receive, 0);
+    testnet_change = n;
+    hdnode_private_ckd(&testnet_change, 1);
 
     n = root;                                   // m/49'/0'/0' for the nested mode
     hdnode_private_ckd(&n, 49 | H);
@@ -223,13 +234,31 @@ static int check_ms_addresses(void) {
             bad++;
         }
     }
-    if (bad == 0) printf("Multisig addresses: receive and change 0..%d of the native and nested wallets match\n", MSA_N - 1);
+    // Testnet wallet (tpub keys): tb1q addresses
+    desc_wallet_t tw;
+    if (desc_parse(mst_desc, (uint32_t)strlen(mst_desc), &tw) != DESC_OK || !tw.testnet) {
+        printf("ms addresses: the testnet descriptor is not a testnet wallet\n");
+        return bad + 1;
+    }
+    for (uint32_t ch = 0; ch < 2; ch++) {
+        for (uint32_t i = 0; i < 2; i++) {
+            char addr[76];
+            if (!ms_wallet_address(&tw, ch, i, addr, sizeof(addr)) || strcmp(addr, mst_addr[ch][i]) != 0) {
+                printf("ms addresses: testnet %s %u gives %s\n", ch ? "change" : "receive", (unsigned)i, addr);
+                bad++;
+            }
+        }
+    }
+    if (bad == 0) printf("Multisig addresses: receive and change 0..%d of the native and nested wallets, "
+                         "and 0..1 of the testnet one, match\n", MSA_N - 1);
     return bad;
 }
 
 // --- One run ---------------------------------------------------------------------
-enum { MODE_SINGLE, MODE_MULTI, MODE_MULTI_DESC, MODE_NESTED, MODE_NMULTI, MODE_NMULTI_DESC, MODE_TAPROOT, MODE_LEGACY, MODE_COUNT };
-static const char *mode_name[MODE_COUNT] = {"single", "multi", "multi+desc", "nested", "nmulti", "nmulti+desc", "taproot", "legacy"};
+enum { MODE_SINGLE, MODE_MULTI, MODE_MULTI_DESC, MODE_NESTED, MODE_NMULTI, MODE_NMULTI_DESC, MODE_TAPROOT, MODE_LEGACY,
+       MODE_TESTNET, MODE_COUNT };
+static const char *mode_name[MODE_COUNT] = {"single", "multi", "multi+desc", "nested", "nmulti", "nmulti+desc", "taproot", "legacy",
+                                            "testnet"};
 
 static bool mode_desc(int mode) { return mode == MODE_MULTI_DESC || mode == MODE_NMULTI_DESC; }
 
@@ -252,6 +281,11 @@ static void run(const uint8_t *data, uint32_t len, int mode, outcome_t *r) {
     bip84_script = nested ? SCRIPT_NESTED : taproot ? SCRIPT_TAPROOT : legacy ? SCRIPT_LEGACY : SCRIPT_NATIVE;
     bip84_receive_node_cache = nested ? nested_receive : taproot ? taproot_receive : legacy ? legacy_receive : native_receive;
     bip84_change_node_cache = nested ? nested_change : taproot ? taproot_change : legacy ? legacy_change : native_change;
+    bip84_testnet = mode == MODE_TESTNET;       // Native single sig at m/84'/1'/0'
+    if (bip84_testnet) {
+        bip84_receive_node_cache = testnet_receive;
+        bip84_change_node_cache = testnet_change;
+    }
     ms_receive_node_cache = nested ? ms1_receive : ms2_receive;
     ms_change_node_cache = nested ? ms1_change : ms2_change;
     ms_wallet_loaded = mode_desc(mode);

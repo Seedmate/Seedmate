@@ -18,7 +18,14 @@ static uint32_t reads;                  // Sectors read from the card
 
 #define CHECK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); failures++; } } while (0)
 
-bool sd_init(void) { return card != NULL; }
+static int init_fails = 0;              // Starts that fail first (a card just put in)
+bool sd_init(void) {
+    if (init_fails > 0) {
+        init_fails--;
+        return false;
+    }
+    return card != NULL;
+}
 DWORD sd_host_sector_count(void) { return card_sectors; }
 void sd_files_host_no_budget(void);
 
@@ -184,6 +191,15 @@ static void run_card_swap(void) {
     CHECK(sd_files_mount());
     CHECK(count_psbts() == 3);
     sd_files_unmount();
+
+    // Another card put in: its first start fails, the mount tries again
+    init_fails = 1;
+    CHECK(sd_files_mount());
+    CHECK(count_psbts() == 3);
+    init_fails = 2;                         // Twice: given up, no endless retry
+    CHECK(!sd_files_mount());
+    init_fails = 0;
+    sd_files_unmount();
 }
 
 // A card that answers garbage (taken out) can describe a directory whose
@@ -250,9 +266,58 @@ static void run_sorted(void) {
     sd_files_unmount();
 }
 
+// The list of sd_pick_file() in main.c (same loop, audit R5): up to 99
+// entries that fit one byte, in alphabetical order; a file past entry 98 is
+// skipped, not the end of the list, and *more says files were left out.
+static uint32_t pick_list(const char *const *exts, uint8_t *order, bool *more) {
+    char name[SD_FILES_NAME_LEN], prev[SD_FILES_NAME_LEN];
+    uint32_t count = 0;
+    *more = false;
+    prev[0] = '\0';
+    while (1) {
+        int32_t entry = sd_files_next_sorted(prev[0] ? prev : NULL, exts, 3, name);
+        if (entry < 0) break;
+        if (count == 99) { *more = true; break; }
+        memcpy(prev, name, SD_FILES_NAME_LEN);
+        if (entry >= 99) { *more = true; continue; }
+        order[count++] = (uint8_t)entry;
+    }
+    return count;
+}
+
+// Over 99 files, written so that the last ones in the directory come first
+// in the alphabet (before R5 the list was empty), and exactly 99 (no notice)
+static void run_over_99(void) {
+    static const char *const exts[] = {"PSBT", "PSB", "TXT"};
+    char name[SD_FILES_NAME_LEN], want[16];
+    uint8_t order[99];
+    uint32_t size;
+    bool more;
+
+    for (int total = 99; total <= 120; total += 21) {
+        printf("%d files, the last written first in the alphabet\n", total);
+        format(32768, FM_FAT);
+        for (int i = total; i >= 1; i--) {                 // Entry k holds file total - k
+            snprintf(want, sizeof(want), "%03d.psbt", i);
+            put_file(want, "p", 1);
+        }
+        CHECK(sd_files_mount());
+        uint32_t count = pick_list(exts, order, &more);
+        CHECK(count == 99);
+        CHECK(more == (total > 99));
+        // Files total-98 .. total in order: entries 0..98, never one past them
+        for (uint32_t i = 0; i < count; i++) {
+            snprintf(want, sizeof(want), "%03d.psbt", total - 98 + (int)i);
+            CHECK(sd_files_find(order[i], exts, 3, name, &size) && strcmp(name, want) == 0);
+        }
+        sd_files_unmount();
+    }
+}
+
 int main(void) {
     run_card_swap();
     run_sorted();
+    run_over_99();
     run_looping_directory();
     run("FAT16 card of 16 MB", 32768, FM_FAT);
     run("FAT32 card of 64 MB", 131072, FM_FAT32);

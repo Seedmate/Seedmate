@@ -1,0 +1,2 @@
+# Testnet 2-of-3 test wallet (Seedmate gen_testnet.py)
+wsh(sortedmulti(2,[73c5da0a/48h/1h/0h/2h]tpubDFH9dgzveyD8zTbPUFuLrGmCydNvxehyNdUXKJAQN8x4aZ4j6UZqGfnqFrD4NqyaTVGKbvEW54tsvPTK2UoSbCC1PJY8iCNiwTL3RWZEheQ/<0;1>/*,[010535a1/48h/1h/0h/2h]tpubDEuYw1LyBHY71ygTdif7HCfTZTdHNwQGQF9sWZYviQDRb8qciZLZLmcvoFb3HkWpKfeztxavyKHrfa1bvr1muBqqbhmjwG1taceiNJKhKxF/<0;1>/*,[bdc140de/48h/1h/0h/2h]tpubDFn4Locdi1M26tihkQ6fXq4TheiKziWquDDpAqSPNsotksq97We9rt5VveqFbRh5DknLchnZwK8msANDj4L9G5zaiBvSuNBXXuVTKqz9mWM/<0;1>/*))#dwg6f8fp

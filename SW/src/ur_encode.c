@@ -182,11 +182,14 @@ uint32_t ur_encoder_part(const ur_encoder_t *e, uint32_t seq, char *out, uint32_
 
 #define TAG_HDKEY       303
 #define TAG_KEYPATH     304
+#define TAG_COININFO    305
 #define TAG_OUTPUT      308
 #define TAG_SH          400
 #define TAG_WSH         401
 #define TAG_PKH         403
 #define TAG_WPKH        404
+#define TAG_MULTI       406
+#define TAG_SORTEDMULTI 407
 #define TAG_TR          409
 #define TAG_COSIGNER    410
 
@@ -242,9 +245,44 @@ static void cbor_head(cbor_writer_t *w, uint8_t major, uint32_t v) {
 #define CBOR_TRUE   0xF5
 #define CBOR_FALSE  0xF4
 
+// crypto-hdkey of a public key: key data, chain code, use-info on testnet,
+// origin from the master and the fingerprint of the key's parent
+static void cbor_hdkey(cbor_writer_t *w, const uint8_t *public_key, const uint8_t *chain_code, bool testnet,
+                       const uint32_t *path, uint32_t path_len, uint32_t master_fp, uint32_t parent_fp) {
+    static const uint8_t cbor_true = CBOR_TRUE, cbor_false = CBOR_FALSE;
+
+    cbor_head(w, CBOR_TAG, TAG_HDKEY);
+    cbor_head(w, CBOR_MAP, testnet ? 5 : 4);
+    cbor_head(w, CBOR_UINT, 3);                     //   key-data
+    cbor_head(w, CBOR_BYTES, 33);
+    cbor_bytes(w, public_key, 33);
+    cbor_head(w, CBOR_UINT, 4);                     //   chain-code
+    cbor_head(w, CBOR_BYTES, 32);
+    cbor_bytes(w, chain_code, 32);
+    if (testnet) {
+        cbor_head(w, CBOR_UINT, 5);                 //   use-info: crypto-coininfo
+        cbor_head(w, CBOR_TAG, TAG_COININFO);
+        cbor_head(w, CBOR_MAP, 1);
+        cbor_head(w, CBOR_UINT, 2);                 //     network: testnet (coin type BTC, the default)
+        cbor_head(w, CBOR_UINT, 1);
+    }
+    cbor_head(w, CBOR_UINT, 6);                     //   origin: crypto-keypath
+    cbor_head(w, CBOR_TAG, TAG_KEYPATH);
+    cbor_head(w, CBOR_MAP, 2);
+    cbor_head(w, CBOR_UINT, 1);                     //     components: [index, hardened]...
+    cbor_head(w, CBOR_ARRAY, 2u * path_len);
+    for (uint32_t i = 0; i < path_len; i++) {
+        cbor_head(w, CBOR_UINT, path[i] & 0x7FFFFFFFu);
+        cbor_bytes(w, (path[i] & 0x80000000u) ? &cbor_true : &cbor_false, 1);
+    }
+    cbor_head(w, CBOR_UINT, 2);                     //     source-fingerprint
+    cbor_head(w, CBOR_UINT, master_fp);
+    cbor_head(w, CBOR_UINT, 8);                     //   parent-fingerprint
+    cbor_head(w, CBOR_UINT, parent_fp);
+}
+
 uint32_t ur_account_cbor(const ur_account_key_t *key, uint8_t *out, uint32_t out_size) {
     cbor_writer_t w = { out, 0, out_size, false };
-    static const uint8_t cbor_true = CBOR_TRUE, cbor_false = CBOR_FALSE;
 
     cbor_head(&w, CBOR_MAP, 2);                     // crypto-account
     cbor_head(&w, CBOR_UINT, 1);                    //   master-fingerprint
@@ -260,29 +298,33 @@ uint32_t ur_account_cbor(const ur_account_key_t *key, uint8_t *out, uint32_t out
     } else {
         cbor_head(&w, CBOR_TAG, key->taproot ? TAG_TR : key->legacy ? TAG_PKH : TAG_WPKH);   //   tr, pkh or wpkh(key)
     }
+    cbor_hdkey(&w, key->public_key, key->chain_code, key->testnet, key->path, key->path_len,
+               key->master_fingerprint, key->parent_fingerprint);
+    return w.overflow ? 0 : w.pos;
+}
 
-    cbor_head(&w, CBOR_TAG, TAG_HDKEY);             // crypto-hdkey
-    cbor_head(&w, CBOR_MAP, 4);
-    cbor_head(&w, CBOR_UINT, 3);                    //   key-data
-    cbor_head(&w, CBOR_BYTES, 33);
-    cbor_bytes(&w, key->public_key, 33);
-    cbor_head(&w, CBOR_UINT, 4);                    //   chain-code
-    cbor_head(&w, CBOR_BYTES, 32);
-    cbor_bytes(&w, key->chain_code, 32);
-    cbor_head(&w, CBOR_UINT, 6);                    //   origin: crypto-keypath
-    cbor_head(&w, CBOR_TAG, TAG_KEYPATH);
+static uint32_t be32(const uint8_t *b) {
+    return ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) | ((uint32_t)b[2] << 8) | b[3];
+}
+
+uint32_t ur_output_cbor(const desc_wallet_t *wallet, uint8_t *out, uint32_t out_size) {
+    cbor_writer_t w = { out, 0, out_size, false };
+
+    if (wallet->key_count == 0) return 0;
+    if (wallet->nested) cbor_head(&w, CBOR_TAG, TAG_SH);    // sh(wsh(...)): nested segwit
+    cbor_head(&w, CBOR_TAG, TAG_WSH);
+    cbor_head(&w, CBOR_TAG, wallet->sorted ? TAG_SORTEDMULTI : TAG_MULTI);
     cbor_head(&w, CBOR_MAP, 2);
-    cbor_head(&w, CBOR_UINT, 1);                    //     components: [index, hardened]...
-    cbor_head(&w, CBOR_ARRAY, 2u * key->path_len);
-    for (uint32_t i = 0; i < key->path_len; i++) {
-        cbor_head(&w, CBOR_UINT, key->path[i] & 0x7FFFFFFFu);
-        cbor_bytes(&w, (key->path[i] & 0x80000000u) ? &cbor_true : &cbor_false, 1);
+    cbor_head(&w, CBOR_UINT, 1);                    //   threshold
+    cbor_head(&w, CBOR_UINT, wallet->threshold);
+    cbor_head(&w, CBOR_UINT, 2);                    //   keys, in the order of the descriptor
+    cbor_head(&w, CBOR_ARRAY, wallet->key_count);
+    for (uint8_t i = 0; i < wallet->key_count; i++) {
+        const desc_key_t *k = &wallet->keys[i];
+        if (!k->has_xpub_data || k->origin_len > DESC_ORIGIN_MAX) return 0;
+        cbor_hdkey(&w, k->public_key, k->chain_code, wallet->testnet, k->origin, k->origin_len,
+                   be32(k->fingerprint), be32(k->parent_fp));
     }
-    cbor_head(&w, CBOR_UINT, 2);                    //     source-fingerprint
-    cbor_head(&w, CBOR_UINT, key->master_fingerprint);
-    cbor_head(&w, CBOR_UINT, 8);                    //   parent-fingerprint
-    cbor_head(&w, CBOR_UINT, key->parent_fingerprint);
-
     return w.overflow ? 0 : w.pos;
 }
 

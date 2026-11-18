@@ -11,6 +11,8 @@
 :: Regenerate the taproot (BIP86) data (taproot_vectors.h, "abandon taproot.psbt"), with the
 :: official vector files of the BIP repository (bip-0340/test-vectors.csv, bip-0341/wallet-test-vectors.json):
 ::   python gen_taproot.py test-vectors.csv wallet-test-vectors.json
+:: Regenerate the testnet data (testnet_vectors.h, MSTDESC.TXT, "abandon testnet.psbt"):
+::   python gen_testnet.py
 :: Regenerate the multisig descriptor data (descriptor_vectors.h, MS*.TXT, MS*.PSB):
 ::   python gen_descriptor.py
 gcc -std=c99 -Wall -Wextra -O1 -I..\..\src test_psbt.c ..\..\src\psbt.c ..\..\src\crypto\segwit_addr.c ..\..\src\fountain.c ..\..\src\sampler.c ..\..\src\prng.c ..\..\src\sha256.c -o test_psbt.exe

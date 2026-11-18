@@ -1,0 +1,15 @@
+# Coldcard Multisig setup file (testnet test)
+#
+Name: Seedmate testnet
+Policy: 2 of 3
+Format: P2WSH
+
+Derivation: m/48'/1'/0'/2'
+73C5DA0A: Vpub5n95dMZrDHj6SeBgJ1oz4Fae2N2eJNuWK3VTKDb2dzGpMFLUHLmtyDfen7AaQxwQ5mZnMyXdVrkEaoMLVTH8FmVBRVWPGFYWhmtDUGehGmq
+
+Derivation: m/48'/1'/0'/2'
+010535A1: Vpub5mmUvfutjc44UAGkTUZkVBUtcCGzifboLfAoWUyYzFYBMq7MuRYd3KVkKWYZKsUdwwxTf1t4Q79DKyudPpVTZm91dtjzVKBgLwCtR1gUZu7
+
+Derivation: m/48'/1'/0'/2'
+BDC140DE: Vpub5ndzLUBZGKryZ5JzaA1JjostkPN3LSiNqdEkAks1ej8eXa6tJNrDZRxKSunmdYetr35oNm5hN6z8XaGFC2opvfHkkNthTRMKJE3dNf1eanU
+

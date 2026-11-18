@@ -74,7 +74,7 @@ refuse it).
 Nothing is open any more apart from the device tests.
 
 Second pass on 2026-11-16 over the code added since then: section 7 (five low
-findings, R1-R5; R1 fixed on 2026-11-17, the rest not yet).
+findings, R1-R5; R1 fixed on 2026-11-17, R5 on 2026-11-18, the rest not yet).
 Third pass the same day on the signing code: section 8 (R1 confirmed by a
 test, S1 on power analysis).
 Fourth pass the same day on the bootloader: section 9 (B1 medium, fixed on
@@ -331,7 +331,7 @@ and nothing was tried on the board.
 | R2 | Low | The BBQr inflate path is the deepest stack use so far and has not been measured; there is no stack guard |
 | R3 | Low | CONFIG: a cancelled key derivation can leave multisig mode with LEGACY or TAPROOT |
 | R4 | Low | A BBQr series is fixed by the first code read, even one that fails; a single part UR read during an animated scan leaves the fountain state inconsistent |
-| R5 | Low | The SD file list stops without notice at a file whose directory position is 99 or more |
+| R5 | Low | The SD file list stops without notice at a file whose directory position is 99 or more (fixed on 2026-11-18) |
 | I1-I3 | Note | See 7.4 |
 
 ### 7.3 Low
@@ -417,7 +417,7 @@ Fix: when the refresh is cancelled, put the mode back too, or clamp
   part only while no part has been received, or call `fountain_init()` when
   it fails.
 
-**R5. SD file list: files past directory position 99.**
+**R5. SD file list: files past directory position 99.** Fixed on 2026-11-18 as proposed below (`sd_pick_file()`, host test `run_over_99()`, device test SD-06).
 `sd_pick_file()` keeps the directory position of each file in `order[99]`
 (one byte each) and stops building the list at the first file, in
 alphabetical order, whose position is 99 or more. A card with over 99 files
@@ -932,7 +932,7 @@ in `docs/validation/firmware_validation.html` where a device test applies.
 | 3 | B3 | **Done on 2026-11-17** (+124 B): "FLASH LOCK OK" / "FLASH NOT LOCKED" under the stack peak, device tests BOOT-16 and SET-06. Was: show in SETTINGS > MCU SERIAL NUMBER whether NVMPWP and NVMBWP hold the values the bootloader sets with both unlock bits clear: "FLASH LOCK OK" green / "FLASH NOT LOCKED" red | `main.c` or `settings.c`; values in `bootloader/src/main.c` `JumpToApp()` | Seen on a board started through the bootloader (and "NOT LOCKED" when run from the debugger) |
 | 4 | R3 | When `single_purpose_refresh()` is cancelled in `config_run()`, put the mode back as well (or clamp `bip84_script` to the mode's range) | `config_run()` in `main.c` | Multisig can never be left with LEGACY or TAPROOT |
 | 5 | R4 | BBQr: set encoding, type, count and part length only after the first part decoded. UR: decode a single part code only while no fountain part was received, or `fountain_init()` when it fails | `bbqr_add_part()` in `bbqr.c`; `scan_ur_message()` in `main.c` | New cases in `test/bbqr/`: a damaged first code followed by a good series completes |
-| 6 | R5 | SD file list: skip a file whose directory position is 99 or more instead of ending the list, and say "MORE FILES NOT SHOWN" | `sd_pick_file()` in `main.c` | Case in `test/sdfiles/` or a device test with over 99 files |
+| 6 | R5 | **Done on 2026-11-18** (+96 B). Was: SD file list: skip a file whose directory position is 99 or more instead of ending the list, and say "MORE FILES NOT SHOWN" | `sd_pick_file()` in `main.c` | Case in `test/sdfiles/` or a device test with over 99 files |
 | 7 | I1 | `desc_unpack()` refuses `origin_len > DESC_ORIGIN_MAX` | `descriptor.c` | Case in `test/psbt/test_descriptor.c` |
 | 8 | C3 | Put back the three `assert()` of upstream in `ecdsa.c` (they vanish with NDEBUG) | `crypto/ecdsa.c` | Build unchanged in size |
 | 9 | 11.5 | Say what is modified: a short `crypto/README.md` of our own (what is kept, what is edited and why), the same in `THIRD_PARTY_NOTICES.md` (ask first: outside SW) and in `CLAUDE.md`; translate the Spanish comment in `ecdsa.c` | docs | - |

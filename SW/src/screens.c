@@ -62,7 +62,7 @@ const char* const menu_resource[] = {"TUTORIAL", "BACKUP TOOL", "DICE TESTER", "
 const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB","1 WORD XOR","BYTE SWAP","HOW TO"};
 const char* const menu_erase[]    = {"ERASE SECTOR", "INITIALIZE CARD", "WIPE ALL CARD"};
 const char* const menu_bip84[] = {"SIGN", "ADD PASSPHRASE", "DERIVE", "VAULT", "XPUB/ZPUB", "ADDRESSES", "CONFIG", "UNLOAD SEED"};
-const char* const menu_addresses[] = {"RECEIVE ADDRESS", "CHANGE ADDRESS", "SCAN ADDRESS", "IMPORT DESCRIPTOR"};
+const char* const menu_addresses[] = {"RECEIVE ADDRESS", "CHANGE ADDRESS", "SCAN ADDRESS", "EXPORT DESCRIPTOR", "IMPORT DESCRIPTOR"};
 const char* const menu_sign[]     = {"FROM QR", "FROM SD"};
 const char* const menu_import[]   = {"FROM QR", "FROM SD", "FROM VAULT"};
 const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD", "FROM QR"};
@@ -903,8 +903,8 @@ void draw_url_qr(const char *text) {
 
     // A bech32 address goes in upper case (BIP173 allows it, BIP21 advises it
     // for QR codes): alphanumeric mode, so the 62 characters of a bc1p or a
-    // P2WSH bc1q address fit version 3
-    if (length < sizeof(upper) && strncmp(text, "bc1", 3) == 0) {
+    // P2WSH bc1q address fit version 3 (tb1 on testnet the same)
+    if (length < sizeof(upper) && (strncmp(text, "bc1", 3) == 0 || strncmp(text, "tb1", 3) == 0)) {
         for (size_t i = 0; i <= length; i++) {
             char c = text[i];
             upper[i] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;

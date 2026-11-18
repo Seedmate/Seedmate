@@ -18,27 +18,31 @@ ACCOUNT = [84 | H, 0 | H, 0 | H]
 EXTERNAL = bytes.fromhex('0014751e76e8199196d454941c45d1b3a323f1433bd6')
 OP_RETURN = b'\x6a\x04test'
 
-def key(chain, index):
-    return ser_pub(point_mul(derive(seed, ACCOUNT + [chain, index])))
+TESTNET_ACCOUNT = [84 | H, 1 | H, 0 | H]
+EXTERNAL_TB = bytes.fromhex('0014751e76e8199196d454941c45d1b3a323f1433bd6')     # The same script: tb1q... on testnet
+
+def key(chain, index, account=ACCOUNT):
+    return ser_pub(point_mul(derive(seed, account + [chain, index])))
 
 def p2wpkh(pub):
     return b'\x00\x14' + hash160(pub)
 
-def psbt(amount_in, outs, change=None, change_index=0):
+def psbt(amount_in, outs, change=None, change_index=0, account=ACCOUNT, change_account=None):
     """outs: list of (script, amount); change: amount of an output of ours"""
-    pub_in, pub_ch = key(0, 0), key(1, change_index)
+    change_account = change_account or account
+    pub_in, pub_ch = key(0, 0, account), key(1, change_index, change_account)
     all_outs = list(outs) + ([(p2wpkh(pub_ch), change)] if change is not None else [])
     tx = (struct.pack('<I', 2) + b'\x01' + sha256(b'own vector') + struct.pack('<I', 0) + b'\x00' +
           struct.pack('<I', 0xfffffffd) + varint(len(all_outs)) +
           b''.join(struct.pack('<Q', a) + varint(len(s)) + s for s, a in all_outs) + struct.pack('<I', 0))
     spk = p2wpkh(pub_in)
     inp = kv(b'\x01', struct.pack('<Q', amount_in) + varint(len(spk)) + spk)
-    inp += kv(b'\x06' + pub_in, keypath(FP, *ACCOUNT, 0, 0))
+    inp += kv(b'\x06' + pub_in, keypath(FP, *account, 0, 0))
     maps = b''
     for i in range(len(outs)):
         maps += b'\x00'
     if change is not None:
-        maps += kv(b'\x02' + pub_ch, keypath(FP, *ACCOUNT, 1, change_index)) + b'\x00'
+        maps += kv(b'\x02' + pub_ch, keypath(FP, *change_account, 1, change_index)) + b'\x00'
     return b'psbt\xff' + kv(b'\x00', tx) + b'\x00' + inp + b'\x00' + maps
 
 def legacy_witness_only():
@@ -148,6 +152,11 @@ VECTORS = {
     'OWN-taproot_sighash_all': taproot(sighash=0x01),
     'OWN-taproot_key_sig_present': taproot(key_sig=True),
     'OWN-taproot_plain_derivation': taproot(plain_derivation=True),
+    # Testnet (coin type 1'): signed with change only in the testnet mode;
+    # input and change of different networks are refused in every mode
+    'OWN-testnet_p2wpkh': psbt(200000, [(EXTERNAL_TB, 100000)], change=99000, account=TESTNET_ACCOUNT),
+    'OWN-testnet_change_mainnet': psbt(200000, [(EXTERNAL_TB, 100000)], change=99000, account=TESTNET_ACCOUNT,
+                                       change_account=ACCOUNT),
 }
 
 for name, data in VECTORS.items():

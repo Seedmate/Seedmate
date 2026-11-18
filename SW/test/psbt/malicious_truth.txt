@@ -134,3 +134,5 @@ OWN-taproot_sighash_acp	reject_parser	-1	SIGHASH	own	SIGHASH_ALL|ANYONECANPAY on
 OWN-taproot_sighash_all	parses	1		own	explicit SIGHASH_ALL: allowed, 65 byte signature
 OWN-taproot_key_sig_present	reject_parser	-1	ALREADY_SIGNED	own	a TAP_KEY_SIG (64 zero bytes) is already there: nothing to sign
 OWN-taproot_plain_derivation	reject_parser	-1	KEY_FORM	own	m/86' key given as a 33 byte BIP32 derivation instead of the taproot one
+OWN-testnet_p2wpkh	parses	1		own	coin type 1' at m/84h/1h/0h with change: signed only in the testnet mode, SWITCH TO TESTNET elsewhere
+OWN-testnet_change_mainnet	reject_parser	-1	CROSS_NETWORK	own	input at m/84h/1h/0h, change at m/84h/0h/0h: refused in every mode, mainnet and testnet

@@ -137,10 +137,14 @@ static desc_result_t read_xpub(cursor_t *c, desc_key_t *k) {
     if (!b58check_decode_xkey(start, (uint32_t)(c->p - start), raw)) return DESC_ERR_KEY;
 
     uint32_t version = (uint32_t)raw[0] << 24 | (uint32_t)raw[1] << 16 | (uint32_t)raw[2] << 8 | raw[3];
-    if (version == VER_TPUB || version == VER_VPUB_MS || version == VER_UPUB_MS) return DESC_ERR_NETWORK;
-    if (version != VER_XPUB && version != VER_ZPUB_MS && version != VER_YPUB_MS) return DESC_ERR_KEY;
+    k->testnet = (version == VER_TPUB || version == VER_VPUB_MS || version == VER_UPUB_MS);
+    if (!k->testnet && version != VER_XPUB && version != VER_ZPUB_MS && version != VER_YPUB_MS) return DESC_ERR_KEY;
     if (raw[45] != 0x02 && raw[45] != 0x03) return DESC_ERR_KEY;
 
+    k->depth = raw[4];                      // Kept to write the same key back (desc_format())
+    memcpy(k->parent_fp, &raw[5], 4);
+    k->child = (uint32_t)raw[9] << 24 | (uint32_t)raw[10] << 16 | (uint32_t)raw[11] << 8 | raw[12];
+    k->has_xpub_data = true;
     memcpy(k->chain_code, &raw[13], 32);
     memcpy(k->public_key, &raw[45], 33);
     return DESC_OK;
@@ -439,7 +443,7 @@ static bool cbor_origin(cbor_t *c, desc_key_t *k) {
 // crypto-hdkey: an extended public key (key data and chain code)
 static desc_result_t cbor_hdkey(cbor_t *c, desc_key_t *k) {
     uint32_t n, key, v, m;
-    bool have_key = false, have_chain = false;
+    bool have_key = false, have_chain = false, have_parent = false;
 
     if (!cbor_expect_tag(c, TAG_HDKEY) || !cbor_expect(c, CBOR_MAP, &n)) return DESC_ERR_KEY;
     while (n-- > 0) {
@@ -465,9 +469,10 @@ static desc_result_t cbor_hdkey(cbor_t *c, desc_key_t *k) {
                 if (!cbor_expect_tag(c, TAG_COININFO) || !cbor_expect(c, CBOR_MAP, &m)) return DESC_ERR_FORMAT;
                 while (m-- > 0) {
                     if (!cbor_expect(c, CBOR_UINT, &key)) return DESC_ERR_FORMAT;
-                    if (key == 1 || key == 2) {
+                    if (key == 1 || key == 2) {     // Coin type BTC only; network 0 mainnet, 1 testnet
                         if (!cbor_expect(c, CBOR_UINT, &v)) return DESC_ERR_FORMAT;
-                        if (v != 0) return (key == 2) ? DESC_ERR_NETWORK : DESC_ERR_KEY;
+                        if (v > ((key == 2) ? 1u : 0u)) return DESC_ERR_KEY;
+                        if (key == 2) k->testnet = (v == 1);
                     } else if (!cbor_skip(c)) {
                         return DESC_ERR_FORMAT;
                     }
@@ -476,10 +481,24 @@ static desc_result_t cbor_hdkey(cbor_t *c, desc_key_t *k) {
             case 6:                                 // origin
                 if (!cbor_origin(c, k)) return DESC_ERR_FORMAT;
                 break;
-            default:                                // children, parent fingerprint, name...
+            case 8:                                 // parent fingerprint
+                if (!cbor_expect(c, CBOR_UINT, &v)) return DESC_ERR_FORMAT;
+                k->parent_fp[0] = (uint8_t)(v >> 24);
+                k->parent_fp[1] = (uint8_t)(v >> 16);
+                k->parent_fp[2] = (uint8_t)(v >> 8);
+                k->parent_fp[3] = (uint8_t)v;
+                have_parent = true;
+                break;
+            default:                                // children, name...
                 if (!cbor_skip(c)) return DESC_ERR_FORMAT;
                 break;
         }
+    }
+    // Depth and child number of the xpub come from its origin
+    if (have_parent && k->origin_len >= 1 && k->origin_len <= DESC_ORIGIN_MAX) {
+        k->depth = k->origin_len;
+        k->child = k->origin[k->origin_len - 1];
+        k->has_xpub_data = true;
     }
     return (have_key && have_chain) ? DESC_OK : DESC_ERR_KEY;
 }
@@ -528,9 +547,12 @@ static desc_result_t parse_cbor_output(const uint8_t *data, uint32_t len, desc_w
 // --- Public functions ---------------------------------------------------------
 
 // Final checks shared by the formats: the same key twice would weaken the
-// policy without showing it. Clears the wallet on any error.
+// policy without showing it, and every key is of the same network (the
+// wallet's). Clears the wallet on any error.
 static desc_result_t desc_finish(desc_result_t r, desc_wallet_t *out) {
+    out->testnet = out->keys[0].testnet;
     for (uint8_t i = 0; r == DESC_OK && i < out->key_count; i++) {
+        if (out->keys[i].testnet != out->testnet) r = DESC_ERR_NETWORK;
         for (uint8_t j = i + 1; j < out->key_count; j++) {
             if (memcmp(out->keys[i].public_key, out->keys[j].public_key, 33) == 0) r = DESC_ERR_DUPLICATE;
         }
@@ -583,7 +605,7 @@ const char *desc_error_text(desc_result_t r) {
         case DESC_ERR_SCRIPT:    return "ONLY SEGWIT MULTISIG";
         case DESC_ERR_CHECKSUM:  return "BAD CHECKSUM";
         case DESC_ERR_KEY:       return "BAD XPUB";
-        case DESC_ERR_NETWORK:   return "TESTNET KEY";
+        case DESC_ERR_NETWORK:   return "MIXED NETWORKS";
         case DESC_ERR_TOO_MANY:  return "MAX " DESC_STR(DESC_MAX_KEYS) " COSIGNERS";
         case DESC_ERR_THRESHOLD: return "BAD M-OF-N";
         case DESC_ERR_PATH:      return "KEY PATH NOT /0/*";
@@ -619,12 +641,88 @@ uint32_t desc_witness_script(const uint8_t keys[][33], uint8_t n, uint8_t m, boo
     out[len++] = 0xAE;                      // OP_CHECKMULTISIG
     return len;
 }
+// Writers for desc_format(): each returns the end of what it wrote
+static char *put_str(char *p, const char *s) {
+    while (*s) *p++ = *s++;
+    return p;
+}
+
+static char *put_u32(char *p, uint32_t v) {
+    char d[10];
+    int k = 0;
+    do {
+        d[k++] = (char)('0' + v % 10u);
+        v /= 10u;
+    } while (v != 0);
+    while (k > 0) *p++ = d[--k];
+    return p;
+}
+
+static void put_be32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v >> 24);
+    p[1] = (uint8_t)(v >> 16);
+    p[2] = (uint8_t)(v >> 8);
+    p[3] = (uint8_t)v;
+}
+
+// Output descriptor text of w, as wallets write it (keys in the order given,
+// "h" for hardened, every key as xpub / tpub ending in /<0;1>/*, the BIP380
+// checksum). Needs the xpub data of every key, origins of at most
+// DESC_ORIGIN_MAX steps and cap >= DESC_FORMAT_CAP (the longest text of 7 keys):
+// 0 otherwise.
+uint32_t desc_format(const desc_wallet_t *w, char *out, uint32_t cap, desc_b58check_fn b58check) {
+    static const char hex[] = "0123456789abcdef";
+    uint8_t raw[78];
+    char *p = out;
+
+    if (cap < DESC_FORMAT_CAP || w->key_count == 0) return 0;
+    p = put_str(p, w->nested ? "sh(wsh(" : "wsh(");
+    p = put_str(p, w->sorted ? "sortedmulti(" : "multi(");
+    p = put_u32(p, w->threshold);
+    for (uint8_t i = 0; i < w->key_count; i++) {
+        const desc_key_t *k = &w->keys[i];
+        if (!k->has_xpub_data || k->origin_len > DESC_ORIGIN_MAX) return 0;
+        *p++ = ',';
+        if (k->origin_len > 0 || (k->fingerprint[0] | k->fingerprint[1] | k->fingerprint[2] | k->fingerprint[3])) {
+            *p++ = '[';
+            for (int b = 0; b < 4; b++) {
+                *p++ = hex[k->fingerprint[b] >> 4];
+                *p++ = hex[k->fingerprint[b] & 15];
+            }
+            for (uint8_t j = 0; j < k->origin_len; j++) {
+                *p++ = '/';
+                p = put_u32(p, k->origin[j] & ~HARDENED);
+                if (k->origin[j] & HARDENED) *p++ = 'h';
+            }
+            *p++ = ']';
+        }
+        put_be32(raw, w->testnet ? VER_TPUB : VER_XPUB);
+        raw[4] = k->depth;
+        memcpy(&raw[5], k->parent_fp, 4);
+        put_be32(&raw[9], k->child);
+        memcpy(&raw[13], k->chain_code, 32);
+        memcpy(&raw[45], k->public_key, 33);
+        size_t len = b58check(raw, sizeof(raw), p, 113);        // Its length and the NUL
+        if (len < 2) return 0;
+        p += len - 1;
+        p = put_str(p, "/<0;1>/*");
+    }
+    p = put_str(p, w->nested ? ")))" : "))");
+    uint32_t n = (uint32_t)(p - out);
+    if (!desc_checksum(out, n, &out[n + 1])) return 0;
+    out[n] = '#';
+    n += 9;
+    out[n] = '\0';
+    return n;
+}
+
 uint32_t desc_pack(const desc_wallet_t *w, uint8_t *out) {
     uint8_t *p = out;
-    *p++ = 1;                               // Format
+    *p++ = 2;                               // Format 2: with the xpub data of each key
     *p++ = w->threshold;
     *p++ = w->key_count;
-    *p++ = (uint8_t)((w->sorted ? 1u : 0u) | (w->has_checksum ? 2u : 0u) | (w->nested ? 4u : 0u));
+    *p++ = (uint8_t)((w->sorted ? 1u : 0u) | (w->has_checksum ? 2u : 0u) | (w->nested ? 4u : 0u) |
+                     (w->testnet ? 8u : 0u));
     for (int i = 0; i < w->key_count; i++) {
         const desc_key_t *k = &w->keys[i];
         memcpy(p, k->fingerprint, 4);
@@ -637,21 +735,30 @@ uint32_t desc_pack(const desc_wallet_t *w, uint8_t *out) {
         p += 32;
         memcpy(p, k->public_key, 33);
         p += 33;
+        *p++ = k->has_xpub_data ? 1 : 0;
+        *p++ = k->depth;
+        memcpy(p, k->parent_fp, 4);
+        p += 4;
+        for (int b = 3; b >= 0; b--) *p++ = (uint8_t)(k->child >> (8 * b));
     }
     return (uint32_t)(p - out);
 }
 
 bool desc_unpack(const uint8_t *in, uint32_t len, desc_wallet_t *out) {
     memset(out, 0, sizeof(*out));
-    if (len < DESC_PACK_HEADER || in[0] != 1 || in[2] == 0 || in[2] > DESC_MAX_KEYS ||
-        in[1] == 0 || in[1] > in[2] || (in[3] & ~7u) != 0 || len != DESC_PACK_LEN(in[2])) {
+    // Format 1 (saved before 2026-11-18) has no xpub data: it loads, but cannot be exported
+    if (len < DESC_PACK_HEADER || (in[0] != 1 && in[0] != 2) || in[2] == 0 || in[2] > DESC_MAX_KEYS ||
+        in[1] == 0 || in[1] > in[2] || (in[3] & ~15u) != 0 ||
+        len != ((in[0] == 1) ? DESC_PACK_HEADER + DESC_PACK_KEY_V1 * in[2] : DESC_PACK_LEN(in[2]))) {
         return false;
     }
+    bool fmt2 = in[0] == 2;
     out->threshold = in[1];
     out->key_count = in[2];
     out->sorted = (in[3] & 1u) != 0;
     out->has_checksum = (in[3] & 2u) != 0;
     out->nested = (in[3] & 4u) != 0;
+    out->testnet = (in[3] & 8u) != 0;
     const uint8_t *p = in + DESC_PACK_HEADER;
     for (int i = 0; i < out->key_count; i++) {
         desc_key_t *k = &out->keys[i];
@@ -666,6 +773,18 @@ bool desc_unpack(const uint8_t *in, uint32_t len, desc_wallet_t *out) {
         p += 32;
         memcpy(k->public_key, p, 33);
         p += 33;
+        k->testnet = out->testnet;
+        if (fmt2) {
+            if (p[0] > 1) {
+                memset(out, 0, sizeof(*out));
+                return false;
+            }
+            k->has_xpub_data = p[0] != 0;
+            k->depth = p[1];
+            memcpy(k->parent_fp, &p[2], 4);
+            k->child = (uint32_t)p[6] << 24 | (uint32_t)p[7] << 16 | (uint32_t)p[8] << 8 | p[9];
+            p += 10;
+        }
         if (k->public_key[0] != 0x02 && k->public_key[0] != 0x03) {
             memset(out, 0, sizeof(*out));
             return false;

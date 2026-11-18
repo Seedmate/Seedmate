@@ -21,9 +21,10 @@
  *     Children paths are not stored: branches 0 and 1 are assumed, and a
  *     wallet that used others would simply never match a PSBT.
  *
- *   Only mainnet P2WSH and P2SH-P2WSH (sh(wsh()), Coldcard "Format:
+ *   Only P2WSH and P2SH-P2WSH (sh(wsh()), Coldcard "Format:
  *   P2SH-P2WSH", Ypub keys; 'nested' is set) are accepted: the multisig
- *   types the signer signs.
+ *   types the signer signs. Mainnet or testnet keys (tpub, Upub, Vpub;
+ *   'testnet' is set), not both.
  *   No elliptic curve code here: keys are stored as given and derived by
  *   the caller (psbt_public_ckd() in psbt_sign.c). Host tests in
  *   ../test/psbt/test_descriptor.c.
@@ -46,6 +47,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #define DESC_MAX_KEYS   7       // Cosigners kept in RAM (86 bytes each)
 #define DESC_ORIGIN_MAX 4       // Origin path elements kept (BIP48: 4)
@@ -53,7 +55,12 @@
 typedef struct {
     uint8_t fingerprint[4];     // Master fingerprint of the key origin (0 if none)
     uint8_t origin_len;         // Origin path elements given (may exceed DESC_ORIGIN_MAX)
+    bool testnet;               // tpub / Upub / Vpub, or CBOR use-info network 1
+    bool has_xpub_data;         // depth, parent_fp and child known (to write the xpub back)
+    uint8_t depth;              // Of the serialized xpub
     uint32_t origin[DESC_ORIGIN_MAX];
+    uint32_t child;             // Child number of the serialized xpub
+    uint8_t parent_fp[4];       // Parent fingerprint of the serialized xpub
     uint8_t chain_code[32];
     uint8_t public_key[33];
 } desc_key_t;
@@ -64,6 +71,7 @@ typedef struct {
     bool sorted;                // sortedmulti (BIP67 key order) instead of multi
     bool has_checksum;          // A descriptor checksum was present (and matched)
     bool nested;                // sh(wsh(...)): P2SH-P2WSH, BIP48 script type 1'
+    bool testnet;               // Every key is a testnet key (mixed networks are refused)
     desc_key_t keys[DESC_MAX_KEYS];
 } desc_wallet_t;
 
@@ -73,7 +81,7 @@ typedef enum {
     DESC_ERR_SCRIPT,            // Not wsh() or sh(wsh()) multisig (sh, wpkh, tr...)
     DESC_ERR_CHECKSUM,          // Descriptor checksum does not match
     DESC_ERR_KEY,               // Bad xpub (base58 checksum, length, prefix)
-    DESC_ERR_NETWORK,           // Testnet key
+    DESC_ERR_NETWORK,           // Mainnet and testnet keys mixed
     DESC_ERR_TOO_MANY,          // More than DESC_MAX_KEYS cosigners
     DESC_ERR_THRESHOLD,         // m is 0, larger than n, or Policy disagrees
     DESC_ERR_PATH,              // Key derivation is not /<0;1>/*, /0/* or /1/*
@@ -95,18 +103,34 @@ const char *desc_error_text(desc_result_t r);
 // sorted (BIP67) if 'sorted'. out must hold 3 + 34 * n bytes. Returns its length.
 uint32_t desc_witness_script(const uint8_t keys[][33], uint8_t n, uint8_t m, bool sorted, uint8_t *out);
 
-// Compact binary copy of a wallet, for the vault: format (1), threshold (1),
+// Compact binary copy of a wallet, for the vault: format (2), threshold (1),
 // key count (1), flags (1: bit 0 sorted, bit 1 had a checksum, bit 2 nested
-// sh(wsh())), then per key
+// sh(wsh()), bit 3 testnet), then per key
 // fingerprint (4), origin_len (1), origin (4 x 4, big endian), chain code
-// (32), public key (33). Returns its length (DESC_PACK_LEN(key_count)).
+// (32), public key (33), then the xpub data: known (1), depth (1), parent
+// fingerprint (4), child number (4, big endian). Returns its length
+// (DESC_PACK_LEN(key_count)). Format 1 (before 2026-11-18) stopped at the
+// public key (DESC_PACK_KEY_V1): it unpacks without the xpub data.
 #define DESC_PACK_HEADER    4u
-#define DESC_PACK_KEY       86u
+#define DESC_PACK_KEY_V1    86u
+#define DESC_PACK_KEY       96u
 #define DESC_PACK_LEN(n)    (DESC_PACK_HEADER + DESC_PACK_KEY * (n))
 #define DESC_PACK_MAX       DESC_PACK_LEN(DESC_MAX_KEYS)
 uint32_t desc_pack(const desc_wallet_t *w, uint8_t *out);
 
-// The reverse, strict: exact length, format 1, 1 <= threshold <= keys <= 7,
+// Output descriptor text of w, as wallets write it: [sh(]wsh(sortedmulti|multi(
+// m,[fingerprint/48h/0h/0h/2h]xpub.../<0;1>/*,...))[)]#checksum, keys in the
+// order given, xpub or tpub. NUL terminated; returns its length, or 0 when a
+// key lacks its xpub data (a vault entry of format 1), has an origin longer
+// than DESC_ORIGIN_MAX, or cap is below DESC_FORMAT_CAP (the longest text:
+// 7 keys, origins of 4 steps of 10 digits, and the checksum).
+// b58check is the firmware's Base58Check encoder (base58_encode_check() in
+// main.c): it returns the length of the text plus its NUL, or 0.
+#define DESC_FORMAT_CAP 1300u
+typedef size_t (*desc_b58check_fn)(const uint8_t *data, size_t len, char *out, size_t cap);
+uint32_t desc_format(const desc_wallet_t *w, char *out, uint32_t cap, desc_b58check_fn b58check);
+
+// The reverse, strict: exact length, format 1 or 2, 1 <= threshold <= keys <= 7,
 // compressed keys. On false *out is cleared.
 bool desc_unpack(const uint8_t *in, uint32_t len, desc_wallet_t *out);
 

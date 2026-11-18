@@ -1,0 +1,2 @@
+# Testnet 2-of-3 nested segwit test wallet (Seedmate gen_testnet.py)
+sh(wsh(sortedmulti(2,[73c5da0a/48h/1h/0h/1h]tpubDFH9dgzveyD8yHQb8VrpG8FYAuwcLMHMje2CCcbBo1FpaGzYVtJeYYxcYgRqSTta5utUFts8nPPHs9C2bqoxrey5jia6Dwf9mpwrPq7YvcJ/<0;1>/*,[010535a1/48h/1h/0h/1h]tpubDEuYw1LyBHY6zRNEtpMvRZbfS9zUgSCY3TFHHQSi3ovWMEAKxTM5V5dZa9T6Yr1ZYAAUrWUkCiBE6HtCSaZUW8sqAKNqmjKDom5VCUy1r68/<0;1>/*,[bdc140de/48h/1h/0h/1h]tpubDFn4Locdi1M24jFAjRV6gmyBFbsYmtE4TD1utdV9X1CPNLmKMKY7nqhSYEPjuQPvnemzbsSF9Piv6kKhhAposJcXC4Bsg2t6DAPB9o9USr8/<0;1>/*)))#w2m03mu5

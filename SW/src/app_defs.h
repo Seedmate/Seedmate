@@ -105,9 +105,10 @@
 #define cBIP84_n_opt 8          // Wallet menu entries, the same in single sig and multisig
 #define cADDRESS_RECEIVE 0      // ADDRESSES menu entries = address chain
 #define cADDRESS_CHANGE 1
-#define cADDRESS_SCAN 2         // Checks a scanned address against our first ones (single sig)
-#define cADDRESS_IMPORT 3       // Multisig: IMPORT DESCRIPTOR, in the place of SCAN ADDRESS
-#define cADDRESS_n_opt 3        // Entries shown in either mode
+#define cADDRESS_SCAN 2         // Checks a scanned address against our first ones (multisig: the loaded wallet)
+#define cADDRESS_EXPORT 3       // Multisig only: the loaded descriptor to a file card
+#define cADDRESS_IMPORT 4       // Multisig only: IMPORT DESCRIPTOR, the last entry
+#define cADDRESS_n_opt 3        // Entries in single sig (multisig adds EXPORT and IMPORT DESCRIPTOR)
 
 #define cSIGN_QR 0
 #define cSIGN_SD 1

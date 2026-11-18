@@ -31,7 +31,8 @@
 
 #define SD_FILES_NAME_LEN 65    // Long name (FF_LFN_BUF) + NUL
 
-// Initializes the card and mounts its FAT volume.
+// Initializes the card and mounts its FAT volume (twice before giving up:
+// a card just put in may not answer its first start).
 bool sd_files_mount(void);
 
 // Releases the volume (nothing is cached when writing has finished).

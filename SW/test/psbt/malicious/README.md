@@ -14,8 +14,8 @@ decision. No real wallet data.
 - `../malicious_truth.txt`: what each one is and how many outputs are really
   ours, taken from `tests/psbt_suite_util.py` of the same repository.
 - `../bip174_invalid.txt`: the invalid PSBT test vectors of BIP174.
-- `OWN-*`: ours, from `../gen_malicious_own.py` (OP_RETURN amounts and the limits
-  of the high fee warning).
+- `OWN-*`: ours, from `../gen_malicious_own.py` (OP_RETURN amounts, the limits
+  of the high fee warning, legacy, taproot and testnet cases).
 
 The files are test data only and are not part of the firmware.
 

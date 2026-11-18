@@ -25,6 +25,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "descriptor.h"
 
 typedef struct {
     const char *type;           // UR type in uppercase, e.g. "CRYPTO-PSBT"
@@ -69,6 +70,7 @@ typedef struct {
     bool nested;                    // Wrapped in sh(): sh(wpkh(key)) BIP49, sh(wsh(cosigner(key))) BIP48 1'
     bool taproot;                   // tr(key) (BIP86) instead of wpkh(key)
     bool legacy;                    // pkh(key) (BIP44) instead of wpkh(key)
+    bool testnet;                   // Adds use-info with network testnet (none means mainnet)
 } ur_account_key_t;
 
 // CBOR of a crypto-account with one output descriptor: wpkh(hdkey) for a
@@ -77,6 +79,14 @@ typedef struct {
 // wsh(cosigner(hdkey)) for a BIP48 multisig cosigner.
 // Returns the length written to out, or 0 if out_size is too small.
 uint32_t ur_account_cbor(const ur_account_key_t *key, uint8_t *out, uint32_t out_size);
+
+// CBOR of a crypto-output (BCR-2020-010) of a multisig wallet, as Sparrow
+// exports it for "ur:crypto-output": [sh(]wsh(sortedmulti|multi(m, hdkey...))[)]
+// with each key's origin, parent fingerprint and, on testnet, use-info.
+// Returns 0 if out_size is too small, or if a key lacks the xpub data or has
+// a longer origin than is kept (a vault entry of an older firmware), as
+// desc_format() does.
+uint32_t ur_output_cbor(const desc_wallet_t *wallet, uint8_t *out, uint32_t out_size);
 
 // CRC-32 (IEEE, reflected) as used by UR and Bytewords. Start with
 // 0xFFFFFFFF and XOR the final value with 0xFFFFFFFF.

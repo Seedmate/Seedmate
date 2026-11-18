@@ -98,6 +98,8 @@ desc_text = ('# Receive and change descriptor (BIP389):\n' + desc_sorted + '\n\n
              '# Receive descriptor (Bitcoin Core):\n' +
              descriptor(keys=[key_expr(co, suffix='/0/*') for co in cosigners]) + '\n')
 desc_multi = descriptor('multi', 2, [key_expr(co, suffix='/0/*') for co in [C, A, B]])
+# The same keys as tpubs: a testnet wallet for the parser (origin 48h/1h)
+desc_testnet = descriptor(keys=[key_expr(co, co.tpub).replace('/48h/0h/', '/48h/1h/') for co in cosigners])
 cold_text = ('# Coldcard Multisig setup file (test)\n#\nName: Seedmate test\nPolicy: 2 of 3\nFormat: P2WSH\n\n' +
              ''.join("Derivation: m/48'/0'/0'/2'\n%s: %s\n\n" % (co.fp.hex().upper(), co.zpub) for co in cosigners))
 
@@ -109,7 +111,7 @@ def bad(text):
     return text
 neg = [
     (desc_sorted[:-1] + ('q' if desc_sorted[-1] != 'q' else 'p'), 'DESC_ERR_CHECKSUM'),
-    (descriptor(keys=[key_expr(co, co.tpub) for co in cosigners]), 'DESC_ERR_NETWORK'),
+    (descriptor(keys=[key_expr(A, A.tpub), key_expr(B), key_expr(C)]), 'DESC_ERR_NETWORK'),     # Mixed networks
     (descsum_create('sh(sortedmulti(2,%s))' % ','.join(key_expr(co) for co in cosigners)), 'DESC_ERR_SCRIPT'),   # Legacy P2SH
     (descsum_create('wpkh(%s)' % key_expr(A)), 'DESC_ERR_SCRIPT'),
     (descriptor(m=4), 'DESC_ERR_THRESHOLD'),
@@ -227,6 +229,7 @@ with open('descriptor_vectors.h', 'w', newline='\r\n') as f:
     f.write('#include <stdint.h>\n\n')
     f.write('static const char desc_text[] = %s;\n' % c_str(desc_text))
     f.write('static const char desc_multi[] = %s;\n' % c_str(desc_multi))
+    f.write('static const char desc_testnet[] = %s;\n' % c_str(desc_testnet))
     f.write('static const char cold_text[] = %s;\n\n' % c_str(cold_text))
     f.write('// Keys in descriptor order (A, B, C); desc_multi lists C, A, B\n')
     f.write('static const uint8_t vec_fp[3][4] = {%s};\n' % ', '.join(arr(co.fp) for co in cosigners))

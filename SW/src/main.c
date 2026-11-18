@@ -295,7 +295,53 @@ static bool bip84_multisig_mode = false;
 static uint8_t bip84_script = SCRIPT_NATIVE;
 static const char *const script_name[4] = {"LEGACY", "NESTED SEGWIT", "NATIVE SEGWIT", "TAPROOT"};
 static const char *const script_key[4] = {"LEG", "NEST", "NATV", "TAPR"};      // In a grid cell
-static const char *const script_prefix[4] = {"1...", "3...", "BC1Q...", "BC1P..."};
+static const char *const script_prefix[2][4] = {
+    {"1...", "3...", "BC1Q...", "BC1P..."},
+    {"M/N...", "2...", "TB1Q...", "TB1P..."}
+};
+
+// Network of the wallet, chosen in CONFIG for the session: testnet (also
+// signet: the same keys and addresses) uses coin type 1', the tpub family of
+// extended keys and tb1 / 2 / m-n addresses. Back to mainnet when the seed
+// is unloaded.
+static bool bip84_testnet = false;
+
+static uint32_t coin_type(void) {
+    return bip84_testnet ? 1 : 0;
+}
+
+// Address encodings of a network: bech32 prefix, P2PKH and P2SH versions
+static const char *net_hrp(bool testnet) {
+    return testnet ? "tb" : "bc";
+}
+#define NET_P2PKH(t)    ((uint8_t)((t) ? 0x6F : 0x00))
+#define NET_P2SH(t)     ((uint8_t)((t) ? 0xC4 : 0x05))
+
+// Extended public key versions (BIP32 and SLIP-132) of the wallet's network
+#define KEY_XPUB    0       // xpub / tpub
+#define KEY_YPUB    1       // ypub / upub: BIP49
+#define KEY_ZPUB    2       // zpub / vpub: BIP84
+#define KEY_YPUB_MS 3       // Ypub / Upub: P2SH-P2WSH multisig
+#define KEY_ZPUB_MS 4       // Zpub / Vpub: P2WSH multisig
+static uint32_t key_version(uint8_t kind) {
+    static const uint32_t v[2][5] = {
+        {0x0488B21E, 0x049D7CB2, 0x04B24746, 0x0295B43F, 0x02AA7ED3},
+        {0x043587CF, 0x044A5262, 0x045F1CF6, 0x024289EF, 0x02575483}
+    };
+    return v[bip84_testnet][kind];
+}
+
+// Name of the account key on screen: XPUB, or the SLIP-132 YPUB (nested) /
+// ZPUB; on testnet TPUB, UPUB, VPUB
+static const char *key_name(bool slip132) {
+    static const char *const n[2][3] = {{"XPUB", "YPUB", "ZPUB"}, {"TPUB", "UPUB", "VPUB"}};
+    return n[bip84_testnet][!slip132 ? 0 : (bip84_script == SCRIPT_NESTED) ? 1 : 2];
+}
+
+// A screen title, followed on testnet by "TESTNET" in yellow
+static void draw_net_title(const char *title, bool testnet) {
+    draw_title_pair(title, ST7735_LIGHTGREY, testnet ? "TESTNET" : "", ST7735_YELLOW);
+}
 
 // Single sig account: m/49' (P2SH-P2WPKH, 3...) for NESTED SEGWIT, m/86'
 // (P2TR, bc1p...) for TAPROOT, m/44' (P2PKH, 1...) for LEGACY, otherwise
@@ -380,11 +426,12 @@ static uint32_t ms_account_parent_fingerprint = 0;
 
 // Account index of m/84'/0'/account' and m/48'/0'/account'/2'. The coin
 // level nodes stay cached so changing the account skips the PBKDF2.
-#define BIP84_ACCOUNT_MAX 255   // Keeps the crypto-account QR in one version 8 code
+#define BIP84_ACCOUNT_MAX 255   // Keeps the crypto-account QR in one version 8 code (9 on testnet)
 static uint32_t bip84_account_index = 0;
-static HDNode bip84_coin_node;          // m/84'/0', or m/49'/0' for nested
+static HDNode bip84_coin_node;          // m/84'/0', or m/49'/0' for nested (1' on testnet)
 static uint32_t bip84_coin_purpose;     // 84 or 49: the purpose bip84_coin_node is for
-static HDNode ms_coin_node;             // m/48'/0'
+static bool bip84_coin_testnet;         // The network bip84_coin_node is for
+static HDNode ms_coin_node;             // m/48'/0' (m/48'/1' on testnet)
 static uint32_t ms_coin_script;         // 1 or 2: the BIP48 script type ms_account_node is for
 
 // Multisig wallet (cosigner xpubs) from IMPORT DESCRIPTOR, for this session
@@ -413,9 +460,14 @@ static int bip84_option_count(void) {
     return cBIP84_n_opt;
 }
 
-// ADDRESSES menu: in multisig its third entry is IMPORT DESCRIPTOR (cADDRESS_IMPORT)
+// ADDRESSES menu: the position is the option; multisig adds EXPORT and
+// IMPORT DESCRIPTOR (cADDRESS_EXPORT, cADDRESS_IMPORT) after SCAN ADDRESS
 static int address_option(void) {
-    return (bip84_multisig_mode && address_menu_pointer == cADDRESS_SCAN) ? cADDRESS_IMPORT : address_menu_pointer;
+    return address_menu_pointer;
+}
+
+static int address_count(void) {
+    return bip84_multisig_mode ? cADDRESS_IMPORT + 1 : cADDRESS_n_opt;
 }
 
 // XOR Globals moved from main()
@@ -2054,7 +2106,7 @@ static void derive_multisig_from_coin(void) {
 static void derive_multisig_account(const HDNode *root) {
     ms_coin_node = *root;
     hdnode_private_ckd(&ms_coin_node, 48 | 0x80000000);
-    hdnode_private_ckd(&ms_coin_node, 0 | 0x80000000);
+    hdnode_private_ckd(&ms_coin_node, coin_type() | 0x80000000);
     derive_multisig_from_coin();
 }
 
@@ -2067,11 +2119,11 @@ static void derive_bip84_account(void) {
     hdnode_fill_public_key(&bip84_account_node);
     key_progress_step();
 
-    hdnode_serialize_public(&bip84_account_node, bip84_account_parent_fingerprint, 0x0488B21E, bip84_cached_xpub, sizeof(bip84_cached_xpub));
+    hdnode_serialize_public(&bip84_account_node, bip84_account_parent_fingerprint, key_version(KEY_XPUB), bip84_cached_xpub, sizeof(bip84_cached_xpub));
     bip84_cached_zpub[0] = '\0';           // Taproot (BIP86) and legacy (BIP44) have only the xpub
     if (bip84_coin_purpose != 86 && bip84_coin_purpose != 44) {
         hdnode_serialize_public(&bip84_account_node, bip84_account_parent_fingerprint,
-                                (bip84_coin_purpose == 49) ? 0x049D7CB2 : 0x04B24746, bip84_cached_zpub, sizeof(bip84_cached_zpub));
+                                key_version((bip84_coin_purpose == 49) ? KEY_YPUB : KEY_ZPUB), bip84_cached_zpub, sizeof(bip84_cached_zpub));
     }
 
     // This saves one heavy HMAC-SHA512 derivation per address request
@@ -2085,9 +2137,10 @@ static void derive_bip84_account(void) {
 // m/purpose'/0' of the single sig script in use, from the root
 static void derive_single_coin(const HDNode *root) {
     bip84_coin_purpose = single_purpose();
+    bip84_coin_testnet = bip84_testnet;
     bip84_coin_node = *root;
     hdnode_private_ckd(&bip84_coin_node, bip84_coin_purpose | 0x80000000);
-    hdnode_private_ckd(&bip84_coin_node, 0 | 0x80000000);
+    hdnode_private_ckd(&bip84_coin_node, coin_type() | 0x80000000);
     bip84_account_parent_fingerprint = hdnode_fingerprint(&bip84_coin_node);
 }
 
@@ -2197,7 +2250,7 @@ static bool precompute_multisig_account(void) {
     black_screen();
     draw_title("LOADING MULTISIG", ST7735_LIGHTGREY);
     text_at(5, 25, "DERIVING THE KEY", ST7735_CYAN);
-    strcpy(text, "m/48'/0'/");
+    strcpy(text, bip84_testnet ? "m/48'/1'/" : "m/48'/0'/");
     strcat_num(text, bip84_account_index);
     strcat(text, single_nested() ? "'/1'" : "'/2'");
     text_at(5, 35, text, ST7735_CYAN);
@@ -2225,13 +2278,13 @@ static void account_key_text(bool zpub, char *out) {
     out[9] = '\0';
     strcat(out, "/");
     strcat_num(out, bip84_multisig_mode ? 48 : single_purpose());
-    strcat(out, "h/0h/");
+    strcat(out, bip84_testnet ? "h/1h/" : "h/0h/");
     strcat_num(out, bip84_account_index);
     strcat(out, bip84_multisig_mode ? (single_nested() ? "h/1h]" : "h/2h]") : "h]");
     if (bip84_multisig_mode) {
         // Ypub (P2SH-P2WSH) or Zpub (P2WSH), as Coldcard writes them
         hdnode_serialize_public(&ms_account_node, ms_account_parent_fingerprint,
-                                zpub ? (single_nested() ? 0x0295B43F : 0x02AA7ED3) : 0x0488B21E,
+                                key_version(zpub ? (single_nested() ? KEY_YPUB_MS : KEY_ZPUB_MS) : KEY_XPUB),
                                 &out[strlen(out)], 115);
     } else {
         strcat(out, zpub ? bip84_cached_zpub : bip84_cached_xpub);
@@ -2243,14 +2296,16 @@ static void account_key_text(bool zpub, char *out) {
 // the root (kept while the wallet is loaded, else the PBKDF2 again, BACK
 // cancels). False if cancelled: the keys stay as they were.
 static bool single_purpose_refresh(void) {
-    if (!bip84_account_cached || bip84_coin_purpose == single_purpose()) return true;
+    if (!bip84_account_cached || (bip84_coin_purpose == single_purpose() && bip84_coin_testnet == bip84_testnet)) {
+        return true;
+    }
     char text[24];
     black_screen();
     draw_title("LOADING WALLET", ST7735_LIGHTGREY);
     text_at(5, 25, "DERIVING THE KEYS", ST7735_CYAN);
     strcpy(text, "m/");
     strcat_num(text, single_purpose());
-    strcat(text, "'/0'/");
+    strcat(text, bip84_testnet ? "'/1'/" : "'/0'/");
     strcat_num(text, bip84_account_index);
     strcat(text, "'");
     text_at(5, 35, text, ST7735_CYAN);
@@ -2302,6 +2357,7 @@ static void set_account_index(uint32_t index) {
 // Sparrow and Nunchuk; the key shown on the XPUB / ZPUB page), true = UR
 // crypto-account (Sparrow, Keystone...). LEFT / RIGHT on the QR switch it.
 static bool xpub_qr_ur = false;
+#define UR_ACCOUNT_V8_CHARS 279
 
 static void show_account_qr(void) {
     uint8_t cbor[140];
@@ -2312,7 +2368,7 @@ static void show_account_qr(void) {
     const HDNode *node = bip84_multisig_mode ? &ms_account_node : &bip84_account_node;
 
     path[0] = (bip84_multisig_mode ? 48 : single_purpose()) | 0x80000000;
-    path[1] = 0x80000000;
+    path[1] = coin_type() | 0x80000000;
     path[2] = bip84_account_index | 0x80000000;
     path[3] = ms_script_index() | 0x80000000;
     key.master_fingerprint = bip84_master_fingerprint;
@@ -2325,6 +2381,7 @@ static void show_account_qr(void) {
     key.nested = single_nested();
     key.taproot = single_taproot() && !bip84_multisig_mode;
     key.legacy = single_legacy() && !bip84_multisig_mode;
+    key.testnet = bip84_testnet;
 
     white_screen();
     if (!xpub_qr_ur) {
@@ -2336,9 +2393,12 @@ static void show_account_qr(void) {
         drawtext(132, 60, "TEXT", ST7735_BLACK, ST7735_WHITE, 1);      // Format, right margin
         return;
     }
-    uint32_t len = ur_account_cbor(&key, cbor, sizeof(cbor));
+    uint32_t len = ur_account_cbor(&key, cbor, sizeof(cbor)), chars = 0;
+    // Version 8 holds 279 characters (ECC L, alphanumeric); the testnet
+    // use-info can take a high account past it: version 9 (53 modules, 106 px)
     if (len == 0 || !ur_encoder_init_type(&ur, "CRYPTO-ACCOUNT", cbor, len, false, sizeof(cbor)) ||
-        ur_encoder_part(&ur, 1, text, sizeof(text)) == 0 || !draw_qr_frame(text, 8, 2)) {
+        (chars = ur_encoder_part(&ur, 1, text, sizeof(text))) == 0 ||
+        !draw_qr_frame(text, (chars > UR_ACCOUNT_V8_CHARS) ? 9 : 8, 2)) {
         drawtext(5, 5, "QR EXPORT ERROR", ST7735_RED, ST7735_WHITE, 1);
         return;
     }
@@ -2363,6 +2423,7 @@ static void account_file_text(char *out, char *stem) {
     if (!bip84_multisig_mode) strcat(stem, kind[bip84_script]);
     strcat(stem, "-acc");
     strcat_num(stem, bip84_account_index);
+    if (bip84_testnet) strcat(stem, "-test");
     if (bip84_multisig_mode) {
         strcpy(out, key);
     } else {
@@ -2421,15 +2482,15 @@ static bool get_current_bip84_result(uint32_t chain, uint32_t address_index, Bit
     if (single_taproot()) {
         uint8_t qx[32];
         return psbt_taproot_output_key(node.public_key, qx) &&
-               segwit_addr_encode(result->address, "bc", 1, qx, 32) != 0;
+               segwit_addr_encode(result->address, net_hrp(bip84_testnet), 1, qx, 32) != 0;
     }
     uint8_t payload[21];
     single_script_hash(node.public_key, single_nested(), &payload[1]);
     if (single_nested() || single_legacy()) {
-        payload[0] = single_legacy() ? 0x00 : 0x05;     // Mainnet P2PKH or P2SH
+        payload[0] = single_legacy() ? NET_P2PKH(bip84_testnet) : NET_P2SH(bip84_testnet);
         return base58_encode_check(payload, sizeof(payload), result->address, sizeof(result->address)) > 0;
     }
-    return segwit_addr_encode(result->address, "bc", 0, &payload[1], 20) != 0;
+    return segwit_addr_encode(result->address, net_hrp(bip84_testnet), 0, &payload[1], 20) != 0;
 }
 
 // The address on the ADDRESSES screen, kept so that its QR and the way back
@@ -2543,15 +2604,22 @@ static void print_bip84_menu(void)
     bool has_passphrase = (bip84_passphrase[0] != '\0');
     const uint8_t *ids = bip84_options;
     const char *options[cBIP84_n_opt];
+    char key_entry[10];                 // "XPUB/ZPUB", "TPUB/VPUB", "XPUB"...
+    strcpy(key_entry, key_name(false));
+    if (bip84_script == SCRIPT_NATIVE || bip84_script == SCRIPT_NESTED) {
+        strcat(key_entry, "/");
+        strcat(key_entry, key_name(true));
+    }
     for (int i = 0; i < bip84_option_count(); i++) {
         options[i] = menu_bip84[i];
         if (has_passphrase && ids[i] == cBIP84_PASSPHRASE) options[i] = "CHANGE PASSPHRASE";
-        if (ids[i] == cBIP84_XPUB) {        // The extended key formats of the script type
-            options[i] = (bip84_script == SCRIPT_NATIVE) ? "XPUB/ZPUB" :
-                         (bip84_script == SCRIPT_NESTED) ? "XPUB/YPUB" : "XPUB";
-        }
+        if (ids[i] == cBIP84_XPUB) options[i] = key_entry;     // The extended key formats of the script type
     }
-    print_titled_menu(has_passphrase ? "WALLET (PASSPHRASE)" : "WALLET", options, bip84_option_count(), bip84_menu_pointer);
+    print_titled_menu(bip84_testnet ? "" : has_passphrase ? "WALLET (PASSPHRASE)" : "WALLET",
+                      options, bip84_option_count(), bip84_menu_pointer);
+    if (bip84_testnet) {                // "TESTNET WALLET", "TESTNET (PASSPHRASE)": the network first
+        draw_title_pair("TESTNET", ST7735_YELLOW, has_passphrase ? "(PASSPHRASE)" : "WALLET", ST7735_LIGHTGREY);
+    }
     // The kind of wallet, always in sight: other script types give other addresses
     // Multisig with its descriptor loaded: its policy ("MULTI 2/3, NATIVE SEGWIT")
     char kind[28];
@@ -2598,19 +2666,18 @@ static void print_sign_menu(void)
     estado = SIGN_MENU;
 }
 
-// Multisig: RECEIVE and CHANGE need the descriptor (dark gray and skipped
-// without it), IMPORT DESCRIPTOR takes the place of SCAN ADDRESS, and the
-// line below says which wallet the addresses are of
+// Multisig: RECEIVE, CHANGE, SCAN and EXPORT need the descriptor (dark gray and
+// skipped without it), IMPORT DESCRIPTOR comes last, and the line below says
+// which wallet the addresses are of
 static void print_address_menu(void)
 {
     bool gray = bip84_multisig_mode && !ms_wallet_active();
-    draw_title(menu_bip84[5], ST7735_LIGHTGREY);
-    for (int i = 0; i < cADDRESS_n_opt; i++) {
+    draw_net_title(menu_bip84[5], bip84_testnet);
+    for (int i = 0; i < address_count(); i++) {
         // Each entry drawn once in its color: no white flash before the gray
-        int id = (bip84_multisig_mode && i == cADDRESS_SCAN) ? cADDRESS_IMPORT : i;
         uint16_t color = (i == address_menu_pointer) ? ST7735_ORANGE :
-                         (gray && i < cADDRESS_SCAN) ? 0x8410 : ST7735_WHITE;
-        text_at(1, 13 + i * 10, (char *)menu_addresses[id], color);
+                         (gray && i < cADDRESS_IMPORT) ? 0x8410 : ST7735_WHITE;
+        text_at(1, 13 + i * 10, (char *)menu_addresses[i], color);
     }
     grid_menu2();
     if (bip84_multisig_mode) {
@@ -2632,7 +2699,7 @@ static void print_address_menu(void)
 // Where the ADDRESSES menu starts: in multisig on IMPORT DESCRIPTOR until
 // a descriptor is loaded, then on RECEIVE ADDRESS
 static int address_menu_first(void) {
-    return (bip84_multisig_mode && !ms_wallet_active()) ? cADDRESS_SCAN : cADDRESS_RECEIVE;
+    return (bip84_multisig_mode && !ms_wallet_active()) ? cADDRESS_IMPORT : cADDRESS_RECEIVE;
 }
 
 static void print_bip84_info_screen(void)
@@ -2648,7 +2715,7 @@ static void print_bip84_info_screen(void)
         // Only run the heavy elliptic curve derivation when we actually need an address
         uint32_t chain = (uint32_t)address_menu_pointer;      // 0 receive, 1 change
         title = menu_addresses[chain];
-        draw_title((char *)title, ST7735_LIGHTGREY);
+        draw_net_title(title, bip84_testnet);
         if (bip84_multisig_mode) {          // Every cosigner key is derived: say so (rule 4)
             text_at(1, 30, "DERIVING...", ST7735_CYAN);
             led_busy();
@@ -2688,12 +2755,10 @@ static void print_bip84_info_screen(void)
     } else {
         // Origin + key from the cached account (no derivation here)
         account_key_text(bip84_extended_key_page != 0, ms_key);
-        if (bip84_multisig_mode) {
-            title = (bip84_extended_key_page == 0) ? "MULTISIG XPUB" : single_nested() ? "MULTISIG YPUB" : "MULTISIG ZPUB";
-        } else {
-            title = (bip84_extended_key_page == 0) ? "XPUB" : single_nested() ? "YPUB" : "ZPUB";
-        }
-        draw_title((char *)title, ST7735_LIGHTGREY);
+        char key_title[16];                 // "XPUB", "MULTISIG ZPUB", "VPUB"...
+        strcpy(key_title, bip84_multisig_mode ? "MULTISIG " : "");
+        strcat(key_title, key_name(bip84_extended_key_page != 0));
+        draw_net_title(key_title, bip84_testnet);
         draw_bip84_wrapped_text(ms_key, 1, 18, 25, 7);
     }
 
@@ -2702,7 +2767,7 @@ static void print_bip84_info_screen(void)
     } else {                                // XPUB: LEFT / RIGHT the other format
         grid_labels("BACK", NULL, "QR",
                     single_xpub_only() ? NULL :             // Taproot and legacy: the xpub only
-                    bip84_extended_key_page ? "XPUB" : single_nested() ? "YPUB" : "ZPUB", NULL, "SD");
+                    key_name(bip84_extended_key_page == 0), NULL, "SD");
     }
     estado = SHOW_BIP84_INFO;
 }
@@ -4173,6 +4238,7 @@ static void secrets_wipe(void) {
     ms_account_cached = false;
     bip84_multisig_mode = false;
     bip84_script = SCRIPT_NATIVE;
+    bip84_testnet = false;
     bip84_account_index = 0;
     memzero(&bip84_coin_node, sizeof(bip84_coin_node));
     memzero(&bip84_account_node, sizeof(bip84_account_node));
@@ -4838,6 +4904,11 @@ static uint32_t read_cbor_int(const uint8_t *buf, uint32_t *idx) {
 // ============================================================================
 #define PSBT_VIEW_LINE_CHARS 26     // 160 px / 6 px per char at text size 1
 
+// Network of the addresses in the PSBT viewer: the wallet's when signing, the
+// one of the PSBT's key paths in REVIEW PSBT (psbt_viewer() sets it)
+static bool psbt_view_testnet;
+static bool psbt_is_testnet(const psbt_t *psbt);
+
 // Writes the address of an output script, or a short description when the
 // script has no address form.
 // Returns false for the description.
@@ -4845,10 +4916,10 @@ static bool psbt_view_address(const uint8_t *script, uint32_t len, char *out) {
     psbt_script_type_t type = psbt_script_type(script, len);
     uint8_t payload[21];
 
-    if (psbt_segwit_address(script, len, "bc", out, PSBT_ADDRESS_MAX_LEN)) return true;
+    if (psbt_segwit_address(script, len, net_hrp(psbt_view_testnet), out, PSBT_ADDRESS_MAX_LEN)) return true;
 
     if (type == PSBT_SCRIPT_P2PKH || type == PSBT_SCRIPT_P2SH) {
-        payload[0] = (type == PSBT_SCRIPT_P2PKH) ? 0x00 : 0x05;   // Mainnet versions
+        payload[0] = (type == PSBT_SCRIPT_P2PKH) ? NET_P2PKH(psbt_view_testnet) : NET_P2SH(psbt_view_testnet);
         memcpy(&payload[1], (type == PSBT_SCRIPT_P2PKH) ? &script[3] : &script[2], 20);
         if (base58_encode_check(payload, sizeof(payload), out, PSBT_ADDRESS_MAX_LEN) > 0) return true;
     }
@@ -4948,7 +5019,7 @@ static bool psbt_fp_is_mine(uint32_t fingerprint) {
 }
 
 // m/84'/0'/account'/chain/index, m/49'/..., m/86'/... or m/44'/... (single
-// sig: native, nested, taproot or legacy) with chain 0 (receive) or 1
+// sig: native, nested, taproot or legacy; coin type 1' on testnet) with chain 0 (receive) or 1
 // (change), any account
 // (returned in *account)
 static bool psbt_bip84_path(const psbt_keypath_t *kp, uint32_t *account) {
@@ -4957,7 +5028,7 @@ static bool psbt_bip84_path(const psbt_keypath_t *kp, uint32_t *account) {
     *account = psbt_path_element(kp, 2) & ~PSBT_HARDENED;
     uint32_t purpose = psbt_path_element(kp, 0) & ~PSBT_HARDENED;
     return (psbt_path_element(kp, 0) & PSBT_HARDENED) && (purpose == 84 || purpose == 49 || purpose == 86 || purpose == 44) &&
-           psbt_path_element(kp, 1) == PSBT_HARDENED &&
+           psbt_path_element(kp, 1) == (coin_type() | PSBT_HARDENED) &&
            (psbt_path_element(kp, 2) & PSBT_HARDENED) &&
            psbt_path_element(kp, 3) <= 1 &&
            psbt_path_element(kp, 4) < PSBT_HARDENED;
@@ -4971,7 +5042,7 @@ static bool psbt_multisig_path(const psbt_keypath_t *kp, uint32_t *account) {
     *account = psbt_path_element(kp, 2) & ~PSBT_HARDENED;
     return
            psbt_path_element(kp, 0) == (48 | PSBT_HARDENED) &&
-           psbt_path_element(kp, 1) == PSBT_HARDENED &&
+           psbt_path_element(kp, 1) == (coin_type() | PSBT_HARDENED) &&
            (psbt_path_element(kp, 2) & PSBT_HARDENED) &&
            (psbt_path_element(kp, 3) == (2 | PSBT_HARDENED) || psbt_path_element(kp, 3) == (1 | PSBT_HARDENED)) &&
            psbt_path_element(kp, 4) <= 1 &&
@@ -5069,7 +5140,7 @@ static uint32_t desc_key_fingerprint(const desc_key_t *k) {
 // The loaded multisig wallet applies to the seed, account and script type on screen
 static bool ms_wallet_active(void) {
     return ms_wallet_loaded && ms_account_cached && ms_wallet_account == bip84_account_index &&
-           ms_wallet.nested == single_nested() &&
+           ms_wallet.nested == single_nested() && ms_wallet.testnet == bip84_testnet &&
            memcmp(ms_wallet_seed_tag, bip84_seed_tag, sizeof(ms_wallet_seed_tag)) == 0;
 }
 
@@ -5087,14 +5158,11 @@ static uint32_t ms_wallet_script(const desc_wallet_t *w, uint32_t change, uint32
     return desc_witness_script((const uint8_t (*)[33])keys, w->key_count, w->threshold, w->sorted, script);
 }
 
-// Address text of wallet 'w' at change/index: bc1q... (P2WSH) or 3...
-// (P2SH-P2WSH, the P2SH of OP_0 <sha256(ws)>). False on a bad cosigner key.
-static bool ms_wallet_address(const desc_wallet_t *w, uint32_t change, uint32_t index, char *addr, size_t cap) {
-    uint8_t ws[3 + 34 * DESC_MAX_KEYS];
-    uint8_t prog[32];
+// Address text of witness script ws of wallet w (prog gets its SHA256, the
+// P2WSH program): bc1q... or, nested, 3... (testnet tb1q / 2...)
+static bool ms_script_address(const desc_wallet_t *w, const uint8_t *ws, uint32_t len, uint8_t prog[32],
+                              char *addr, size_t cap) {
     SHA256_CTX ctx;
-    uint32_t len = ms_wallet_script(w, change, index, ws);
-    if (len == 0) return false;
     sha256_init(&ctx);
     sha256_update(&ctx, ws, len);
     sha256_final(&ctx, prog);
@@ -5103,11 +5171,21 @@ static bool ms_wallet_address(const desc_wallet_t *w, uint32_t change, uint32_t 
         redeem[0] = 0x00;
         redeem[1] = 0x20;
         memcpy(&redeem[2], prog, 32);
-        payload[0] = 0x05;                  // Mainnet P2SH
+        payload[0] = NET_P2SH(w->testnet);
         hash160_of(redeem, sizeof(redeem), &payload[1]);
         return base58_encode_check(payload, sizeof(payload), addr, cap) > 0;
     }
-    return cap >= 63 && segwit_addr_encode(addr, "bc", 0, prog, 32) == 1;
+    return cap >= 63 && segwit_addr_encode(addr, net_hrp(w->testnet), 0, prog, 32) == 1;
+}
+
+// Address text of wallet 'w' at change/index: bc1q... (P2WSH) or 3...
+// (P2SH-P2WSH, the P2SH of OP_0 <sha256(ws)>). False on a bad cosigner key.
+static bool ms_wallet_address(const desc_wallet_t *w, uint32_t change, uint32_t index, char *addr, size_t cap) {
+    uint8_t ws[3 + 34 * DESC_MAX_KEYS];
+    uint8_t prog[32];
+    uint32_t len = ms_wallet_script(w, change, index, ws);
+    if (len == 0) return false;
+    return ms_script_address(w, ws, len, prog, addr, cap);
 }
 
 // True if 'script' pays to the loaded wallet at the path's change/index
@@ -5505,7 +5583,7 @@ static void psbt_view_flow(const psbt_t *psbt) {
     bool amounts_known = true;
     uint32_t n_in = 0, n_out = 0;
 
-    draw_title("TRANSACTION", ST7735_LIGHTGREY);
+    draw_net_title("TRANSACTION", psbt_view_testnet);
 
     // Inputs: one block each; past the 4th they share one when there are more than 5
     uint32_t single = (psbt->input_count <= FLOW_BLOCKS) ? psbt->input_count : FLOW_BLOCKS - 1;
@@ -5821,6 +5899,7 @@ static bool psbt_viewer(const psbt_t *psbt) {
     uint32_t page = 0;
     uint32_t next_dest = can_sign ? psbt_next_destination(psbt, 0) : outs;
 
+    psbt_view_testnet = can_sign ? bip84_testnet : psbt_is_testnet(psbt);
     while (1) {
         black_screen();
         if (page == 0) {
@@ -6005,6 +6084,7 @@ static bool sd_pick_file(const char *title, const char *none_title, const char *
     char prev[SD_FILES_NAME_LEN];
     uint8_t order[99];                      // Directory entry of each position, sorted by name
     uint32_t count = 0;
+    bool more = false;                      // Files left out: past entry 98, or over 99 files
 
     black_screen();
     draw_title("READING SD CARD...", ST7735_CYAN);
@@ -6012,12 +6092,16 @@ static bool sd_pick_file(const char *title, const char *none_title, const char *
         psbt_sd_message("SD CARD ERROR", "NO CARD OR NOT FAT16/32");
         return false;
     }
-    // One pass per file: the next name after the previous one
-    while (count < sizeof(order)) {
-        int32_t entry = sd_files_next_sorted(count ? prev : NULL, exts, ext_count, name);
-        if (entry < 0 || entry >= (int32_t)sizeof(order)) break;
-        order[count++] = (uint8_t)entry;
+    // One pass per file: the next name after the previous one. A file whose
+    // entry does not fit a byte of 'order' is skipped, not the end (audit R5)
+    prev[0] = '\0';
+    while (1) {
+        int32_t entry = sd_files_next_sorted(prev[0] ? prev : NULL, exts, ext_count, name);
+        if (entry < 0) break;
+        if (count == sizeof(order)) { more = true; break; }
         memcpy(prev, name, SD_FILES_NAME_LEN);
+        if (entry >= (int32_t)sizeof(order)) { more = true; continue; }
+        order[count++] = (uint8_t)entry;
     }
     if (count == 0) {
         strcpy(line, none_title);
@@ -6033,6 +6117,10 @@ static bool sd_pick_file(const char *title, const char *none_title, const char *
     strcpy(text, title);
     draw_title(text, ST7735_LIGHTGREY);
     grid_menu2();
+    if (more) {                             // Left of the grid, as the raw dice note
+        text_at(1, 107, "MORE FILES", ST7735_YELLOW);
+        text_at(1, 117, "NOT SHOWN", ST7735_YELLOW);
+    }
     uint32_t shown_first = 0xFFFFFFFFu;     // Page on screen (none yet)
     uint32_t shown_sel = *sel;
     while (1) {
@@ -6113,7 +6201,7 @@ static bool desc_review(const desc_wallet_t *w, int mine, const char *ok_label) 
     char addr[76];
 
     black_screen();
-    draw_title("MULTISIG WALLET", ST7735_LIGHTGREY);
+    draw_net_title("MULTISIG WALLET", w->testnet);
     text_at(5, 17, "DERIVING ADDRESS...", ST7735_CYAN);
     bool addr_ok = ms_wallet_address(w, 0, 0, addr, sizeof(addr));
     rectan(0, 15, 159, 127, ST7735_BLACK);
@@ -6152,6 +6240,34 @@ static bool desc_review(const desc_wallet_t *w, int mine, const char *ok_label) 
 // is one of the cosigners, shows it and loads it on OK. Not inlined: the
 // parsed copy lives on the stack only during the call.
 static void descriptor_check_and_load(const desc_wallet_t *w);
+
+// EXPORT DESCRIPTOR (multisig ADDRESSES, active descriptor): the loaded wallet
+// as an output descriptor text file on a file card, the same text as the file
+// it was imported from when that was a BIP389 descriptor (desc_format()), named
+// after its policy and checksum, e.g. multisig-2of3-rkn9x0sf.txt ("-test" on
+// testnet), through the confirmation, write and read back of sd_save_file().
+// Public data only: the cosigner xpubs. In the fountain buffer while it is saved.
+static __attribute__((noinline)) void export_descriptor_to_sd(void) {
+    uint32_t size;
+    char *text = (char *)fountain_scratch_buffer(&size);
+    char stem[40];
+
+    uint32_t n = desc_format(&ms_wallet, text, DESC_FORMAT_CAP, base58_encode_check);
+    if (n == 0) {                           // A vault entry saved before the xpub data was kept
+        psbt_sd_message("CANNOT EXPORT", "IMPORT IT AGAIN FROM SD");
+        return;
+    }
+    strcpy(stem, "multisig-");
+    strcat_num(stem, ms_wallet.threshold);
+    strcat(stem, "of");
+    strcat_num(stem, ms_wallet.key_count);
+    strcat(stem, "-");
+    strcat(stem, &text[n - 8]);             // The checksum, as wallets show it
+    if (ms_wallet.testnet) strcat(stem, "-test");
+    text[n++] = '\n';
+    sd_save_file((const uint8_t *)text, n, stem, "DESCRIPTOR", "EXPORT DESCRIPTOR");
+    memzero(text, DESC_FORMAT_CAP);
+}
 
 static __attribute__((noinline)) void import_descriptor_from_sd(void) {
     char name[SD_FILES_NAME_LEN];
@@ -6199,13 +6315,17 @@ static __attribute__((noinline)) void import_descriptor_from_sd(void) {
 static bool descriptor_check(const desc_wallet_t *w, const char *ok_label) {
     char text[24];
 
-    // The script type of the descriptor must be the one chosen in CONFIG
+    // The network and the script type of the descriptor must be the ones chosen in CONFIG
+    if (w->testnet != bip84_testnet) {
+        psbt_sd_message("DESCRIPTOR REFUSED", w->testnet ? "SWITCH TO TESTNET" : "SWITCH TO MAINNET");
+        return false;
+    }
     if (w->nested != single_nested()) {
         psbt_sd_message("DESCRIPTOR REFUSED", w->nested ? "SWITCH TO NESTED SEGWIT" : "SWITCH TO NATIVE SEGWIT");
         return false;
     }
 
-    // Our cosigner key: the xpub of m/48'/0'/account'/2' (1' nested) of this seed
+    // Our cosigner key: the xpub of m/48'/0'/account'/2' (1' nested, m/48'/1' testnet) of this seed
     int mine = -1, mine_fp = -1;
     for (int i = 0; i < w->key_count; i++) {
         if (memcmp(w->keys[i].public_key, ms_account_node.public_key, 33) == 0 &&
@@ -6218,7 +6338,7 @@ static bool descriptor_check(const desc_wallet_t *w, const char *ok_label) {
     if (mine < 0) {
         const desc_key_t *k = (mine_fp >= 0) ? &w->keys[mine_fp] : NULL;
         if (k != NULL && k->origin_len == 4 && k->origin[0] == (48 | 0x80000000u) &&
-            k->origin[1] == 0x80000000u && k->origin[3] == (ms_script_index() | 0x80000000u) &&
+            k->origin[1] == (coin_type() | 0x80000000u) && k->origin[3] == (ms_script_index() | 0x80000000u) &&
             (k->origin[2] & 0x7FFFFFFFu) != bip84_account_index) {
             strcpy(text, "SWITCH TO ACCOUNT ");
             strcat_num(text, k->origin[2] & 0x7FFFFFFFu);
@@ -6264,13 +6384,14 @@ static void descriptor_check_and_load(const desc_wallet_t *w) {
 
 // Loops over the UR parts of a PSBT until BACK is pressed. The parts are
 // built one at a time on the stack, so RAM use does not depend on the PSBT.
-static void show_ur_animated_qr(const uint8_t *psbt, uint32_t len) {
+// With a type the data is that UR's CBOR (crypto-output), not a PSBT.
+static void show_ur_animated_qr(const char *type, const uint8_t *psbt, uint32_t len) {
     ur_encoder_t ur;
     char part[UR_PART_MAX_CHARS(UR_QR_MAX_FRAGMENT) + 1];
     char label[12];
     uint32_t seq = 1;
 
-    if (!ur_encoder_init(&ur, psbt, len, UR_QR_MAX_FRAGMENT)) {
+    if (!ur_encoder_init_type(&ur, type ? type : "CRYPTO-PSBT", psbt, len, type == NULL, UR_QR_MAX_FRAGMENT)) {
         psbt_sd_message("QR EXPORT ERROR", "PSBT TOO BIG OR EMPTY");
         return;
     }
@@ -6331,27 +6452,37 @@ typedef struct {
     bool burns;                 // An OP_RETURN output carries an amount
 } psbt_sign_plan_t;
 
-// Coin type 1' (testnet/signet) in a BIP44-style path
-static bool psbt_keypath_is_testnet(const psbt_keypath_t *kp) {
-    return kp->path_len >= 2 && psbt_path_element(kp, 1) == (1 | PSBT_HARDENED);
+// Coin type 'coin' (0' mainnet, 1' testnet/signet) in a BIP44-style path:
+// m/44', 49', 84', 86' or 48' then the coin type
+static bool psbt_keypath_has_coin(const psbt_keypath_t *kp, uint32_t coin) {
+    uint32_t purpose = psbt_path_element(kp, 0);
+    return kp->path_len >= 2 && psbt_path_element(kp, 1) == (coin | PSBT_HARDENED) &&
+           (purpose == (44 | PSBT_HARDENED) || purpose == (49 | PSBT_HARDENED) || purpose == (84 | PSBT_HARDENED) ||
+            purpose == (86 | PSBT_HARDENED) || purpose == (48 | PSBT_HARDENED));
 }
 
-static bool psbt_is_testnet(const psbt_t *psbt) {
+// Some key path of the PSBT (inputs, outputs, global xpubs) has coin type 'coin'
+static bool psbt_has_coin(const psbt_t *psbt, uint32_t coin) {
     psbt_keypath_t kp;
     for (uint32_t i = 0; i < psbt->input_count; i++) {
         for (uint32_t n = 0; psbt_input_keypath(psbt, i, n, &kp); n++) {
-            if (psbt_keypath_is_testnet(&kp)) return true;
+            if (psbt_keypath_has_coin(&kp, coin)) return true;
         }
     }
     for (uint32_t o = 0; o < psbt->output_count; o++) {
         for (uint32_t n = 0; psbt_output_keypath(psbt, o, n, &kp); n++) {
-            if (psbt_keypath_is_testnet(&kp)) return true;
+            if (psbt_keypath_has_coin(&kp, coin)) return true;
         }
     }
     for (uint32_t n = 0; psbt_global_xpub(psbt, n, &kp); n++) {
-        if (psbt_keypath_is_testnet(&kp)) return true;
+        if (psbt_keypath_has_coin(&kp, coin)) return true;
     }
     return false;
+}
+
+// REVIEW PSBT has no wallet: the network of its key paths (mainnet without any)
+static bool psbt_is_testnet(const psbt_t *psbt) {
+    return psbt_has_coin(psbt, 1);
 }
 
 // Progress screen for long PSBT operations (Rule 4): a title, what is being
@@ -6420,8 +6551,10 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
         plan->refuse = "SEED NOT LOADED";
         return;
     }
-    if (psbt_is_testnet(psbt)) {
-        plan->refuse = "TESTNET NOT SUPPORTED";
+    // A key path of the other network: its addresses and change would be
+    // shown in the wrong form (a PSBT with both is refused either way)
+    if (psbt_has_coin(psbt, bip84_testnet ? 0 : 1)) {
+        plan->refuse = bip84_testnet ? "SWITCH TO MAINNET" : "SWITCH TO TESTNET";
         return;
     }
     if (!psbt_get_fee(psbt, &plan->fee)) {
@@ -6587,7 +6720,7 @@ static bool psbt_confirm_signing(const psbt_t *psbt, const psbt_sign_plan_t *pla
     }
 
     black_screen();
-    draw_title("SIGN TRANSACTION?", ST7735_LIGHTGREY);
+    draw_net_title("SIGN TRANSACTION?", bip84_testnet);
 
     if (dests == 0) {
         text_at(5, y, "ALL GOES BACK TO YOU", ST7735_WHITE);
@@ -6868,7 +7001,7 @@ static void sd_save_file(const uint8_t *data, uint32_t len, const char *stem, co
     black_screen();
     draw_title(title, ST7735_LIGHTGREY);
     text_at(5, 25, "READING SD CARD...", ST7735_CYAN);
-    if (!sd_init()) {
+    if (!sd_init() && !sd_init()) {             // A card just put in may miss the first start
         psbt_sd_message("SD CARD ERROR", "NO CARD");
         return;
     }
@@ -6929,35 +7062,56 @@ static void psbt_save_to_sd(const uint8_t *psbt, uint32_t len) {
     sd_save_file(psbt, len, NULL, "SIGNED PSBT", "SAVE TO SD CARD");
 }
 
-// After signing: QR or SD, as many times as wanted; BACK leaves
-static void psbt_export_menu(const uint8_t *psbt, uint32_t len, uint32_t signed_count) {
+// SHOW QR or SAVE TO SD CARD under a title, the cursor starting on sel:
+// returns the one chosen with OK (0 or 1), or -1 for BACK
+static int export_choice(const char *title, uint16_t color, int sel) {
     static const char *const options[2] = {"SHOW QR", "SAVE TO SD CARD"};
-    char title[24];
-    int sel = 0;
-    bool full = true;
 
-    strcpy(title, "SIGNED ");
-    strcat_num(title, signed_count);
-    strcat(title, signed_count == 1 ? " INPUT" : " INPUTS");
+    black_screen();
+    draw_title(title, color);
+    grid_menu2();
     while (1) {
-        if (full) {
-            black_screen();
-            draw_title(title, ST7735_GREEN);
-            grid_menu2();
-            full = false;
-        }
         for (int i = 0; i < 2; i++) {
             text_at(1, 13 + i * 10, (char *)options[i], (i == sel) ? ST7735_ORANGE : ST7735_WHITE);
         }
         int key = psbt_wait_key();
-        if (key == BACK_BT) return;
-        if (key == UP_BT || key == DOWN_BT) {
-            sel ^= 1;
-        } else {
-            if (sel == 0) show_ur_animated_qr(psbt, len);
-            else psbt_save_to_sd(psbt, len);
-            full = true;
+        if (key == BACK_BT) return -1;
+        if (key == UP_BT || key == DOWN_BT) sel ^= 1;
+        else return sel;
+    }
+}
+
+// After signing: QR or SD, as many times as wanted; BACK leaves
+static void psbt_export_menu(const uint8_t *psbt, uint32_t len, uint32_t signed_count) {
+    char title[24];
+    int sel = 0;
+
+    strcpy(title, "SIGNED ");
+    strcat_num(title, signed_count);
+    strcat(title, signed_count == 1 ? " INPUT" : " INPUTS");
+    while ((sel = export_choice(title, ST7735_GREEN, sel)) >= 0) {
+        if (sel == 0) show_ur_animated_qr(NULL, psbt, len);
+        else psbt_save_to_sd(psbt, len);
+    }
+}
+
+// EXPORT DESCRIPTOR: the loaded multisig wallet as an animated
+// "ur:crypto-output" QR (Sparrow, Krux, SeedSigner, Jade and Keystone read
+// it) or as a text file, as many times as wanted; BACK leaves. The CBOR is
+// in the fountain buffer while it is shown (public data: the cosigner xpubs).
+static void export_descriptor(void) {
+    int sel = 0;
+    while ((sel = export_choice("EXPORT DESCRIPTOR", ST7735_LIGHTGREY, sel)) >= 0) {
+        if (sel == 1) {
+            export_descriptor_to_sd();
+            continue;
         }
+        uint32_t size;
+        uint8_t *cbor = fountain_scratch_buffer(&size);
+        uint32_t n = ur_output_cbor(&ms_wallet, cbor, size);
+        if (n == 0) psbt_sd_message("CANNOT EXPORT", "IMPORT IT AGAIN FROM SD");
+        else show_ur_animated_qr("CRYPTO-OUTPUT", cbor, n);
+        memzero(cbor, n);
     }
 }
 
@@ -7853,6 +8007,36 @@ static uint32_t scan_next_index;
 // from..from+19 of the current account, with the progress on screen (BACK
 // cancels). The result stays on screen: OK scans again, RIGHT (+20) goes on
 // with the next 20 when it was not found, BACK leaves.
+// Multisig SCAN ADDRESS: the receive and change branch of every cosigner key
+// (chain code and public key), derived once per search into the fountain
+// buffer (free while the scanned address waits in shown_addr), so each
+// address takes one public derivation per cosigner instead of two
+typedef struct {
+    uint8_t chain[32];
+    uint8_t pub[33];
+} ms_branch_t;
+
+// Is the multisig address at chain / index of the loaded wallet the scanned
+// one: the P2WSH program (prog, from the bech32 text) or, nested, the 3... text
+static bool ms_scan_same(const ms_branch_t *br, uint32_t index, const char *addr, const uint8_t *prog) {
+    uint8_t keys[DESC_MAX_KEYS][33];
+    uint8_t chain[32], ws[3 + 34 * DESC_MAX_KEYS], h[32];
+    char text[40];
+    for (uint8_t k = 0; k < ms_wallet.key_count; k++) {
+        if (!psbt_public_ckd(br[k].chain, br[k].pub, index, chain, keys[k])) return false;
+    }
+    uint32_t len = desc_witness_script((const uint8_t (*)[33])keys, ms_wallet.key_count, ms_wallet.threshold,
+                                       ms_wallet.sorted, ws);
+    if (!ms_wallet.nested) {
+        SHA256_CTX ctx;
+        sha256_init(&ctx);
+        sha256_update(&ctx, ws, len);
+        sha256_final(&ctx, h);
+        return memcmp(h, prog, 32) == 0;
+    }
+    return ms_script_address(&ms_wallet, ws, len, h, text, sizeof(text)) && strcmp(text, addr) == 0;
+}
+
 static void search_scanned_address(uint32_t from) {
     char line[32];
     uint8_t prog[40];
@@ -7860,13 +8044,32 @@ static void search_scanned_address(uint32_t from) {
     size_t prog_len = 0;
     int ver = -1;
     bool base58 = single_nested() || single_legacy();
+    bool multi = bip84_multisig_mode;
     const char *addr = shown_addr;
+    ms_branch_t *br = NULL;
+    uint32_t n = ms_wallet.key_count;
 
-    if (!base58) (void)segwit_addr_decode(&ver, prog, &prog_len, "bc", addr);     // Checked by the scan
+    if (!base58) (void)segwit_addr_decode(&ver, prog, &prog_len, net_hrp(bip84_testnet), addr);    // Checked by the scan
     scan_next_index = 0;
     rectan(0, 45, 159, 100, ST7735_BLACK);
     rectan(GRID_X, 105, GRID_X + 90, 125, ST7735_BLACK);
     grid_back_only();
+    if (multi) {                                // The two branches of every cosigner first
+        uint32_t size;
+        br = (ms_branch_t *)fountain_scratch_buffer(&size);
+        key_progress_phase("COSIGNER KEYS", (uint8_t)(2 * n));
+        for (uint32_t c = 0; c < 2; c++) {
+            for (uint32_t k = 0; k < n; k++) {
+                if (!psbt_public_ckd(ms_wallet.keys[k].chain_code, ms_wallet.keys[k].public_key, c,
+                                     br[c * n + k].chain, br[c * n + k].pub)) {
+                    text_at(5, 50, "BAD COSIGNER KEY", ST7735_RED);
+                    grid_labels("BACK", NULL, "SCAN", NULL, NULL, NULL);
+                    return;
+                }
+                key_progress_step();
+            }
+        }
+    }
     // Receive and change i together, so low indexes are found first
     key_progress_phase("CHECKING 40 ADDRESSES", 2 * ADDRESS_CHECK_COUNT);
     int found_chain = -1;
@@ -7883,7 +8086,9 @@ static void search_scanned_address(uint32_t from) {
             strcat(line, "   ");
             text_at(10, 72, line, ST7735_CYAN);
             bool same;
-            if (base58) {
+            if (multi) {
+                same = ms_scan_same(&br[chain * n], i, addr, prog);
+            } else if (base58) {
                 BitcoinBip84Result r;
                 same = get_current_bip84_result(chain, i, &r) && strcmp(r.address, addr) == 0;
             } else {
@@ -7908,10 +8113,11 @@ static void search_scanned_address(uint32_t from) {
         strcpy(line, found_chain ? "CHANGE " : "RECEIVE ");
         strcat_num(line, found_index);
         text_at(5, 60, line, ST7735_GREEN);
-        strcpy(line, "m/");
-        strcat_num(line, single_purpose());
-        strcat(line, "'/0'/");
+        strcpy(line, "m/");                 // m/84'/0'/0'/1/5, multisig m/48'/0'/0'/2'/1/5
+        strcat_num(line, multi ? 48 : single_purpose());
+        strcat(line, bip84_testnet ? "'/1'/" : "'/0'/");
         strcat_num(line, bip84_account_index);
+        if (multi) strcat(line, single_nested() ? "'/1" : "'/2");
         strcat(line, found_chain ? "'/1/" : "'/0/");
         strcat_num(line, found_index);
         text_at(5, 70, line, ST7735_CYAN);
@@ -7965,22 +8171,30 @@ static void check_scanned_address(void) {
     }
     draw_bip84_wrapped_text(addr, 5, 15, PSBT_VIEW_LINE_CHARS, 3);
     bool base58 = single_nested() || single_legacy();
+    // "NOT A 1... ADDRESS", "NOT A TB1P... ADDRESS"...: the prefix of the script
+    // type (its own buffer: addr points into text)
+    char why[28];
+    strcpy(why, "NOT A ");
+    strcat(why, script_prefix[bip84_testnet][bip84_script]);
+    strcat(why, " ADDRESS");
+    bool wrong_type;
     if (base58) {
-        // 3... and 1... addresses are compared as text with each address of ours
-        if (addr[0] != (single_legacy() ? '1' : '3') || strlen(addr) >= sizeof(shown_addr)) {
-            text_at(5, 50, single_legacy() ? "NOT A 1... ADDRESS" : "NOT A 3... ADDRESS", ST7735_YELLOW);
-            text_at(5, 60, "NOT FROM THIS WALLET", ST7735_WHITE);
-            grid_confirm("SCAN");
-            return;
-        }
-    } else if (!segwit_addr_decode(&ver, prog, &prog_len, "bc", addr)) {
+        // 3... and 1... (2... and m/n... on testnet) are compared as text with each address of ours
+        char c = addr[0];
+        wrong_type = strlen(addr) >= sizeof(shown_addr) ||
+                     (single_legacy() ? (bip84_testnet ? (c != 'm' && c != 'n') : c != '1')
+                                      : c != (bip84_testnet ? '2' : '3'));
+    } else if (!segwit_addr_decode(&ver, prog, &prog_len, net_hrp(bip84_testnet), addr)) {
         text_at(5, 50, "NOT A BITCOIN ADDRESS", ST7735_RED);
-        text_at(5, 60, "(OR NOT BC1 / MAINNET)", ST7735_WHITE);
+        text_at(5, 60, bip84_testnet ? "(OR NOT TB1 / TESTNET)" : "(OR NOT BC1 / MAINNET)", ST7735_WHITE);
         grid_confirm("SCAN");
         return;
+    } else {                                    // Multisig native: P2WSH, a 32 byte program
+        wrong_type = single_taproot() ? (ver != 1 || prog_len != 32) :
+                     (ver != 0 || prog_len != (bip84_multisig_mode ? 32u : 20u));
     }
-    if (!base58 && (single_taproot() ? (ver != 1 || prog_len != 32) : (ver != 0 || prog_len != 20))) {
-        text_at(5, 50, single_taproot() ? "NOT A BC1P ADDRESS" : "NOT A BC1Q ADDRESS", ST7735_YELLOW);
+    if (wrong_type) {
+        text_at(5, 50, why, ST7735_YELLOW);
         text_at(5, 60, "NOT FROM THIS WALLET", ST7735_WHITE);
         grid_confirm("SCAN");
         return;
@@ -8354,7 +8568,7 @@ static int wait_any_key(void) {
 // SAVE applies the changes (deriving what they need, with progress), BACK leaves
 // them. Multisig is segwit only; a loaded descriptor sets its script type.
 
-#define CONFIG_ROWS 3
+#define CONFIG_ROWS 4           // ACCOUNT, MODE, SCRIPT, NETWORK
 
 static uint8_t config_script_min(bool multi) {
     return multi ? SCRIPT_NESTED : SCRIPT_LEGACY;
@@ -8365,10 +8579,10 @@ static uint8_t config_script_max(bool multi) {
 }
 
 // Derivation path of the account, "m/84'/0'/0'"
-static void config_path(char *out, uint8_t script, bool multi, uint32_t account) {
+static void config_path(char *out, uint8_t script, bool multi, uint32_t account, bool testnet) {
     static const char *const purpose[4] = {"m/44'", "m/49'", "m/84'", "m/86'"};
     strcpy(out, multi ? "m/48'" : purpose[script]);
-    strcat(out, "/0'/");
+    strcat(out, testnet ? "/1'/" : "/0'/");
     strcat_num(out, account);
     strcat(out, multi ? ((script == SCRIPT_NESTED) ? "'/1'" : "'/2'") : "'");
 }
@@ -8380,9 +8594,9 @@ static void config_pad(char *text) {
     text[n] = '\0';
 }
 
-static void config_draw(bool full, uint8_t row, uint32_t account, bool multi, uint8_t script) {
+static void config_draw(bool full, uint8_t row, uint32_t account, bool multi, uint8_t script, bool testnet) {
     char text[28];
-    bool locked = multi && ms_wallet_loaded;        // The descriptor sets the script
+    bool locked = multi && ms_wallet_loaded;        // The descriptor sets the script and the network
     if (full) {
         black_screen();
         draw_title("WALLET CONFIG", ST7735_LIGHTGREY);
@@ -8390,6 +8604,7 @@ static void config_draw(bool full, uint8_t row, uint32_t account, bool multi, ui
         text_at(1, 26, "MODE:", ST7735_WHITE);
     }
     text_at(1, 38, "SCRIPT:", locked ? 0x8410 : ST7735_WHITE);
+    text_at(1, 50, "NETWORK:", locked ? 0x8410 : ST7735_WHITE);
     fast_itoa(account, text);
     strcat(text, "  ");
     text_at(50, 14, text, (row == 0) ? ST7735_ORANGE : ST7735_WHITE);
@@ -8397,19 +8612,21 @@ static void config_draw(bool full, uint8_t row, uint32_t account, bool multi, ui
     strcpy(text, script_name[script]);
     while (strlen(text) < 13) strcat(text, " ");
     text_at(50, 38, text, locked ? 0x8410 : (row == 2) ? ST7735_ORANGE : ST7735_WHITE);
+    text_at(50, 50, testnet ? "TESTNET" : "MAINNET", locked ? 0x8410 : (row == 3) ? ST7735_ORANGE : ST7735_WHITE);
 
     // What the choice means; each line padded with spaces to the full width,
     // so the old text is overwritten instead of cleared first (no flicker)
-    config_path(text, script, multi, account);
-    config_pad(text);
-    text_at(1, 54, text, ST7735_CYAN);
-    strcpy(text, script_prefix[script]);
-    if (script == SCRIPT_NATIVE) strcat(text, " RECOMMENDED");
+    config_path(text, script, multi, account, testnet);
     config_pad(text);
     text_at(1, 64, text, ST7735_CYAN);
-    strcpy(text, locked ? "SET BY THE DESCRIPTOR" : "");
+    strcpy(text, script_prefix[testnet][script]);
+    if (script == SCRIPT_NATIVE) strcat(text, " RECOMMENDED");
     config_pad(text);
-    text_at(1, 78, text, ST7735_CYAN);
+    text_at(1, 74, text, ST7735_CYAN);
+    // The descriptor lock, or what TESTNET covers (yellow: test coins only)
+    strcpy(text, locked ? "SET BY THE DESCRIPTOR" : testnet ? "TESTNET AND SIGNET" : "");
+    config_pad(text);
+    text_at(1, 86, text, locked ? ST7735_CYAN : ST7735_YELLOW);
 
     const char *left = NULL, *right = NULL;
     if (row == 0) {
@@ -8418,6 +8635,11 @@ static void config_draw(bool full, uint8_t row, uint32_t account, bool multi, ui
     } else if (row == 1) {
         if (multi) left = "SING";
         else right = "MULT";
+    } else if (row == 3) {
+        if (!locked) {
+            if (testnet) left = "MAIN";
+            else right = "TEST";
+        }
     } else if (!locked) {
         if (script > config_script_min(multi)) left = script_key[script - 1];
         if (script < config_script_max(multi)) right = script_key[script + 1];
@@ -8426,7 +8648,12 @@ static void config_draw(bool full, uint8_t row, uint32_t account, bool multi, ui
 }
 
 // LEFT / RIGHT on a row. Returns false when the value cannot move that way.
-static bool config_step(uint8_t row, bool right, uint32_t *account, bool *multi, uint8_t *script) {
+static bool config_step(uint8_t row, bool right, uint32_t *account, bool *multi, uint8_t *script, bool *testnet) {
+    if (row == 3) {
+        if ((*multi && ms_wallet_loaded) || *testnet == right) return false;
+        *testnet = right;
+        return true;
+    }
     if (row == 0) {
         if (right ? (*account >= BIP84_ACCOUNT_MAX) : (*account == 0)) return false;
         *account = right ? *account + 1 : *account - 1;
@@ -8447,9 +8674,10 @@ static void config_run(void) {
     uint32_t account = bip84_account_index;
     bool multi = bip84_multisig_mode;
     uint8_t script = bip84_script;
+    bool testnet = bip84_testnet;
     uint8_t row = 0;
 
-    config_draw(true, row, account, multi, script);
+    config_draw(true, row, account, multi, script, testnet);
     while (1) {
         int bt = wait_any_key();
         if (bt == BACK_BT) {                    // Nothing changes
@@ -8464,7 +8692,7 @@ static void config_run(void) {
             row = (uint8_t)((row + ((bt == DOWN_BT) ? 1 : CONFIG_ROWS - 1)) % CONFIG_ROWS);
         } else if (bt == LEFT_BT || bt == RIGHT_BT) {
             bool right = (bt == RIGHT_BT);
-            if (config_step(row, right, &account, &multi, &script) && row == 0) {
+            if (config_step(row, right, &account, &multi, &script, &testnet) && row == 0) {
                 // The account repeats while held, like the numbers elsewhere
                 uint32_t t = _CP0_GET_COUNT(), wait = KEY_REPEAT_FIRST_MS;
                 while ((right ? BT6 : BT2) == 0) {
@@ -8472,31 +8700,41 @@ static void config_run(void) {
                     if ((uint32_t)(_CP0_GET_COUNT() - t) < wait * (CPU_CLOCK_FREQUENCY / 2000u)) continue;
                     t = _CP0_GET_COUNT();
                     wait = KEY_REPEAT_NEXT_MS;
-                    if (!config_step(row, right, &account, &multi, &script)) break;
-                    config_draw(false, row, account, multi, script);
+                    if (!config_step(row, right, &account, &multi, &script, &testnet)) break;
+                    config_draw(false, row, account, multi, script, testnet);
                 }
             }
         }
-        config_draw(false, row, account, multi, script);
+        config_draw(false, row, account, multi, script, testnet);
     }
 
     // SAVE: the account first, so a multisig account is derived for the new index
     if (account != bip84_account_index) set_account_index(account);
-    if (multi != bip84_multisig_mode) {
-        bip84_multisig_mode = multi;
-        if (multi && !ms_account_cached) {
-            black_screen();
-            if (!precompute_multisig_account()) bip84_multisig_mode = false;    // Cancelled
+    if (script != bip84_script || testnet != bip84_testnet) {
+        // Another script type or coin type: the single sig account derives
+        // again from the kept root; the multisig one of another network when
+        // it is next needed (below if in multisig mode)
+        uint8_t old_script = bip84_script;
+        bool old_testnet = bip84_testnet;
+        bip84_script = script;
+        bip84_testnet = testnet;
+        bip84_address_index = 0;
+        if (script != old_script) bip84_extended_key_page = 0;      // Taproot has no zpub page
+        shown_addr_valid = false;
+        if (!single_purpose_refresh()) {        // Cancelled: the mode stays too, so the
+            bip84_script = old_script;          // script is always one of the mode (audit R3)
+            bip84_testnet = old_testnet;
+            multi = bip84_multisig_mode;
+        } else if (testnet != old_testnet) {
+            ms_account_cached = false;
         }
     }
-    if (script != bip84_script) {
-        uint8_t old = bip84_script;
-        bip84_script = script;
-        bip84_address_index = 0;
-        bip84_extended_key_page = 0;            // Taproot has no zpub page
-        if (!single_purpose_refresh()) bip84_script = old;      // Cancelled
-        ms_script_refresh();                                     // The multisig account of that type
+    bip84_multisig_mode = multi;
+    if (multi && !ms_account_cached) {
+        black_screen();
+        if (!precompute_multisig_account()) bip84_multisig_mode = false;    // Cancelled
     }
+    ms_script_refresh();                        // The multisig account of the script type
 }
 
 // Digit 0..9 from the timer: its first nibble below 10
@@ -8958,6 +9196,8 @@ static void print_reader_screen(void) {
         kind = "BITCOIN PAYMENT URI";
     } else if (segwit_addr_decode(&ver, prog, &prog_len, "bc", t)) {
         kind = "BITCOIN ADDRESS (BC1)";
+    } else if (segwit_addr_decode(&ver, prog, &prog_len, "tb", t)) {
+        kind = "TESTNET ADDRESS (TB1)";
     } else {
         kind = "TEXT, ";
     }
@@ -9386,7 +9626,7 @@ out:
 }
 
 // Saves a checked multisig wallet as a DESCRIPTOR entry: one record, or two
-// for 6-7 cosigners. No editor: the title is "MULTISIG m OF n" and 4 hex
+// for 6-7 cosigners. No editor: the title is "MULTISIG m OF n" ("TESTNET m OF n") and 4 hex
 // digits of a hash of the packed wallet, so two wallets of the same policy
 // differ in the list. One confirmation with the cosigner fingerprints (ours
 // in green).
@@ -9404,7 +9644,7 @@ static vault_status_t vault_save_descriptor(const desc_wallet_t *w, uint16_t *ke
     sha256_init(&ctx);
     sha256_update(&ctx, blob, total);
     sha256_final(&ctx, hash);
-    strcpy(title, "MULTISIG ");
+    strcpy(title, w->testnet ? "TESTNET " : "MULTISIG ");     // "TESTNET 2 OF 3 1A2B" in the list
     strcat_num(title, w->threshold);
     strcat(title, " OF ");
     strcat_num(title, w->key_count);
@@ -13530,6 +13770,12 @@ int SSS_N = 9;
                             estado = ADDRESS_SCAN;
                             break;
                         }
+                        if (address_option() == cADDRESS_EXPORT) {
+                            export_descriptor();
+                            black_screen();
+                            print_address_menu();
+                            break;
+                        }
                         estado = SHOW_BIP84_INFO;
                         print_bip84_info_screen();      // Receive or change, from address 0 on
                         break;
@@ -13542,7 +13788,7 @@ int SSS_N = 9;
                         print_address_menu();
                         break;
                     case DOWN_BT:
-                        if (address_menu_pointer < cADDRESS_n_opt - 1) address_menu_pointer++;
+                        if (address_menu_pointer < address_count() - 1) address_menu_pointer++;
                         print_address_menu();
                         break;
                     default:
