@@ -2760,6 +2760,7 @@ static void print_bip84_info_screen(void)
         strcat(key_title, key_name(bip84_extended_key_page != 0));
         draw_net_title(key_title, bip84_testnet);
         draw_bip84_wrapped_text(ms_key, 1, 18, 25, 7);
+        draw_help(bip84_multisig_mode ? "FOR THE MULTISIG SETUP" : "WATCH ONLY, CANNOT SPEND", ST7735_CYAN);
     }
 
     if (bip84_option() == cBIP84_ADDRESSES) {
@@ -4597,6 +4598,8 @@ static void draw_create_menu(void) {
     if (seed_pointer == cSEED_timer && !stopwatch_enabled) seed_pointer = cSEED_coin;
     for (int i = 0; i < create_menu_count(); i++) options[i] = menu_create[create_id(i)];
     print_titled_menu(menu_main[cMAIN_create], options, create_menu_count(), create_pos(seed_pointer));
+    // STOPWATCH: its help is a warning, so yellow
+    draw_help(help_create[seed_pointer], (seed_pointer == cSEED_timer) ? ST7735_YELLOW : ST7735_CYAN);
 }
 
 // The XOR menu: SEED WORD XOR in OPSEC, or MIX ENTROPY in CREATE
@@ -8652,6 +8655,10 @@ static void config_draw(bool full, uint8_t row, uint32_t account, bool multi, ui
     strcpy(text, locked ? "SET BY THE DESCRIPTOR" : testnet ? "TESTNET AND SIGNET" : "");
     config_pad(text);
     text_at(1, 86, text, locked ? ST7735_CYAN : ST7735_YELLOW);
+    // Help of the row; MODE only while it shows MULTI SIG
+    static const char *const help_config[] = {"ANOTHER WALLET, SAME SEED", "NO SINGLE POINT OF FAILURE",
+                                              "MUST MATCH YOUR WALLET", "TEST COINS HAVE NO VALUE"};
+    draw_help((row == 1 && !multi) ? NULL : help_config[row], ST7735_CYAN);
 
     const char *left = NULL, *right = NULL;
     if (row == 0) {
@@ -10254,6 +10261,7 @@ done:
 // ============================================================================
 
 static const char *const menu_derive[] = {"BIP85 CHILD SEED", "BIP85 PASSWORD", "NOSTR KEYS"};
+static const char *const help_derive[] = {"USE CASE E.G.: HOT WALLET", "PASSWORDS FROM YOUR SEED", "NOSTR IDENTITY FROM SEED"};
 #define cDERIVE_CHILD       0
 #define cDERIVE_PASSWORD    1
 #define cDERIVE_NOSTR       2
@@ -10536,12 +10544,14 @@ static bool derive_menu_run(void) {
     while (1) {
         black_screen();
         print_titled_menu("DERIVE", menu_derive, cDERIVE_n_opt, sel);
+        draw_help(help_derive[sel], ST7735_CYAN);
         int bt;
         while (1) {
             bt = wait_any_key();
             if (bt == UP_BT || bt == DOWN_BT) {
                 sel = (sel + ((bt == DOWN_BT) ? 1 : cDERIVE_n_opt - 1)) % cDERIVE_n_opt;
                 print_titled_menu("DERIVE", menu_derive, cDERIVE_n_opt, sel);
+                draw_help(help_derive[sel], ST7735_CYAN);
             } else if (bt == OK_BT || bt == BACK_BT) {
                 break;
             }

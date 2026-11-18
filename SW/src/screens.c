@@ -67,6 +67,24 @@ const char* const menu_sign[]     = {"FROM QR", "FROM SD"};
 const char* const menu_import[]   = {"FROM QR", "FROM SD", "FROM VAULT"};
 const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD", "FROM QR"};
 
+// Help lines: one per entry, in the order of the menu (help_main by position,
+// help_create by cSEED_* id), drawn under the options by draw_help()
+const char* const help_main[cMAIN_n_opt] = {"FROM COINS, DICE OR CARDS", "OPEN A SEED YOU HAVE", "SPARE SEEDS FROM YOUR SEED",
+    "SPLIT, HIDE OR DISGUISE", "QR, PASSWORDS, CHECK A TX", "PREPARE OR WIPE THE CARD", "GUIDES AND TOOLS AS QR",
+    "ENABLE FEATURES, UPDATE FW"};
+const char* const help_create[cSEED_n_opt] = {"128 OR 256 COIN FLIPS", "50 OR 99 DICE ROLLS", "DRAW WORDS ONE BY ONE",
+    "A WELL SHUFFLED DECK", "ITS HALVES ARE SEEDS TOO", "ENTROPY CANNOT BE VERIFIED", "MIX DIFFERENT SOURCES"};
+static const char* const help_opsec[] = {"SPLIT, E.G. 2 OF 3 SHARES", "RECOVERY SCHEMES", "HIDE THE SECRET",
+    "HIDE SEED IN A CARD DECK"};
+static const char* const help_tools[] = {"SEE WHAT A QR CONTAINS", "TURN A TEXT INTO A QR", "A PASSWORD FROM DICE",
+    "CHECK A TX WITHOUT A SEED"};
+static const char* const help_erase[] = {"DELETE SLOT BY SLOT", "REQUIRED FOR VAULT & SEEDS", "OVERWRITE EVERY SECTOR"};
+static const char* const help_backup[] = {"SAVE SEED INTO SD", "GENERATE A QR OF THE SEED", "SMALLER SEED QR",
+    "DON'T LOSE THE PASSWORD", "QUIZ TO VALIDATE A BACKUP"};
+static const char* const help_settings[cSETTINGS_n_opt] = {"ALLOW SEED QR CODES", "ALLOW PLAIN SEEDS ON SD",
+    "A GAME AT POWER ON", "SHOW STOPWATCH IN CREATE", "WIPE ALL AFTER NO USE", "STRENGTH OF KEF BACKUPS",
+    "CHIP ID, STACK, FLASH LOCK", "INSTALL UPDATE.HEX FROM SD"};
+
 void draw_hex16(unsigned int x, unsigned int y, uint16_t numero, int N, unsigned int color, unsigned int bg, unsigned int size) {
     char hex_text[5]; // 4 hex digits plus null terminator
 
@@ -363,6 +381,25 @@ static const char *menu_title(const char* const *options) {
     return NULL;
 }
 
+// Help lines of a menu table, NULL for a menu without them
+static const char* const *menu_help(const char* const *options) {
+    if (options == menu_opsec)        return help_opsec;
+    if (options == menu_tools)        return help_tools;
+    if (options == menu_erase)        return help_erase;
+    if (options == menu_backup)       return help_backup;
+    return NULL;
+}
+
+// One help line under the options (y 95, above the grid; menus of up to 8
+// entries end at y 91), padded with spaces so the previous one is overwritten
+// without a clear; NULL leaves the line empty
+void draw_help(const char *text, unsigned int color) {
+    char line[28];
+    strcpy(line, text ? text : "");
+    while (strlen(line) < 26) strcat(line, " ");
+    text_at(1, 95, line, color);
+}
+
 void print_generic_menu(const char* const *options, int n_opt, int sel) {
     print_titled_menu(menu_title(options), options, n_opt, sel);
 }
@@ -378,6 +415,8 @@ void print_titled_menu(const char *title, const char* const *options, int n_opt,
         uint16_t color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
         text_at(1, top + i * 10, (char*)options[i], color);
     }
+    const char* const *help = menu_help(options);
+    if (help != NULL) draw_help(help[sel], ST7735_CYAN);
     grid_menu2();
 }
 
@@ -388,6 +427,7 @@ void main_screen(int sel) {
         uint color = (i == sel) ? ST7735_ORANGE : ST7735_WHITE;
         text_at(1, 13 + i * 10, (char*)menu_main[main_menu_ids[i]], color);
     }
+    draw_help(help_main[sel], ST7735_CYAN);
     if(SD_ready)text_at(10, 118, "SD OK", ST7735_GREEN);
     grid_menu1();
 }
@@ -1523,6 +1563,7 @@ void print_settings_screen(int sel) {
     text_at(1, 63, text_idle, color_kef);
     text_at(1, 73, "MCU SERIAL NUMBER", color_serial);
     text_at(1, 83, "UPDATE FIRMWARE", color_fw);
+    draw_help(help_settings[sel], ST7735_CYAN);
 
     // Versions at the bottom left, next to the button grid: this firmware and
     // the bootloader, whose tag it keeps at a fixed boot flash address

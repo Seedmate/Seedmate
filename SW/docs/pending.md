@@ -3,7 +3,7 @@
 The open work list, kept up to date with every change (Claude updates it when
 a task is done, decided or added). Last update: 2026-11-18.
 
-Memory today: flash 222.2 KB of 238 KB (227,495 B, 93.3%, about 15.9 KB free);
+Memory today: flash 223.8 KB of 238 KB (229,207 B, 94.0%, about 14.2 KB free);
 RAM 23.4 KB of 32 KB (24,008 B; the stack is 8,208 B of it).
 
 ## 0. Security audit of 2026-11-09
@@ -96,37 +96,11 @@ UPDATE FIRMWARE, QR READER on a Compact SeedQR, BIP85 PASSWORD with index 10.
 
 | Task | Notes |
 |---|---|
-| Help line under menus | Agreed, not done. One cyan line (up to 26 characters) at y~95 for menus with up to 8 entries (not the 9 entry wallet menu). Drafts below |
+| Help line under menus | Done on 2026-11-19 (+1,712 B flash, no RAM): one cyan line at y 95 (`draw_help()` in `screens.c`, padded so it overwrites the previous one) under the main menu, CREATE (STOPWATCH in yellow: a warning), OPSEC, TOOLS, SD CARD, SETTINGS, SEED BACKUP and DERIVE, per row in WALLET CONFIG (MODE only while it shows MULTI SIG) and under the key on the XPUB page; none in the WALLET menu (full, the user's choice). Texts chosen by the user in `docs/help_lines.csv`. Device test UI-06 |
 | First-boot welcome screens | Later: what Seedmate is, how the keys move, the tutorial QR |
 | Spanish firmware variant | Future, a separate build: about +3-4 KB over 13.3 KB of UI text; add accented glyphs (~50 B) or write without accents; BIP39 words stay English |
 | WIPE ALL CARD progress bar | Done on 2026-11-18 (+156 B flash, no RAM; the 512 B sector buffer on the stack is gone, `buffer` is used): red title, cyan step and "n / total MB", the progress bar above the grid, `led_busy()`, and STOP (BACK) with "WIPE STOPPED AT n MB" (yellow "SEEDS MAY REMAIN" if stopped in the first 1 MB), as the user chose. Device test SD-02 rev 2, passed on 2026-11-18 |
 | Incompatibility warning for OPSEC obfuscation and Shamir | Added on 2026-11-16. On entering OPSEC > obfuscation and the BIP39 Shamir split / merge, a yellow notice that the result is Seedmate's own format: other wallets and devices cannot read it (the Shamir shares are not SLIP-39), so it is recovered only with Seedmate or its published method. Once per session or every time, to be decided; keep the text short (flash) |
-
-Help line drafts:
-
-| Entry | Help |
-|---|---|
-| CREATE NEW SEED WORDS | FROM COINS, DICE OR CARDS |
-| LOAD SEED WORDS | OPEN A SEED YOU ALREADY HAVE |
-| BIP85 CHILD SEED | SPARE SEEDS FROM YOUR SEED |
-| OPSEC | SPLIT, HIDE OR DISGUISE |
-| TOOLS | QR, PASSWORDS, CHECK A TX |
-| SD CARD | PREPARE OR ERASE THE CARD |
-| RESOURCES | GUIDES AND TOOLS AS QR |
-| SETTINGS | DECOY, QR, SD, VERSION |
-| THROW COINS | 128 OR 256 COIN FLIPS |
-| ROLL DICE | 50 OR 99 DICE ROLLS |
-| RANDOM WORD PICK | DRAW WORDS ONE BY ONE |
-| POKER CARDS | A WELL SHUFFLED DECK |
-| TRIPLE MNEMONIC | (needs its description) |
-| SHAMIR SECRET SHARE | SPLIT IN SHARES, E.G. 2 OF 3 |
-| SEED WORD XOR | SPLIT IN PARTS, ALL NEEDED |
-| OBFUSCATION | DISGUISE THE WRITTEN WORDS |
-| MNEMONIC TO CARDS | HIDE A SEED IN A CARD DECK |
-| QR READER | SEE WHAT A QR CONTAINS |
-| QR FROM TEXT | TURN A TEXT INTO A QR |
-| EFF PASSWORD | A PASSWORD FROM DICE |
-| REVIEW PSBT | CHECK A TX WITHOUT A SEED |
 
 ## 5. Flash savings, when space runs out
 

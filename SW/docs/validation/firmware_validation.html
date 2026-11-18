@@ -634,6 +634,9 @@ const TESTS = [
   { id: 'UI-05', sec: 'UI', rev: 1, title: 'BACK before every irreversible step',
     steps: ['In every flow that signs, writes the SD card, exports or changes a setting, press BACK at each step before the final confirmation.'],
     expect: ['Each one can be left without any change.'] },
+  { id: 'UI-06', sec: 'UI', rev: 1, title: 'Help line under the menus',
+    steps: ['Move the cursor through every entry of the main menu, CREATE (with STOPWATCH SEED on), OPSEC, TOOLS, SD CARD, SETTINGS, SEED BACKUP and WALLET > DERIVE.', 'WALLET > CONFIG: move through the rows, and switch MODE between SINGLE SIG and MULTI SIG.', 'WALLET > XPUB/ZPUB in single sig, then in multisig.', 'Open the WALLET menu itself.'],
+    expect: ['One cyan line at the bottom left, above the grid, changes with the entry selected and never leaves letters of the previous one: e.g. "OPEN A SEED YOU HAVE" on LOAD SEED WORDS, "ITS HALVES ARE SEEDS TOO" on TRIPLE MNEMONIC, "DON\'T LOSE THE PASSWORD" on ENCRYPTED (KEF), "INSTALL UPDATE.HEX FROM SD" on UPDATE FIRMWARE; STOPWATCH TEST ONLY shows "ENTROPY CANNOT BE VERIFIED" in yellow. Nothing overlaps an entry or the grid.', 'ACCOUNT "ANOTHER WALLET, SAME SEED", SCRIPT "MUST MATCH YOUR WALLET", NETWORK "TEST COINS HAVE NO VALUE"; MODE "NO SINGLE POINT OF FAILURE" only while it shows MULTI SIG, an empty line with SINGLE SIG.', 'Under the key: "WATCH ONLY, CANNOT SPEND" in single sig, "FOR THE MULTISIG SETUP" in multisig.', 'No help line: the cyan wallet type line stays as before.'] },
 
   // ---------------------------------------------------------------- SEC
   { id: 'SEC-01', sec: 'SEC', rev: 1, title: 'Unload wipes everything',
