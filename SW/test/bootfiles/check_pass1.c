@@ -17,14 +17,16 @@ bool nvm_erase_page(uint32_t a) { (void)a; return false; }
 bool nvm_write_dw(uint32_t a, uint32_t w0, uint32_t w1) { (void)a; (void)w0; (void)w1; return false; }
 void nvm_read(uint32_t a, uint8_t *d, uint32_t n) { (void)a; memset(d, 0xFF, n); }
 
-// As in main.c
-static void ConvertAsciiToHex(uint8_t *asciiRec, uint8_t *hexRec) {
-    uint8_t i = 0, hex;
-    while ((asciiRec[i] >= 0x30) && (asciiRec[i] <= 0x66)) {
-        if (asciiRec[i] < 0x3A) hex = asciiRec[i] & 0x0F;
-        else hex = 0x09 + (asciiRec[i] & 0x0F);
-        if (i % 2) hexRec[i / 2] |= hex;
-        else hexRec[i / 2] = (hex << 4) & 0xF0;
+// As in main.c: hex digits only, returns how many
+static uint32_t ConvertAsciiToHex(const uint8_t *asciiRec, uint8_t *hexRec) {
+    uint32_t i = 0;
+    while (true) {
+        uint8_t c = asciiRec[i], hex;
+        if (c >= '0' && c <= '9') hex = c - '0';
+        else if ((c | 0x20) >= 'a' && (c | 0x20) <= 'f') hex = (c | 0x20) - 'a' + 10;
+        else return i;
+        if (i & 1u) hexRec[i / 2] |= hex;
+        else hexRec[i / 2] = (uint8_t)(hex << 4);
         i++;
     }
 }
@@ -43,15 +45,17 @@ static int pass1(const uint8_t *buf, size_t size) {
     bool eof = false, in_rec = false;
     const uint8_t *start = NULL;
     uint32_t len = 0;
+    if (size > 0x100000u) return 5;                     // UPDATE_HEX_MAX (audit P2)
     for (size_t i = 0; i < size; i++) {
         if (!in_rec) {
             if (buf[i] == ':') { start = &buf[i]; len = 0; in_rec = true; }
         } else if (buf[i] == 0x0A || buf[i] == 0x0D) {
-            if (len > 0 && len < 190) {
+            if (len >= 190) return HEXFLASH_ERR_RECORD;    // Audit B5
+            if (len > 0) {
                 memset(hexRec, 0, sizeof(hexRec));
-                ConvertAsciiToHex((uint8_t *)&start[1], hexRec);
+                uint32_t digits = ConvertAsciiToHex(&start[1], hexRec);
                 if (hexRec[3] == 0x01) eof = true;
-                if (!record_is_valid(hexRec, len - 1)) return HEXFLASH_ERR_RECORD;
+                if (!record_is_valid(hexRec, digits)) return HEXFLASH_ERR_RECORD;
                 hexflash_status_t st = hexflash_check_record(hexRec);
                 if (st != HEXFLASH_OK) return st;
             }

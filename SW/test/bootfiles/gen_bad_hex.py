@@ -32,6 +32,11 @@ EXPECTED = {
     "BOOT06_past_the_end.hex": 9,       # Data past the program flash of this chip
     "BOOT06_no_reset_block.hex": 9,     # The app without its reset block: another flash layout
     "BOOT17_junk_app.hex": 0,           # Valid addresses and reset block, random code: installs as unofficial
+    # Accepted by pass 1 before the fixes of 2026-11-18 (audit P2, B5)
+    "BOOT06_too_big.hex": 5,            # The app followed by text up to 1.1 MB: over the 1 MB limit
+    "BOOT06_long_line.hex": 5,          # A valid record of 96 bytes, 203 characters: was skipped
+    "BOOT06_address_length.hex": 5,     # An extended address record of 4 bytes: failed only after the erase
+    "BOOT06_bad_digit.hex": 5,          # 'Q' for 'a' in one record: was read as the same digit
 }
 
 
@@ -111,6 +116,26 @@ def main():
     rng = random.Random(0x5EED)
     junk = bytes(rng.randrange(256) for _ in range(4096))
     files["BOOT17_junk_app.hex"] = data_records(APP_RESET, junk) + [ext_lin(0), END]
+
+    # Text after the end record up to 1.1 MB: pass 1 ignored it, the size limit refuses it
+    pad = ["; SEEDMATE BOOTLOADER TEST: THIS FILE IS OVER 1 MB " + "-" * 46] * 1
+    size = sum(len(ln) + 2 for ln in app)
+    pad *= (1100000 - size) // (len(pad[0]) + 2) + 1
+    files["BOOT06_too_big.hex"] = app + pad
+
+    # One record of 96 bytes (erased flash, 0xFF) in the app area: valid, but longer than the bootloader reads
+    files["BOOT06_long_line.hex"] = app[:-1] + [ext_lin(APP_END >> 16), record(0, (APP_END - 0x800) & 0xFFFF, b"\xff" * 96),
+                                                ext_lin(0), app[-1]]
+
+    # The first extended address record with two more bytes (its value unchanged)
+    k = next(n for n, ln in enumerate(app) if ln[7:9] == "04")
+    b4 = bytes.fromhex(app[k][1:])
+    files["BOOT06_address_length.hex"] = app[:k] + [record(4, 0, b4[4:6] + b"\x00\x00")] + app[k + 1:]
+
+    # 'Q' for the first 'a' in the data of a record: the old conversion read both as ten
+    k = next(n for n, (ln, p, cnt) in enumerate(recs) if p is not None and "a" in ln[9:-2] and n > len(app) // 3)
+    j = app[k].index("a", 9)
+    files["BOOT06_bad_digit.hex"] = app[:k] + [app[k][:j] + "Q" + app[k][j + 1:]] + app[k + 1:]
 
     assert set(files) == set(EXPECTED)
     for name, lines in files.items():

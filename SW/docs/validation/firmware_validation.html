@@ -213,9 +213,9 @@ const TESTS = [
   { id: 'BOOT-05', sec: 'BOOT', rev: 1, title: 'Forced update (OK + BACK at power-on)',
     steps: ['Hold OK + BACK and power on, with an update card inserted.'],
     expect: ['The LED flickers fast 10 times and the update flow starts (hash, signature, confirmation).'] },
-  { id: 'BOOT-06', sec: 'BOOT', rev: 2, title: 'Damaged or foreign HEX file',
+  { id: 'BOOT-06', sec: 'BOOT', rev: 3, title: 'Damaged or foreign HEX file',
     steps: ['Run test/bootfiles/build_test.bat (it writes test/bootfiles/out/ and checks each file on the PC).', 'Copy each BOOT06_*.hex of out/ in turn to the SD card as UPDATE.HEX (with no UPDATE.SIG) and start an update (SETTINGS > UPDATE FIRMWARE, or OK + BACK at power-on).'],
-    expect: ['truncated, bad_checksum, short_record, not_a_hex: "FILE DAMAGED" (5 LED blinks).', 'bootloader_area, config_words, settings_page, past_the_end, no_reset_block: "HEX NOT FOR THIS DEVICE" (9 LED blinks).', 'Every one is refused while "CHECKING UPDATE.HEX", before anything is erased: the screen says "APP NOT TOUCHED" and OK starts the installed firmware, which still works.'] },
+    expect: ['truncated, bad_checksum, short_record, not_a_hex, and too_big (over 1 MB, refused at once instead of being read for minutes, audit P2), long_line (a record longer than the bootloader reads), address_length (an address record of 4 bytes) and bad_digit ("Q" for "a"), which the bootloader before 2026-11-18 accepted (audit B5): "FILE DAMAGED" (5 LED blinks).', 'bootloader_area, config_words, settings_page, past_the_end, no_reset_block: "HEX NOT FOR THIS DEVICE" (9 LED blinks).', 'Every one is refused while "CHECKING UPDATE.HEX", before anything is erased: the screen says "APP NOT TOUCHED" and OK starts the installed firmware, which still works.'] },
   { id: 'BOOT-07', sec: 'BOOT', rev: 1, title: 'Settings survive a firmware update',
     steps: ['Change two settings (e.g. AUTO UNLOAD and KEF ITERATIONS).', 'Install a firmware update.'],
     expect: ['Both settings keep their values after the update.'] },
@@ -249,6 +249,9 @@ const TESTS = [
   { id: 'BOOT-17', sec: 'BOOT', rev: 1, title: 'Random code with valid addresses',
     steps: ['Copy test/bootfiles/out/BOOT17_junk_app.hex to the SD card as UPDATE.HEX (no UPDATE.SIG) and start an update.', 'Choose to install it anyway, then OK.', 'Power off, hold OK + BACK at power-on with a good UPDATE.HEX on the card and update.'],
     expect: ['It passes the file check (its addresses and reset block are valid) and only the signature tells: red "UNOFFICIAL FIRMWARE / NO UPDATE.SIG ON THE CARD", "INSTALL IT ANYWAY?".', 'After it, every power-on shows "WARNING / UNOFFICIAL FIRMWARE" with the file hash; OK starts the random code, which does nothing useful (frozen or blank screen, or back at the warning). The bootloader and its state page cannot be touched by it (flash lock, BOOT-16).', 'The forced update recovers the device.'] },
+  { id: 'BOOT-18', sec: 'BOOT', rev: 1, title: 'Card with a broken file system header',
+    steps: ['On a spare FAT16 card with a good UPDATE.HEX, open the disk in a sector editor (HxD on Windows: Extras > Open disk, the physical card, not read only). In the boot sector of the volume (the first sector of the partition, the one that ends in 55 AA and says FAT16) note byte 13 (offset 0x0D, sectors per cluster, e.g. 40) and write 00; save.', 'SETTINGS > UPDATE FIRMWARE with that card.', 'Write 03 there, the same test; then put the noted value back and update normally.'],
+    expect: ['"SD CARD NOT FAT16" with "APP NOT TOUCHED", and OK starts the installed firmware (audit P1: before, the bootloader hung on "READING SD CARD" until the power was cut).', 'The same with 03 (not a power of two).', 'With the right value the update works.'] },
 
   // ---------------------------------------------------------------- SET
   { id: 'SET-01', sec: 'SET', rev: 1, title: 'Factory defaults',
@@ -530,6 +533,9 @@ const TESTS = [
   { id: 'SIG-13', sec: 'SIG', rev: 2, title: 'Legacy input whose previous tx has no such output',
     steps: ['In LEGACY, account 0, SIGN > FROM SD test/psbt/malicious/OWN-legacy_prev_tx_bad_vout.psbt.', 'The same file in NATIVE.'],
     expect: ['LEGACY: "LEGACY NEEDS PREV TX": the amount comes from a witness UTXO that a legacy signature does not commit to (audit R1).', 'NATIVE: "SWITCH TO LEGACY".'] },
+  { id: 'SIG-14', sec: 'SIG', rev: 1, title: 'Our key of the other mode is not change',
+    steps: ['MULTI SIG, NATIVE, account 0, MSDESC.TXT loaded: SIGN > FROM SD test/psbt/MSTOSS.PSB (a wallet input whose "change" goes to this seed\'s single sig key). Go through the diagram, both output pages and the confirmation; BACK before signing.', 'UNLOAD SEED, load it again (the descriptor is gone), MULTI SIG: the same file.', 'CONFIG > MODE SINGLE SIG (the descriptor stays loaded): SIGN > FROM SD test/psbt/SSTOMS.PSB (a single sig input whose "change" goes to the 2 of 3 wallet).', 'UNLOAD SEED, load it again, CONFIG MULTI SIG (no descriptor imported), then CONFIG SINGLE SIG: SSTOMS.PSB again; once more right after loading the seed, without ever turning MULTI SIG on.'],
+    expect: ['Diagram: outputs SEND (white) and SINGLE (yellow). OK goes through both output pages before SIGN appears: SEND 1 OF 2, 50,000 SAT to bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4; SEND 2 OF 2, 49,000 SAT to bc1q8c6fshw2dlwun7ekn9qwf37cu2rn755upcp6el, yellow "TO YOUR SINGLE SIG" and the path m/84\'/0\'/0\'/1/0. Red PREVIOUS TX MISSING, then the confirmation "SEND TO 2 ADDRESSES:" with both amounts, FEE 1,000 SAT, "AMOUNTS NOT VERIFIED" and a yellow "TO YOUR SINGLE SIG"; no "CHANGE VERIFIED" (audit S3; before, this output was green verified change).', 'The same without a descriptor.', 'Diagram: SEND and MULTISIG (yellow); page SEND 2 OF 2, 99,000 SAT to bc1qlphz2pz2qwc8n3jjvlcjrlgw09u5ucxss4zs2ndm2evljd6ej2aqzpa3q3, yellow "TO YOUR MULTISIG", path m/48\'/0\'/0\'/2\'/1/3; the confirmation lists both outputs and says "TO YOUR MULTISIG".', 'Page 2: yellow "MULTISIG, NOT VERIFIED" ("MY FP, MULTISIG MODE OFF" when MULTI SIG was never on); the confirmation lists both outputs, without "CHANGE NOT VERIFIED" or "IMPORT DESCRIPTOR FIRST" (in single sig it is not our change).'] },
 
   // ---------------------------------------------------------------- NET
   // Values of the abandon seed on testnet: test/psbt/gen_testnet.py prints them
@@ -571,9 +577,9 @@ const TESTS = [
   { id: 'QR-04', sec: 'QR', rev: 1, title: 'Mixed formats and wrong types',
     steps: ['Start a scan with a UR frame, then show a BBQr.', 'Show a BBQr of a text file in SIGN.', 'Show any other QR during a PSBT scan.'],
     expect: ['"MIXED UR AND BBQR", "BBQR IS NOT A PSBT", "NOT A UR:CRYPTO-PSBT QR".'] },
-  { id: 'QR-05', sec: 'QR', rev: 1, title: 'Single part UR and BACK',
-    steps: ['A small PSBT as a single part UR.', 'BACK during any scan, then use QR READER.'],
-    expect: ['The single part PSBT is read.', 'BACK leaves the scan; QR READER works afterwards (the scanner settings were restored).'] },
+  { id: 'QR-05', sec: 'QR', rev: 2, title: 'Single part UR and BACK',
+    steps: ['A small PSBT as a single part UR.', 'BACK during any scan, then use QR READER.', 'SIGN > FROM QR: start an animated UR of a bigger PSBT (animator, fragment 100) and, after a few parts, show the single part UR of the first step for a moment (a second animator tab); then the animated one again.'],
+    expect: ['The single part PSBT is read.', 'BACK leaves the scan; QR READER works afterwards (the scanner settings were restored).', 'The single part code says "UR OF ANOTHER MESSAGE" and is not read; the animated scan goes on from the parts it had and ends in the review of the bigger PSBT (audit R4).'] },
   { id: 'QR-06', sec: 'QR', rev: 1, title: 'BBQr: a second series and a new start',
     steps: ['SIGN > FROM QR: show a BBQr series in the animator and, half way, switch to the series of another PSBT.', 'BACK, SIGN > FROM QR again and show one series to the end.'],
     expect: ['The codes of the other series are named on screen ("BBQR OF ANOTHER FILE" or "BBQR PARTS DO NOT MATCH") and nothing is loaded.', 'After BACK the new scan reads its series and shows the review of that PSBT.'] },

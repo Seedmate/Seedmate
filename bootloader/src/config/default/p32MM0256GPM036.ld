@@ -55,6 +55,10 @@ MEMORY
      the app read of the tag hung the device) */
   boot_version_mem      (r)   : ORIGIN = 0x9D0027F0, LENGTH = 0x10
   boot_gap2_mem         (rx)  : ORIGIN = 0x9FC0038C, LENGTH = 0xF4
+  /* The TLB refill vector, EBASE + 0, up to the general exception vector at
+     EBASE + 0x180: this core has no TLB, so nothing ever jumps there (empty
+     in every build before). Petit FatFs code that the main flash needs room for */
+  boot_hole_mem         (rx)  : ORIGIN = 0x9FC01000, LENGTH = 0x180
   
   config_BFC01744             : ORIGIN = 0xBFC01744, LENGTH = 0x4
   config_BFC01748             : ORIGIN = 0xBFC01748, LENGTH = 0x4
@@ -146,6 +150,11 @@ SECTIONS
   /* Bootloader screen: boot_ui.o (with the app's TFT.c) and spi_boot.o
      (the app's SPI.c) in the boot flash. The second area is listed first so
      it takes the update flow helpers before .boot_ui takes the rest. */
+  .boot_hole :
+  {
+    *pff.o(.text.pf_read .text.check_fs)
+  } > boot_hole_mem
+
   .boot_ui_data :
   {
     *boot_ui.o(.rodata .rodata.*)

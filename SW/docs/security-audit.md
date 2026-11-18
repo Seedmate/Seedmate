@@ -74,7 +74,7 @@ refuse it).
 Nothing is open any more apart from the device tests.
 
 Second pass on 2026-11-16 over the code added since then: section 7 (five low
-findings, R1-R5; R1 fixed on 2026-11-17, R5 on 2026-11-18, the rest not yet).
+findings, R1-R5; R1 fixed on 2026-11-17, R4 and R5 on 2026-11-18, the rest not yet).
 Third pass the same day on the signing code: section 8 (R1 confirmed by a
 test, S1 on power analysis).
 Fourth pass the same day on the bootloader: section 9 (B1 medium, fixed on
@@ -330,7 +330,7 @@ and nothing was tried on the board.
 | R1 | Low | Legacy and "amounts verified" rely on `prev_tx != NULL`, not on where the amount was read. **Fixed on 2026-11-17** |
 | R2 | Low | The BBQr inflate path is the deepest stack use so far and has not been measured; there is no stack guard |
 | R3 | Low | CONFIG: a cancelled key derivation can leave multisig mode with LEGACY or TAPROOT |
-| R4 | Low | A BBQr series is fixed by the first code read, even one that fails; a single part UR read during an animated scan leaves the fountain state inconsistent |
+| R4 | Low | A BBQr series is fixed by the first code read, even one that fails; a single part UR read during an animated scan leaves the fountain state inconsistent (fixed on 2026-11-18, the damaged first code only) |
 | R5 | Low | The SD file list stops without notice at a file whose directory position is 99 or more (fixed on 2026-11-18) |
 | I1-I3 | Note | See 7.4 |
 
@@ -400,7 +400,7 @@ instant while the root is cached, so it is hard to reach.
 Fix: when the refresh is cancelled, put the mode back too, or clamp
 `bip84_script` to the range of the mode after restoring it.
 
-**R4. Scan state that a bad code can fix.**
+**R4. Scan state that a bad code can fix.** Fixed on 2026-11-18: BBQr keeps the series only once a part decoded (a first code of another series still fixes it, named on screen, kept by the user's choice); a single part UR is decoded only before any part of an animated one ("UR OF ANOTHER MESSAGE").
 - `bbqr_add_part()` stores the encoding, the type and the part count of the
   first code before it decodes it, and the part length before the decode can
   fail. A first code that is damaged, or of another series, decides them for
@@ -504,7 +504,7 @@ comes from reading the code, nothing was measured on the board.
 | R1 | Low | Confirmed by a test: a legacy input is signed as verified with its amount taken from the witness UTXO (see 7.3) |
 | S1 | Low (physical access) | No protection against power or EM analysis: the coordinate blinding of trezor-crypto was removed by a local edit, the table lookups are indexed by the secret, the nonces are deterministic |
 | S2 | Note | Signing time is constant except for three things that leak nothing useful |
-| S3 | Note | An output to our own key of the other mode (single sig / multisig) is called change |
+| S3 | Note | An output to our own key of the other mode (single sig / multisig) is called change (fixed on 2026-11-18) |
 
 ### 8.2 The signing decision
 
@@ -532,7 +532,7 @@ Nothing was found that makes the device sign what it does not show, or call
 an output ours that the seed (single sig) or the descriptor (multisig) does
 not own, apart from R1.
 
-**S3. Change of the other mode.** `psbt_check_owner()` does not look at the
+**S3. Change of the other mode.** Fixed on 2026-11-18: such an output is `PSBT_OWNER_OTHER_MODE`, a send labelled "TO YOUR SINGLE SIG" / "TO YOUR MULTISIG" in yellow, shown before SIGN and on the confirmation (vectors `OWN-ms_change_to_single`, `OWN-single_change_to_ms`, device test SIG-14). `psbt_check_owner()` does not look at the
 mode for outputs: in multisig mode an output to our own single sig key
 (m/84' of the same seed and account) is VERIFIED and counted as change, and
 in single sig mode an output to the loaded multisig wallet is too. The coins
@@ -634,8 +634,8 @@ the board, and the flash lock in particular has still never run on one.
 | B1 | Medium | A write pass that fails leaves a half written app that OK then starts, under a screen that says "APP ERASED"; with a card that answers differently the second time, code nobody checked runs once, right after "OFFICIAL FIRMWARE" **Fixed on 2026-11-17** |
 | B2 | Low | The app area is not write protected, although the same register could cover it at no cost |
 | B3 | Low | The lock is not read back and has not been tried on a board |
-| B4 | Low | Programming is trusted to the error flags: the flash is never read back |
-| B5 | Low | The checking pass accepts things the writing pass refuses or ignores |
+| B4 | Low | Programming is trusted to the error flags: the flash is never read back (fixed on 2026-11-18) |
+| B5 | Low | The checking pass accepts things the writing pass refuses or ignores (fixed on 2026-11-18) |
 
 ### 9.2 Medium
 
@@ -711,7 +711,7 @@ hold the expected values with both unlock bits clear ("FLASH LOCK OK" /
 for it. A second test for the same document: a debug build of the app that
 tries to erase the state page must fail.
 
-**B4. No read back of what is programmed.**
+**B4. No read back of what is programmed.** Fixed on 2026-11-18: `nvm_write_dw()` reads the double-word back through KSEG1 and fails on a difference.
 `nvm_execute()` returns the WRERR / LVDERR flags and nothing compares the
 flash with the data. The SHA-256 that is compared at the end is of the file
 bytes read from the card, twice, never of the flash. A double-word that
@@ -720,7 +720,7 @@ official. Fix, when there is room: compare each double-word after writing it
 (`nvm_read()` is there), or hash the app area once at the end and keep that
 hash in the state page.
 
-**B5. The two passes do not check the same things.**
+**B5. The two passes do not check the same things.** Fixed on 2026-11-18: the three cases below are FILE DAMAGED in the checking pass (test files `BOOT06_address_length`, `BOOT06_long_line`, `BOOT06_bad_digit`).
 - An extended address record whose length is not 2 passes
   `hexflash_check_record()` and fails `hexflash_write_record()`: the file is
   called good, the app is erased, and then the update fails.
@@ -787,10 +787,10 @@ bootloader write anything: two low findings, both ways to stall it.
 
 | Id | Severity | Finding |
 |---|---|---|
-| P1 | Low | A boot sector with zero sectors per cluster divides by zero in `pf_mount()`: the bootloader stops with no message |
-| P2 | Low | The file size of the directory entry is trusted: a card can keep the checking pass reading for hours |
+| P1 | Low | (fixed on 2026-11-18) A boot sector with zero sectors per cluster divides by zero in `pf_mount()`: the bootloader stops with no message |
+| P2 | Low | (fixed on 2026-11-18) The file size of the directory entry is trusted: a card can keep the checking pass reading for hours |
 
-**P1. Sectors per cluster is not checked.** `pf_mount()` takes
+**P1. Sectors per cluster is not checked.** Fixed on 2026-11-18 as proposed (device test BOOT-18). `pf_mount()` takes
 `BPB_SecPerClus` as it is and divides by it (`mclst = (...) / fs->csize`).
 With zero, the division traps on this compiler and
 `_general_exception_handler()` loops for ever: the screen stays on "READING
@@ -800,7 +800,7 @@ sector numbers, which are read, never written. Fix: return
 `FR_NO_FILESYSTEM` unless the value is a power of two (about 16 B; it is an
 edit to vendored code, to be marked as such).
 
-**P2. No limit on the size of UPDATE.HEX.** `pf_read()` follows the cluster
+**P2. No limit on the size of UPDATE.HEX.** Fixed on 2026-11-18 as proposed, `UPDATE_HEX_MAX` (test file `BOOT06_too_big`). `pf_read()` follows the cluster
 chain while the file pointer is under the size in the directory entry, up to
 4 GB, and a chain may loop. A card made for it keeps pass 1 reading and
 hashing for hours; a loop of valid records does not even end in an error.
@@ -931,14 +931,14 @@ in `docs/validation/firmware_validation.html` where a device test applies.
 | 2 | R2 | **Done on 2026-11-17**: measured on a board (vault path 5,968 B, SIGN 5,032 B of 8,264). Guard (+148 B): `stack_check()` in `app_tasks()` and `led_busy()` stops with "STACK OVERFLOW" when the lowest stack word lost `STACK_FILL`; device test SEC-04. Was: measure the stack: STACK PEAK after VAULT > NEW ENTRY > MULTISIG DESCRIPTOR > FROM QR with a BBQr Z code, and after SIGN > FROM QR with a BBQr Z PSBT. Add the guard: `app_tasks()` stops with "STACK OVERFLOW" when the word at `stack_floor()` is not `STACK_FILL` | `main.c` (`app_tasks()`, `stack_paint()`); device | Figures written in `pending.md`; the guard shown to fire in a debug build |
 | 3 | B3 | **Done on 2026-11-17** (+124 B): "FLASH LOCK OK" / "FLASH NOT LOCKED" under the stack peak, device tests BOOT-16 and SET-06. Was: show in SETTINGS > MCU SERIAL NUMBER whether NVMPWP and NVMBWP hold the values the bootloader sets with both unlock bits clear: "FLASH LOCK OK" green / "FLASH NOT LOCKED" red | `main.c` or `settings.c`; values in `bootloader/src/main.c` `JumpToApp()` | Seen on a board started through the bootloader (and "NOT LOCKED" when run from the debugger) |
 | 4 | R3 | When `single_purpose_refresh()` is cancelled in `config_run()`, put the mode back as well (or clamp `bip84_script` to the mode's range) | `config_run()` in `main.c` | Multisig can never be left with LEGACY or TAPROOT |
-| 5 | R4 | BBQr: set encoding, type, count and part length only after the first part decoded. UR: decode a single part code only while no fountain part was received, or `fountain_init()` when it fails | `bbqr_add_part()` in `bbqr.c`; `scan_ur_message()` in `main.c` | New cases in `test/bbqr/`: a damaged first code followed by a good series completes |
+| 5 | R4 | **Done on 2026-11-18** (+80 B; the restart after several refusals not done, the user's choice). Was: BBQr: set encoding, type, count and part length only after the first part decoded. UR: decode a single part code only while no fountain part was received, or `fountain_init()` when it fails | `bbqr_add_part()` in `bbqr.c`; `scan_ur_message()` in `main.c` | New cases in `test/bbqr/`: a damaged first code followed by a good series completes |
 | 6 | R5 | **Done on 2026-11-18** (+96 B). Was: SD file list: skip a file whose directory position is 99 or more instead of ending the list, and say "MORE FILES NOT SHOWN" | `sd_pick_file()` in `main.c` | Case in `test/sdfiles/` or a device test with over 99 files |
 | 7 | I1 | `desc_unpack()` refuses `origin_len > DESC_ORIGIN_MAX` | `descriptor.c` | Case in `test/psbt/test_descriptor.c` |
 | 8 | C3 | Put back the three `assert()` of upstream in `ecdsa.c` (they vanish with NDEBUG) | `crypto/ecdsa.c` | Build unchanged in size |
 | 9 | 11.5 | Say what is modified: a short `crypto/README.md` of our own (what is kept, what is edited and why), the same in `THIRD_PARTY_NOTICES.md` (ask first: outside SW) and in `CLAUDE.md`; translate the Spanish comment in `ecdsa.c` | docs | - |
 | 10 | S1, C1, C2 | **Not to be done**, decided by the user on 2026-11-16: the device keeps no secrets, the key is in RAM only while a seed is loaded and it signs. For the record, it would be: restore the blinding of `curve_to_jacobian()` and `point_select()` in `point_multiply()`. There is no random source: z can come from a hash of the scalar and a counter, or from a pool mixed with key press times. Costs flash (`point_select()` and one more hash per multiplication) and time per signature; measure both | `crypto/ecdsa.c`, `psbt_sign.c` | Host tests unchanged (the results do not depend on z); signing time on the board noted |
 | 11 | I2 | **Open** (the user has not decided; it is of the same family as item 10). Schnorr with auxiliary randomness from the key press pool instead of zeros | `psbt_taproot_sign()` | The byte-identical comparison with the Python signer would have to pass the same aux |
-| 12 | S3 | **Open.** Another label for an output to our own key of the other mode (single sig key while in multisig, and the reverse) | `psbt_check_owner()`, `psbt_output_kind()` | - |
+| 12 | S3 | **Done on 2026-11-18** (+248 B). Was: another label for an output to our own key of the other mode (single sig key while in multisig, and the reverse) | `psbt_check_owner()`, `psbt_output_kind()` | - |
 
 ### Bootloader (`bootloader/src`, ask before touching; full since B1 and B2; bump nothing: BOOT_VERSION stays 1.0 until units ship)
 
@@ -946,10 +946,10 @@ in `docs/validation/firmware_validation.html` where a device test applies.
 |---|---|---|---|---|
 | 13 | B1 | **Done on 2026-11-17**, the sturdier way: `hex_flash.c` keeps the reset block double-word in RAM (`reset_dw`) and `hexflash_commit()` programs it after the hash comparison; the extra erase on "FILE CHANGED" went (the reset block is still blank there). +92 B, 4 B left. Host test: the reset block stays blank through a page rewrite and after an update stopped at every tenth of the app's records. Was: `fail_app_erased()` erases the page of the reset block (`nvm_erase_page(HEXFLASH_APP_PHYS_RESET & ~(HEXFLASH_PAGE_SIZE - 1u))`) before `finish()`, so OK retries instead of starting a half written app. Better if it fits: program the reset double-word last, after the hash comparison | `boot_ui.c`, `hex_flash.c` | Device: pull the card during "WRITING THE NEW APP"; the screen says erased and OK retries. Host case in `bootloader/test/test_hex_flash.c` if the logic moves to `hex_flash.c` |
 | 14 | B2 | **Done on 2026-11-17**: locked at `HEXFLASH_APP_PHYS_END`; the bootloader is now full (the address takes one instruction more). Device test BOOT-16. Was: lock NVMPWP at `HEXFLASH_APP_PHYS_END` instead of `HEXFLASH_APP_PHYS_BASE` (the app area is protected too, the settings page is not) | `JumpToApp()` in `main.c` | Device: a setting still saves; item 3 shows the new value |
-| 15 | B5 | The checking pass refuses what the writing pass would: an extended address record whose length is not 2, a line of 190 characters or more, a character that is not a hex digit | `hexflash_check_record()`, `process_hex_file()`, `ConvertAsciiToHex()` | Cases in `test_hex_flash.c` |
-| 16 | P1 | `pf_mount()` returns `FR_NO_FILESYSTEM` unless sectors per cluster is a power of two (mark the edit: vendored) | `pff.c` | A card image with zero there says "SD CARD NOT FAT16" |
-| 17 | P2 | Refuse an UPDATE.HEX over 1 MB before reading it | `process_hex_file()` | "FILE DAMAGED" at once |
-| 18 | B4 | When there is room: compare each double-word after programming it | `program_dw()` in `hex_flash.c` | Host test with a mock that corrupts one write |
+| 15 | B5 | **Done on 2026-11-18.** Was: The checking pass refuses what the writing pass would: an extended address record whose length is not 2, a line of 190 characters or more, a character that is not a hex digit | `hexflash_check_record()`, `process_hex_file()`, `ConvertAsciiToHex()` | Cases in `test_hex_flash.c` |
+| 16 | P1 | **Done on 2026-11-18.** Was: `pf_mount()` returns `FR_NO_FILESYSTEM` unless sectors per cluster is a power of two (mark the edit: vendored) | `pff.c` | A card image with zero there says "SD CARD NOT FAT16" |
+| 17 | P2 | **Done on 2026-11-18.** Was: Refuse an UPDATE.HEX over 1 MB before reading it | `process_hex_file()` | "FILE DAMAGED" at once |
+| 18 | B4 | **Done on 2026-11-18** (room made in the boot flash). Was: When there is room: compare each double-word after programming it | `program_dw()` in `hex_flash.c` | Host test with a mock that corrupts one write |
 
 Item 13 took 92 of the 96 B free and item 14 the last 4 (2026-11-17): the
 bootloader is full, 15 to 17 wait for space.

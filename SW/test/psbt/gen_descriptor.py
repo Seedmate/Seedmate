@@ -6,6 +6,10 @@ Writes:
   MSCOLD.TXT            - the same wallet as a Coldcard multisig setup file
   MSWALLET.PSB          - 2-of-3 PSBT whose input and change belong to that wallet
   MSATTACK.PSB          - the same, but the "change" has a foreign key instead of B
+  MSTOSS.PSB            - an input of that wallet whose change goes to this seed's
+                          single sig key m/84'/0'/0'/1/0 (audit S3: not change)
+  SSTOMS.PSB            - a single sig input whose change goes to that wallet's
+                          change 1/3 (audit S3: not change)
   abandon multisig.psbt - 3 inputs, 2 destinations and change of that wallet, with
                           the previous transactions (for the review screens)
 
@@ -181,6 +185,40 @@ def ms_review_psbt():
 open('abandon multisig.psbt', 'wb').write(ms_review_psbt())
 open('MSWALLET.PSB', 'wb').write(ms_psbt([A, B, C]))
 open('MSATTACK.PSB', 'wb').write(ms_psbt([A, X, C]))
+
+def other_mode_psbt(ms_input):
+    """Our key of the other mode as change (audit S3): the coins stay with
+    this seed but leave the wallet being signed, so the device must show the
+    output as a send "TO YOUR SINGLE SIG" / "TO YOUR MULTISIG", not change"""
+    k, c = master_key(seed_a)
+    for idx in [84 | H, 0 | H, 0 | H]:
+        k, c = ckd_priv(k, c, idx)
+    single = lambda ch: ser_pub(point_mul(ckd_priv(*ckd_priv(k, c, ch), 0)[0]))
+    p2wpkh = lambda pub: b'\x00\x14' + hash160(pub)
+    if ms_input:
+        spk_in, amount_in = p2wsh(ws_in), 100000
+        inp = kv(b'\x05', ws_in) + b''.join(kv(b'\x06' + co.child(0, 0)[1], keypath(co.fp, *MS, 0, 0))
+                                             for co in cosigners)
+        spk_ch = p2wpkh(single(1))
+        out = kv(b'\x02' + single(1), keypath(A.fp, 84 | H, 0 | H, 0 | H, 1, 0))
+    else:
+        spk_in, amount_in = p2wpkh(single(0)), 200000
+        inp = kv(b'\x06' + single(0), keypath(A.fp, 84 | H, 0 | H, 0 | H, 0, 0))
+        ws_change = multisig_script(2, [co.child(CHANGE, INDEX)[1] for co in cosigners], True)
+        spk_ch = p2wsh(ws_change)
+        out = kv(b'\x01', ws_change) + b''.join(kv(b'\x02' + co.child(CHANGE, INDEX)[1],
+                                                    keypath(co.fp, *MS, CHANGE, INDEX)) for co in cosigners)
+    sent = amount_in // 2
+    change = amount_in - sent - 1000
+    tx = (struct.pack('<I', 2) + b'\x01' + sha256(b'other mode') + struct.pack('<I', 0) + b'\x00' +
+          struct.pack('<I', 0xfffffffd) + b'\x02' +
+          struct.pack('<Q', sent) + varint(len(EXTERNAL)) + EXTERNAL +
+          struct.pack('<Q', change) + varint(len(spk_ch)) + spk_ch + struct.pack('<I', 0))
+    inp = kv(b'\x01', struct.pack('<Q', amount_in) + varint(len(spk_in)) + spk_in) + inp
+    return b'psbt\xff' + kv(b'\x00', tx) + b'\x00' + inp + b'\x00' + b'\x00' + out + b'\x00'
+
+open('MSTOSS.PSB', 'wb').write(other_mode_psbt(True))
+open('SSTOMS.PSB', 'wb').write(other_mode_psbt(False))
 open('MSDESC.TXT', 'w', newline='\n').write(desc_text)
 open('MSCOLD.TXT', 'w', newline='\n').write(cold_text)
 

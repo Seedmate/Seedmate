@@ -104,13 +104,10 @@ bbqr_result_t bbqr_add_part(const char *code, uint32_t len) {
     if (enc != 'H' && enc != '2' && enc != 'Z') return BBQR_ERR_ENCODING;
     if (type != bb_want) return BBQR_ERR_TYPE;
     if ((uint32_t)total > BBQR_MAX_PARTS) return BBQR_ERR_TOO_BIG;
-    if (bb_total == 0) {
-        bb_enc = enc;
-        bb_type = type;
-        bb_total = (uint16_t)total;
-    } else if (enc != bb_enc || type != bb_type || total != bb_total) {
-        return BBQR_ERR_SERIES;
-    }
+    // The series and the part length are kept only once a part decoded, so a
+    // damaged first code does not decide them for the whole scan (audit R4)
+    bool first = (bb_total == 0);
+    if (!first && (enc != bb_enc || type != bb_type || total != bb_total)) return BBQR_ERR_SERIES;
 
     const char *data = &code[8];
     uint32_t n = len - 8;
@@ -119,15 +116,16 @@ bbqr_result_t bbqr_add_part(const char *code, uint32_t len) {
     if (blen <= 0) return BBQR_ERR_DATA;
     if (blen > 0xFFFF) return BBQR_ERR_TOO_BIG;
 
-    // Where it goes: every part but the last has the length of the first one seen
+    // Where it goes: every part but the last has the length of the first one decoded
+    uint32_t part_len = bb_part_len;
     if (!last) {
-        if (bb_part_len == 0) bb_part_len = (uint16_t)blen;
-        else if ((uint32_t)blen != bb_part_len) return BBQR_ERR_MISMATCH;
+        if (part_len == 0) part_len = (uint32_t)blen;
+        else if ((uint32_t)blen != part_len) return BBQR_ERR_MISMATCH;
     } else if (total > 1) {
-        if (bb_part_len == 0) return BBQR_PART_IGNORED;    // Its place is not known yet
-        if ((uint32_t)blen > bb_part_len) return BBQR_ERR_MISMATCH;
+        if (part_len == 0) return BBQR_PART_IGNORED;       // Its place is not known yet
+        if ((uint32_t)blen > part_len) return BBQR_ERR_MISMATCH;
     }
-    uint32_t off = (uint32_t)idx * bb_part_len;
+    uint32_t off = (uint32_t)idx * part_len;
     if (off + (uint32_t)blen > bb_cap) return BBQR_ERR_TOO_BIG;
 
     uint8_t bit = (uint8_t)(1u << (idx & 7));
@@ -142,6 +140,12 @@ bbqr_result_t bbqr_add_part(const char *code, uint32_t len) {
         memset(&bb_buf[off], 0, (size_t)blen);
         return r;
     }
+    if (first) {
+        bb_enc = enc;
+        bb_type = type;
+        bb_total = (uint16_t)total;
+    }
+    bb_part_len = (uint16_t)part_len;
     bb_have[idx >> 3] |= bit;
     if (last) bb_last_len = (uint16_t)blen;
     bb_count++;

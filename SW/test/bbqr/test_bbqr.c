@@ -151,6 +151,23 @@ static void refusals(void) {
     s[2] = '2';
     CHECK(add(s) == BBQR_ERR_SERIES, "other encoding");
 
+    // A damaged first code (other total, bad data; then a middle part with a
+    // bad digit) does not decide the series: the good series that follows
+    // completes (audit R4)
+    for (int t = 0; t < 2; t++) {
+        start('P', LARGE_CAP);
+        strcpy(s, cases[h].frames[1]);
+        if (t == 0) s[5]++;
+        s[12] = 'G';
+        CHECK(add(s) == BBQR_ERR_DATA, "damaged first code %d", t);
+        CHECK(bbqr_total() == 0, "damaged first code %d kept the series", t);
+        bbqr_result_t r = BBQR_PART_ADDED;
+        for (unsigned i = 0; i < cases[h].count && r != BBQR_COMPLETE; i++) r = add(cases[h].frames[i]);
+        uint32_t len = 0;
+        CHECK(r == BBQR_COMPLETE && bbqr_finish(PSBT_CAP, &len) == BBQR_COMPLETE && len == cases[h].file_len
+              && memcmp(ram, case_file(h), len) == 0, "good series after a damaged first code %d", t);
+    }
+
     start('P', LARGE_CAP);                               // The same part with other data
     CHECK(add(cases[h].frames[0]) == BBQR_PART_ADDED, "first part");
     strcpy(s, cases[h].frames[0]);

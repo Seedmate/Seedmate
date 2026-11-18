@@ -100,6 +100,9 @@ hexflash_status_t hexflash_check_record(const uint8_t *rec) {
     static uint32_t ext;
     static bool has_reset;
 
+    // An address record of another length passed here and failed in the
+    // writing pass, after the app was erased (audit B5)
+    if ((rec[3] == EXT_LIN_ADRS_RECORD || rec[3] == EXT_SEG_ADRS_RECORD) && rec[0] != 2) return HEXFLASH_ERR_RECORD;
     switch (rec[3]) {
         case EXT_LIN_ADRS_RECORD:
             ext = (((uint32_t)rec[4] << 8) | rec[5]) << 16;
@@ -221,7 +224,11 @@ bool nvm_write_dw(uint32_t phys_addr, uint32_t word0, uint32_t word1) {
     NVMADDR = phys_addr;
     NVMDATA0 = word0;
     NVMDATA1 = word1;
-    return nvm_execute(0x2);        // Double-word program
+    if (!nvm_execute(0x2)) return false;    // Double-word program
+    // Read back through KSEG1 (uncached): a double-word that programmed wrong
+    // without an error flag would otherwise be recorded as official (audit B4)
+    const volatile uint32_t *p = (const volatile uint32_t *)(0xA0000000u | phys_addr);
+    return p[0] == word0 && p[1] == word1;
 }
 
 void nvm_read(uint32_t phys_addr, uint8_t *dst, uint32_t len) {

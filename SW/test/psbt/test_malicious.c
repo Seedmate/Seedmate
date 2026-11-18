@@ -256,14 +256,14 @@ static int check_ms_addresses(void) {
 
 // --- One run ---------------------------------------------------------------------
 enum { MODE_SINGLE, MODE_MULTI, MODE_MULTI_DESC, MODE_NESTED, MODE_NMULTI, MODE_NMULTI_DESC, MODE_TAPROOT, MODE_LEGACY,
-       MODE_TESTNET, MODE_COUNT };
+       MODE_TESTNET, MODE_SINGLE_DESC, MODE_COUNT };
 static const char *mode_name[MODE_COUNT] = {"single", "multi", "multi+desc", "nested", "nmulti", "nmulti+desc", "taproot", "legacy",
-                                            "testnet"};
+                                            "testnet", "single+desc"};
 
-static bool mode_desc(int mode) { return mode == MODE_MULTI_DESC || mode == MODE_NMULTI_DESC; }
+static bool mode_desc(int mode) { return mode == MODE_MULTI_DESC || mode == MODE_NMULTI_DESC || mode == MODE_SINGLE_DESC; }
 
 typedef struct {
-    char text[160];     // The outcome, as compared with malicious_expected.txt
+    char text[200];     // The outcome, as compared with malicious_expected.txt
     bool refused;       // Parse error or refusal: nothing can be signed
     int ours;           // Outputs verified as ours
 } outcome_t;
@@ -306,13 +306,14 @@ static void run(const uint8_t *data, uint32_t len, int mode, outcome_t *r) {
     for (uint32_t o = 0; o < psbt.output_count && o < PSBT_OWNER_CACHE; o++) {
         if (psbt_owner_verified((psbt_owner_t)psbt_checked.out[o])) r->ours++;
     }
-    snprintf(r->text, sizeof(r->text), "SIGN %u/%u ours=%d send=%llu change=%llu fee=%llu%s%s%s%s%s",
+    snprintf(r->text, sizeof(r->text), "SIGN %u/%u ours=%d send=%llu change=%llu fee=%llu%s%s%s%s%s%s",
              (unsigned)plan.signable, (unsigned)psbt.input_count, r->ours,
              (unsigned long long)plan.send, (unsigned long long)plan.change, (unsigned long long)plan.fee,
              plan.high_fee ? " HIGH_FEE" : "", plan.burns ? " BURNS" : "",
              plan.amounts_unverified ? " AMOUNTS_UNVERIFIED" : "",
              plan.change_unverified ? " CHANGE_UNVERIFIED" : "",
-             plan.high_change_index ? " HIGH_CHANGE_INDEX" : "");
+             plan.high_change_index ? " HIGH_CHANGE_INDEX" : "",
+             plan.other_mode_out ? " OTHER_MODE_OUT" : "");
 }
 
 // --- Files ------------------------------------------------------------------------
@@ -395,7 +396,7 @@ static int run_corpus(const char *gaps) {
         int max_ours = 0;
         for (int mode = 0; mode < MODE_COUNT; mode++) {
             outcome_t r;
-            char line[256];
+            char line[320];
             run(file_buf, len, mode, &r);
             snprintf(line, sizeof(line), "%s\t%s\t%s", name, mode_name[mode], r.text);
             check_line(line);

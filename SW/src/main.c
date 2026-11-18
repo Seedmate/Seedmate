@@ -5005,6 +5005,8 @@ typedef enum {
     PSBT_OWNER_VERIFIED_MULTI,  // Our key in a P2WSH multisig input, verified
     PSBT_OWNER_MULTISIG_CHANGE, // Our key in a multisig output: cosigners not verified
     PSBT_OWNER_NOT_IN_WALLET,   // Our multisig path, but not the loaded wallet's script
+    PSBT_OWNER_OTHER_MODE,      // Output verified as ours, but of the other mode (audit S3):
+                                // single sig while in multisig or the reverse; counted as sent
 PSBT_OWNER_MISMATCH     // Our fingerprint and path, but a different key or script
 } psbt_owner_t;
 
@@ -5215,14 +5217,17 @@ static psbt_owner_t psbt_check_owner(const psbt_t *psbt, bool is_input, uint32_t
 
         *shown = kp;
         if (psbt_is_bip84_path(&kp)) {
-            return psbt_bip84_key_matches(&kp, script, script_len) ? PSBT_OWNER_VERIFIED : PSBT_OWNER_MISMATCH;
+            if (!psbt_bip84_key_matches(&kp, script, script_len)) return PSBT_OWNER_MISMATCH;
+            // Our single sig key is not change of a multisig wallet: the coins
+            // would leave the shared wallet for this seed alone (audit S3)
+            return (!is_input && bip84_multisig_mode) ? PSBT_OWNER_OTHER_MODE : PSBT_OWNER_VERIFIED;
         }
         if (psbt_is_multisig_path(&kp)) {
             if (!ms_account_cached) return PSBT_OWNER_FP_ONLY;  // Multisig mode not active
             if (ms_wallet_active()) {
                 // With the wallet descriptor every cosigner key is checked
                 if (!ms_wallet_matches(&kp, script, script_len)) return PSBT_OWNER_NOT_IN_WALLET;
-                if (!is_input) return PSBT_OWNER_VERIFIED_MULTI;
+                if (!is_input) return bip84_multisig_mode ? PSBT_OWNER_VERIFIED_MULTI : PSBT_OWNER_OTHER_MODE;
             } else if (!is_input) {
                 return PSBT_OWNER_MULTISIG_CHANGE;              // Needs the wallet descriptor
             }
@@ -5289,6 +5294,12 @@ static bool psbt_is_change_path(psbt_owner_t owner, const psbt_keypath_t *kp) {
 }
 
 // Ownership line at y and, when there is one, the derivation path below it
+
+// An output to our key of the other mode: where the coins really go
+static const char *psbt_other_mode_text(void) {
+    return bip84_multisig_mode ? "TO YOUR SINGLE SIG" : "TO YOUR MULTISIG";
+}
+
 // Text of the ownership line and its color
 static uint16_t psbt_owner_text(psbt_owner_t owner, const psbt_keypath_t *kp, bool is_output, char *text) {
     switch (owner) {
@@ -5329,6 +5340,9 @@ static uint16_t psbt_owner_text(psbt_owner_t owner, const psbt_keypath_t *kp, bo
         case PSBT_OWNER_NOT_IN_WALLET:
             strcpy(text, "NOT IN LOADED WALLET");
             return is_output ? ST7735_YELLOW : ST7735_RED;
+        case PSBT_OWNER_OTHER_MODE:
+            strcpy(text, psbt_other_mode_text());
+            return ST7735_YELLOW;
         default:
             strcpy(text, "KEY MISMATCH! NOT YOURS");
             return ST7735_RED;
@@ -5623,7 +5637,9 @@ static void psbt_view_flow(const psbt_t *psbt) {
                     strcpy(label[k], psbt_is_change_path(owner, &kp) ? "CHANGE" : "TO YOU");
                     outs[k].color = ST7735_GREEN;
                 } else {
-                    strcpy(label[k], (owner == PSBT_OWNER_MULTISIG_CHANGE) ? "MULTISIG" : "SEND");
+                    strcpy(label[k], (owner == PSBT_OWNER_MULTISIG_CHANGE ||
+                                      (owner == PSBT_OWNER_OTHER_MODE && !bip84_multisig_mode)) ? "MULTISIG" :
+                                     (owner == PSBT_OWNER_OTHER_MODE) ? "SINGLE" : "SEND");
                     if (owner != PSBT_OWNER_OTHER && owner != PSBT_OWNER_NO_INFO) outs[k].color = ST7735_YELLOW;
                 }
             } else {
@@ -6450,6 +6466,7 @@ typedef struct {
     bool change_unverified;     // Multisig change without a descriptor: counted as sent
     bool high_fee;              // Fee over PSBT_HIGH_FEE_* of what is spent or sent
     bool burns;                 // An OP_RETURN output carries an amount
+    bool other_mode_out;        // An output to our key of the other mode (audit S3)
 } psbt_sign_plan_t;
 
 // Coin type 'coin' (0' mainnet, 1' testnet/signet) in a BIP44-style path:
@@ -6683,8 +6700,9 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
             if (psbt_path_element(&kp, 5) > max_index + PSBT_CHANGE_LOOKAHEAD) plan->high_change_index = true;
         } else if (owner == PSBT_OWNER_MULTISIG_CHANGE) {
             plan->send += out.amount;
-            plan->change_unverified = true;
+            plan->change_unverified = bip84_multisig_mode;  // In single sig it is not our change (S3)
         } else {
+            if (owner == PSBT_OWNER_OTHER_MODE) plan->other_mode_out = true;
             plan->send += out.amount;
         }
         if (out.amount > 0 && psbt_script_type(out.script, out.script_len) == PSBT_SCRIPT_OP_RETURN) {
@@ -6824,6 +6842,10 @@ static bool psbt_confirm_signing(const psbt_t *psbt, const psbt_sign_plan_t *pla
     }
     if (plan->burns) {                          // Short: it also fits left of the grid
         text_at(5, y, "BURNS BTC", ST7735_YELLOW);
+        y += 9;
+    }
+    if (plan->other_mode_out) {
+        text_at(5, y, psbt_other_mode_text(), ST7735_YELLOW);
         y += 9;
     }
     // Then what helps, while there is room
@@ -7572,7 +7594,10 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
                         }
                     }
 
-                    if (payload_clean == NULL) {
+                    if (payload_clean == NULL && (fountain_get_pure_count() > 0 || fountain_get_mixed_count() > 0)) {
+                        // A single part UR would be decoded over the parts received (audit R4)
+                        scan_notice("UR OF ANOTHER MESSAGE");
+                    } else if (payload_clean == NULL) {
                         uint32_t cap;
                         single_len = ur_decode_single(payload_start, fountain_scratch_buffer(&cap), cap);
                         if (single_len == 0) scan_notice("UR CODE NOT READABLE");

@@ -15,14 +15,16 @@ decision. No real wallet data.
   ours, taken from `tests/psbt_suite_util.py` of the same repository.
 - `../bip174_invalid.txt`: the invalid PSBT test vectors of BIP174.
 - `OWN-*`: ours, from `../gen_malicious_own.py` (OP_RETURN amounts, the limits
-  of the high fee warning, legacy, taproot and testnet cases).
+  of the high fee warning, legacy, taproot and testnet cases, and our key of
+  the other mode as change, audit S3).
 
 The files are test data only and are not part of the firmware.
 
 ## Files next to the test
 
 - `malicious_expected.txt`: the outcome of each vector in each mode (single sig,
-  multisig, multisig with the corpus' descriptor). `test_malicious --update`
+  multisig, multisig with the corpus' descriptor, the nested, taproot, legacy
+  and testnet ones, and single sig with the descriptor loaded). `test_malicious --update`
   rewrites it; review the diff.
 - `malicious_gaps.txt`: vectors meant to be refused that Seedmate would still
   sign, each with the reason it is not dangerous. A new gap needs a reason.

@@ -47,6 +47,7 @@
 // --- Bootloader Shared Memory Flags ---
 #define UPDATE_FLAG_ADDR ((volatile uint32_t *)0x80007F00)
 #define MAGIC_WORD_UPDATE 0x55AA1234
+#define UPDATE_HEX_MAX    0x100000u     // Bytes: 1 MB, an app HEX is under 700 KB
 
 // --- Forced update buttons: same pins as the app (active low, pull-ups set
 // by SYS_Initialize): BACK = RB2 (BT1), OK = RC1 (BT_OK) ---
@@ -74,7 +75,7 @@ uint8_t hexRec[200];
 // --- Function Prototypes ---
 void delay_ms(unsigned int milliseconds);   // From the app's SPI.c (spi_boot.c)
 void JumpToApp(void);
-void ConvertAsciiToHex(uint8_t* asciiRec, uint8_t* hexRec);
+uint32_t ConvertAsciiToHex(const uint8_t* asciiRec, uint8_t* hexRec);
 
 // =========================================================================
 // BASIC HARDWARE CONTROL FUNCTIONS
@@ -215,6 +216,9 @@ static int process_hex_file(bool program) {
     bool end_of_file_found = false;
 
     if (pf_open("UPDATE.HEX") != FR_OK) return 3;
+    // An app HEX is under 700 KB: a bigger file (or a size made up on the card)
+    // would keep this pass reading for hours (audit P2)
+    if (fs.fsize > UPDATE_HEX_MAX) return 5;
     boot_sha_init();                // Hash of every byte read, in both passes
     record.status = REC_NOT_FOUND;
     ui_progress(0, fs.fsize);
@@ -242,14 +246,16 @@ static int process_hex_file(bool program) {
                 case REC_FOUND_BUT_NOT_FLASHED:
                     // 0x0A is LF, 0x0D is CR
                     if ((asciiBuffer[i] == 0x0A) || (asciiBuffer[i] == 0x0D)) {
-                        if (record.len > 0 && record.len < 190) { // Safety bound
-                            ConvertAsciiToHex(&record.start[1], hexRec);
+                        // Longer than hexRec holds: damaged, not skipped (audit B5)
+                        if (record.len >= 190) return HEXFLASH_ERR_RECORD;
+                        if (record.len > 0) {
+                            uint32_t digits = ConvertAsciiToHex(&record.start[1], hexRec);
 
                             if (hexRec[3] == END_OF_FILE_RECORD) {
                                 end_of_file_found = true;
                             }
                             // Both passes: the card could answer differently the second time
-                            if (!record_is_valid(hexRec, record.len - 1)) {
+                            if (!record_is_valid(hexRec, digits)) {
                                 return HEXFLASH_ERR_RECORD;
                             } else if (program) {
                                 hexflash_status_t st = hexflash_write_record(hexRec);
@@ -425,21 +431,21 @@ int main(void)
 // HELPER FUNCTIONS
 // ============================================================================
 
-void ConvertAsciiToHex(uint8_t* asciiRec, uint8_t* hexRec)
+// Converts the hex digits of a record ('0'-'9', 'A'-'F', 'a'-'f' only: before,
+// every character from '0' to 'f' counted, so different texts gave the same
+// record, audit B5) and returns how many there were
+uint32_t ConvertAsciiToHex(const uint8_t* asciiRec, uint8_t* hexRec)
 {
-    uint8_t i = 0;
-    uint8_t k = 0;
-    uint8_t hex;
-    
-    while ((asciiRec[i] >= 0x30) && (asciiRec[i] <= 0x66))
+    uint32_t i = 0;
+    while (true)
     {
-        if (asciiRec[i] < 0x3A) hex = asciiRec[i] & 0x0F;
-        else hex = 0x09 + (asciiRec[i] & 0x0F);                      
-    
-        k = i % 2;
-        if (k) hexRec[i/2] |= hex;
-        else hexRec[i/2] = (hex << 4) & 0xF0;
-        
-        i++;        
-    }       
+        uint8_t c = asciiRec[i], hex;
+        if (c >= '0' && c <= '9') hex = c - '0';
+        else if ((c | 0x20) >= 'a' && (c | 0x20) <= 'f') hex = (c | 0x20) - 'a' + 10;
+        else return i;
+
+        if (i & 1u) hexRec[i / 2] |= hex;
+        else hexRec[i / 2] = (uint8_t)(hex << 4);
+        i++;
+    }
 }

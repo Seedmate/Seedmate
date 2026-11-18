@@ -121,6 +121,84 @@ def taproot(in_leaves=0, in_root=b'', change_root=b'', sighash=None, key_sig=Fal
     out = kv(b'\x05', pub_ch[1:]) + kv(b'\x07' + pub_ch[1:], b'\x00' + keypath(FP, *TR_ACC, 1, 0))
     return b'psbt\xff' + kv(b'\x00', tx) + b'\x00' + inp + b'\x00' + b'\x00' + out + b'\x00'
 
+# --- Our key of the other mode (audit S3) ---
+# The corpus' 2 of 3 wallet, the one test_malicious.c loads in its descriptor
+# modes (MS_DESCRIPTOR): our key and two cosigners, derived here from the xpubs
+import hashlib, hmac
+MS = [48 | H, 0 | H, 0 | H, 2 | H]
+MS_XPUBS = [
+    ('73c5da0a', 'xpub6DkFAXWQ2dHxq2vatrt9qyA3bXYU4ToWQwCHbf5XB2mSTexcHZCeKS1VZYcPoBd5X8yVcbXFHJR9R8UCVpt82VX1VhR28mCyxUFL4r6KFrf'),
+    ('28645006', 'xpub6DnEBNkSJKBYQmsbhS1sP9cNdtU5c9PLFGCjTJmxicxc13WB8zNNGQazabQpyFAGW5bV9tMko4uBxDxjUKL6dSAcx1tEbgEHtgSqyRsekh6'),
+    ('3f635a63', 'xpub6FHZCoNb3tg3o1GAJQxSwgFNF8mLRtTk2GgkF7n5rwzoxBhUEdFWa8cyZRHqytAzKZWsKz8627cQEMCCfR5GDSv6yXegqirpgDUX41Pxybr'),
+]
+B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+
+def xpub_parts(text):
+    n = 0
+    for ch in text:
+        n = n * 58 + B58.index(ch)
+    raw = n.to_bytes(82, 'big')
+    assert sha256(sha256(raw[:-4]))[:4] == raw[-4:]
+    return raw[13:45], raw[45:78]               # Chain code, public key
+
+def lift(pub):
+    x = int.from_bytes(pub[1:], 'big')
+    y = pow((pow(x, 3, P) + 7) % P, (P + 1) // 4, P)
+    return (x, y if y % 2 == pub[0] % 2 else P - y)
+
+def ckd_pub(chain_code, pub, index):
+    i = hmac.new(chain_code, pub + struct.pack('>I', index), hashlib.sha512).digest()
+    return i[32:], ser_pub(point_add(lift(pub), point_mul(int.from_bytes(i[:32], 'big'))))
+
+def ms_pub(xpub, chain, index):
+    c, k = xpub_parts(xpub)
+    c, k = ckd_pub(c, k, chain)
+    return ckd_pub(c, k, index)[1]
+
+def ms_ws(chain, index):
+    """sortedmulti(2, the three keys) at chain/index"""
+    pubs = sorted(ms_pub(x, chain, index) for _, x in MS_XPUBS)
+    return b'\x52' + b''.join(b'\x21' + p for p in pubs) + b'\x53\xae'
+
+def ms_derivations(chain, index, field):
+    return b''.join(kv(field + ms_pub(x, chain, index), keypath(bytes.fromhex(fp), *MS, chain, index))
+                    for fp, x in MS_XPUBS)
+
+def p2wsh(ws):
+    return b'\x00\x20' + sha256(ws)
+
+def other_mode(ms_input):
+    """ms_input: a wallet input (receive 0) whose change goes to our single sig
+    key m/84'/0'/0'/1/0; otherwise a single sig input (m/84'/0'/0'/0/0) whose
+    change goes to the wallet's change 1/3. Either way the coins stay with this
+    seed but leave the wallet being signed: not change"""
+    if ms_input:
+        ws = ms_ws(0, 0)
+        spk_in = p2wsh(ws)
+        inp = kv(b'\x01', struct.pack('<Q', 100000) + varint(len(spk_in)) + spk_in) + kv(b'\x05', ws)
+        inp += ms_derivations(0, 0, b'\x06')
+        pub_ch = key(1, 0)
+        spk_ch = p2wpkh(pub_ch)
+        out = kv(b'\x02' + pub_ch, keypath(FP, *ACCOUNT, 1, 0))
+        sent, change = 50000, 49000
+    else:
+        pub_in = key(0, 0)
+        spk_in = p2wpkh(pub_in)
+        inp = kv(b'\x01', struct.pack('<Q', 200000) + varint(len(spk_in)) + spk_in)
+        inp += kv(b'\x06' + pub_in, keypath(FP, *ACCOUNT, 0, 0))
+        ws = ms_ws(1, 3)
+        spk_ch = p2wsh(ws)
+        out = kv(b'\x01', ws) + ms_derivations(1, 3, b'\x02')
+        sent, change = 100000, 99000
+    outs = [(EXTERNAL, sent), (spk_ch, change)]
+    tx = (struct.pack('<I', 2) + b'\x01' + sha256(b'own other mode') + struct.pack('<I', 0) + b'\x00' +
+          struct.pack('<I', 0xfffffffd) + varint(len(outs)) +
+          b''.join(struct.pack('<Q', a) + varint(len(s)) + s for s, a in outs) + struct.pack('<I', 0))
+    return b'psbt\xff' + kv(b'\x00', tx) + b'\x00' + inp + b'\x00' + b'\x00' + out + b'\x00'
+
+# Our key in the wallet is the one this seed derives
+assert ms_pub(MS_XPUBS[0][1], 0, 0) == ser_pub(point_mul(derive(seed, MS + [0, 0])))
+
 ROOT = sha256(b'a script tree')
 
 VECTORS = {
@@ -157,6 +235,10 @@ VECTORS = {
     'OWN-testnet_p2wpkh': psbt(200000, [(EXTERNAL_TB, 100000)], change=99000, account=TESTNET_ACCOUNT),
     'OWN-testnet_change_mainnet': psbt(200000, [(EXTERNAL_TB, 100000)], change=99000, account=TESTNET_ACCOUNT,
                                        change_account=ACCOUNT),
+    # Our key of the other mode is not change: multisig change to our single
+    # sig key, and single sig change to the multisig wallet (audit S3)
+    'OWN-ms_change_to_single': other_mode(True),
+    'OWN-single_change_to_ms': other_mode(False),
 }
 
 for name, data in VECTORS.items():
