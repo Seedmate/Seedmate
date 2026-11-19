@@ -1,9 +1,10 @@
-"""Copies the word functions of ../../src/main.c into words_extract.inc, so
+"""Copies the word functions (and the Compact SeedQR checks) of ../../src/main.c into words_extract.inc, so
 test_wordlists.c runs the firmware's own code (main.c cannot be compiled on a PC)."""
 SRC = '../../src/main.c'
 REGIONS = [
     ('static char word_ring[', 'int read_11bit_value('),
     ('static void get_valid_next_letters(const char *prefix, bool *valid_letters) {', 'bool check_last_word('),
+    ('static int compact_seedqr_len(', 'static const char *qr_refusal;'),
 ]
 text = open(SRC, encoding='utf-8').read().replace('\r\n', '\n')
 parts = []

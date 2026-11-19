@@ -72,7 +72,7 @@ const char* const menu_input[]    = {"FROM KEYBOARD", "FROM SD", "FROM QR"};
 const char* const help_main[cMAIN_n_opt] = {"FROM COINS, DICE OR CARDS", "OPEN A SEED YOU HAVE", "SPARE SEEDS FROM YOUR SEED",
     "SPLIT, HIDE OR DISGUISE", "QR, PASSWORDS, CHECK A TX", "PREPARE OR WIPE THE CARD", "GUIDES AND TOOLS AS QR",
     "ENABLE FEATURES, UPDATE FW"};
-const char* const help_create[cSEED_n_opt] = {"128 OR 256 COIN FLIPS", "50 OR 99 DICE ROLLS", "DRAW WORDS ONE BY ONE",
+const char* const help_create[cSEED_n_opt] = {"128 OR 256 COIN FLIPS", "RAW BITS OR HASHED ROLLS", "DRAW WORDS ONE BY ONE",
     "A WELL SHUFFLED DECK", "ITS HALVES ARE SEEDS TOO", "ENTROPY CANNOT BE VERIFIED", "MIX DIFFERENT SOURCES"};
 static const char* const help_opsec[] = {"SPLIT, E.G. 2 OF 3 SHARES", "RECOVERY SCHEMES", "HIDE THE SECRET",
     "HIDE SEED IN A CARD DECK"};
@@ -81,8 +81,8 @@ static const char* const help_tools[] = {"SEE WHAT A QR CONTAINS", "TURN A TEXT 
 static const char* const help_erase[] = {"DELETE SLOT BY SLOT", "REQUIRED FOR VAULT & SEEDS", "OVERWRITE EVERY SECTOR"};
 static const char* const help_backup[] = {"SAVE SEED INTO SD", "GENERATE A QR OF THE SEED", "SMALLER SEED QR",
     "DON'T LOSE THE PASSWORD", "QUIZ TO VALIDATE A BACKUP"};
-static const char* const help_settings[cSETTINGS_n_opt] = {"ALLOW SEED QR CODES", "ALLOW PLAIN SEEDS ON SD",
-    "A GAME AT POWER ON", "SHOW STOPWATCH IN CREATE", "WIPE ALL AFTER NO USE", "STRENGTH OF KEF BACKUPS",
+static const char* const help_settings[cSETTINGS_n_opt] = {"ALLOW SEED QR CODES", "ALLOW OBFUSCATED SD SEEDS",
+    "A GAME AT POWER ON", "ENTROPY WITH BUTTON PUSHES", "WIPE ALL AFTER NO USE", "STRENGTH OF KEF BACKUPS",
     "CHIP ID, STACK, FLASH LOCK", "INSTALL UPDATE.HEX FROM SD"};
 
 void draw_hex16(unsigned int x, unsigned int y, uint16_t numero, int N, unsigned int color, unsigned int bg, unsigned int size) {
@@ -398,6 +398,13 @@ void draw_help(const char *text, unsigned int color) {
     strcpy(line, text ? text : "");
     while (strlen(line) < 26) strcat(line, " ");
     text_at(1, 95, line, color);
+}
+
+// BACK of a menu grid relabelled LIST: the menu returns to the word list
+// (SEED BACKUP and WALLET)
+void grid_back_list(void) {
+    rectan(GRID_X + 1, 106, GRID_X + 29, 114, ST7735_BLACK);
+    drawtext(GRID_X + 4, 107, "LIST", ST7735_WHITE, ST7735_WHITE, 1);
 }
 
 void print_generic_menu(const char* const *options, int n_opt, int sel) {
@@ -1570,6 +1577,7 @@ void print_settings_screen(int sel) {
     // ("BOOT 1.0"; an older bootloader has none)
     char text[16];
     const char *tag = (const char *)BOOT_TAG_ADDRESS;
+    _Static_assert(sizeof("FW ") - 1 + sizeof(cVersion) <= sizeof(text), "cVersion too long for the line");   // Audit A8
     strcpy(text, "FW ");
     strcat(text, cVersion);
     text_at(5, 107, text, ST7735_CYAN);
@@ -1600,6 +1608,28 @@ void print_sd_warning(const char *ok_label) {
     text_at(1, 40, "KEEP IT APART FROM THIS", ST7735_YELLOW);
     text_at(1, 55, "DEVICE, NEVER IN A PC", ST7735_YELLOW);
     grid_confirm(ok_label);
+}
+
+// Shamir, obfuscation and mnemonic to cards give a Seedmate format: other
+// wallets cannot read it or undo it (the card order also reads in Ian
+// Coleman's tool, as card entropy). Yellow warning once per power-on; BACK
+// cancels, OK goes on. kind: FORMAT_SHAMIR, FORMAT_OBFUS, FORMAT_CARDS.
+void print_format_warning(uint8_t kind) {
+    static const char *const first[3] = {"SHARES ARE NOT SLIP-39:", "OBFUSCATED WORDS:", "CARD ORDER:"};
+    black_screen();
+    draw_title("SEEDMATE FORMAT", ST7735_LIGHTGREY);
+    text_at(1, 20, first[kind], ST7735_YELLOW);
+    text_at(1, 32, "OTHER WALLETS AND DEVICES", ST7735_YELLOW);
+    text_at(1, 44, (kind == FORMAT_OBFUS) ? "CANNOT UNDO THEM." : "CANNOT READ THEM.", ST7735_YELLOW);
+    if (kind == FORMAT_CARDS) {
+        text_at(1, 60, "RECOVER WITH SEEDMATE,", ST7735_YELLOW);
+        text_at(1, 72, "THE BACKUP HTML TOOL OR", ST7735_YELLOW);
+        text_at(1, 84, "IAN COLEMAN'S BIP39 TOOL", ST7735_YELLOW);
+    } else {
+        text_at(1, 60, "RECOVER THEM WITH SEEDMATE", ST7735_YELLOW);
+        text_at(1, 72, "OR THE BACKUP HTML TOOL", ST7735_YELLOW);
+    }
+    grid_confirm("NEXT");
 }
 
 // A function that is not available, and why (red title, the reason below)

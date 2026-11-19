@@ -363,6 +363,12 @@ static void test_export(void) {
     CHECK(desc_format(&w, out, 200, b58check) == 0, "a small buffer is refused");
     blob[DESC_PACK_HEADER + DESC_PACK_KEY_V1] = 2;  // The known flag of key 1 must be 0 or 1
     CHECK(!desc_unpack(blob, len, &w2), "bad xpub data flag refused");
+    blob[DESC_PACK_HEADER + DESC_PACK_KEY_V1] = 1;
+    CHECK(desc_unpack(blob, len, &w2), "flag back to 1 loads again");
+    blob[DESC_PACK_HEADER + 4] = DESC_ORIGIN_MAX;   // Origin length of key 0 (audit I1)
+    CHECK(desc_unpack(blob, len, &w2), "an origin of the full length loads");
+    blob[DESC_PACK_HEADER + 4] = DESC_ORIGIN_MAX + 1;
+    CHECK(!desc_unpack(blob, len, &w2) && w2.key_count == 0, "an origin longer than the array is refused");
     printf("export: %u test wallets written back identical\n", (unsigned)(sizeof(cases) / sizeof(cases[0])));
 }
 

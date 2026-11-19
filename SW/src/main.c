@@ -899,6 +899,7 @@ typedef enum
     BACKUP_BLOCKED,
     KEF_OUTPUT,
     WARNING_SD,
+    WARNING_FORMAT,                 // Shamir / obfuscation: a Seedmate format
     WARNING_SD_SETTING,
     CONFIRM_SD_OVERWRITE,
     VIEW_QR,
@@ -983,16 +984,40 @@ typedef enum
 // ============================================================================
 // QR Parsing & Validation Logic
 // ============================================================================
+// Length of the Compact SeedQR in a code read, 16 or 32, or 0 if it is not
+// one: exactly 16 / 32 bytes, or followed only by what the scanner adds (CR,
+// LF, NUL). Any other code of 17-20 or 33-36 bytes is not a seed (audit A5).
+static int compact_seedqr_len(const uint8_t *b, int len) {
+    int n = (len >= 16 && len <= 20) ? 16 : (len >= 32 && len <= 36) ? 32 : 0;
+    for (int i = n; i < len; i++) {
+        if (b[i] != '\r' && b[i] != '\n' && b[i] != 0) return 0;
+    }
+    return n;
+}
+
+// All printable ASCII: a text, not entropy (random bytes are all printable
+// with odds of 1 in 7.7 million for 16 bytes, 1 in 10^13 for 32; audit A5)
+static bool compact_is_text(const uint8_t *b, int n) {
+    for (int i = 0; i < n; i++) {
+        if (b[i] < 0x20 || b[i] > 0x7E) return false;
+    }
+    return true;
+}
+
+// Why validate_and_load_qr() refused a code, when it is not the usual "no seed"
+static const char *qr_refusal;
+
 bool validate_and_load_qr(uint8_t *buffer, int length) {
-    
-    // --- PRO FIX: Handle CompactQR FIRST, treating it as strictly binary data ---
-    // CompactQR payload is exactly 16 or 32 bytes. Hardware scanners may append \r, \n, or \0, 
-    // making the total received length 17-20 or 33-36 bytes.
-    // Since the shortest possible Text SeedQR is 47 characters and Numeric is 48, 
-    // any length in these ranges is guaranteed to be a CompactQR.
-    if ((length >= 16 && length <= 20) || (length >= 32 && length <= 36)) {
-        
-        int compact_len = (length < 32) ? 16 : 32;
+    qr_refusal = NULL;
+
+    // A Compact SeedQR first: binary, 16 or 32 bytes, maybe with the scanner's
+    // line end (the shortest text SeedQR has 47 characters, the numeric 48)
+    int compact_len = compact_seedqr_len(buffer, length);
+    if (compact_len > 0 && compact_is_text(buffer, compact_len)) {
+        qr_refusal = "TEXT, NOT COMPACT SEEDQR";
+        return false;
+    }
+    if (compact_len > 0) {
         size_pointer = (compact_len == 16) ? cSIZE_12 : cSIZE_24;
         
         // Clear target array
@@ -2537,6 +2562,16 @@ static uint32_t derive_child_fp;            // Master fingerprint of the key it 
 static uint8_t transcript_tag[8];           // Seed whose transcript was verified or skipped (see transcript_pending)
 static bool warned_seedqr;                  // The SeedQR warning was accepted in this session
 static bool warned_sd;                      // The SD seed warning was accepted in this session
+// The Seedmate format warning of SHAMIR, OBFUSCATION and MNEMONIC TO CARDS
+// (bit 1 << FORMAT_*) was accepted since power-on, in RAM only. Not reset with the secrets: those flows wipe on
+// every exit, so it would come back every time; it says nothing secret.
+static uint8_t warned_format;
+
+// The format warning of an OPSEC function, FORMAT_*, or -1 for none
+static int format_kind(uint8_t id) {
+    return (id == cMAIN_SSS) ? FORMAT_SHAMIR : (id == cMAIN_OBFUS) ? FORMAT_OBFUS :
+           (id == cMAIN_MNEM2CARD) ? FORMAT_CARDS : -1;
+}
 static bool warned_nsec;                    // The nsec warning was accepted in this session
 
 // Derives the child (BACK cancels the PBKDF2) and shows where it comes from
@@ -2617,6 +2652,7 @@ static void print_bip84_menu(void)
     }
     print_titled_menu(bip84_testnet ? "" : has_passphrase ? "WALLET (PASSPHRASE)" : "WALLET",
                       options, bip84_option_count(), bip84_menu_pointer);
+    grid_back_list();                   // BACK returns to the word list
     if (bip84_testnet) {                // "TESTNET WALLET", "TESTNET (PASSPHRASE)": the network first
         draw_title_pair("TESTNET", ST7735_YELLOW, has_passphrase ? "(PASSPHRASE)" : "WALLET", ST7735_LIGHTGREY);
     }
@@ -4252,10 +4288,18 @@ static void secrets_wipe(void) {
     memzero(&ms_receive_node_cache, sizeof(ms_receive_node_cache));
     memzero(&ms_change_node_cache, sizeof(ms_change_node_cache));
     memzero(vault_key, sizeof(vault_key));
+    // Public, but they name the wallet: every address and its balance, and a
+    // check for a guessed seed (audit A3)
+    memzero(bip84_cached_xpub, sizeof(bip84_cached_xpub));
+    memzero(bip84_cached_zpub, sizeof(bip84_cached_zpub));
+    bip84_master_fingerprint = 0;
+    memzero(bip84_seed_tag, sizeof(bip84_seed_tag));
+    memzero(ms_wallet_seed_tag, sizeof(ms_wallet_seed_tag));
 }
 
 void transition_to_main(void) {
     black_screen();
+    stack_wipe();                           // What the flow left in its dead frames (audit A2)
     secrets_wipe();                         // The fountain buffer too: an encrypted seed text
     kef_sd_mode = false;
     if (xor_from_create) {                  // MIX ENTROPY is a CREATE function
@@ -4782,6 +4826,9 @@ void calculate_card_encoding(void) {
     
     card_decks_needed = best_path->max_usage;
     card_view_page = 0;
+    // Every beam is a card sequence, the best ones the whole seed (audit A1)
+    memzero(current_beams, sizeof(current_beams));
+    memzero(next_beams, sizeof(next_beams));
 }
 
 // ============================================================================
@@ -8403,8 +8450,7 @@ static kef_status_t kef_parse_text(const char *text, int len, uint8_t *out, uint
 // SEED BACKUP menu; BACK returns to the word list, so its key says LIST
 static void draw_backup_menu(void) {
     print_generic_menu(menu_backup, cBACKUP_n_opt, backup_pointer);
-    rectan(GRID_X + 1, 106, GRID_X + 29, 114, ST7735_BLACK);
-    drawtext(GRID_X + 4, 107, "LIST", ST7735_WHITE, ST7735_WHITE, 1);
+    grid_back_list();
 }
 
 static void print_backup_menu(void) {
@@ -9209,7 +9255,7 @@ static void print_reader_screen(void) {
     uint8_t prog[40];
     size_t prog_len = 0;
     if (reader_hex) {
-        if (reader_len == 16 || reader_len == 32) {
+        if (compact_seedqr_len(reader_data, reader_len) > 0) {     // As LOAD takes it
             kind = "LOOKS LIKE COMPACT SEEDQR";
             color = ST7735_YELLOW;
         } else {
@@ -11035,6 +11081,8 @@ static void session_wipe(uint8_t **shares, uint8_t **shares_input, uint8_t *sss_
     multi_input_wipe(shares_input, sss_result, len);
     memzero(derive_child, sizeof(derive_child));
     memzero(card_sequence, sizeof(card_sequence));
+    memzero(current_beams, sizeof(current_beams));      // Also cleared after each use (audit A1)
+    memzero(next_beams, sizeof(next_beams));
     memzero(dice_string_buf, sizeof(dice_string_buf));
     (void)append_checksum(data_array_256b, 32);     // Its static copy, now zeros
     memzero(buffer, sizeof(buffer));
@@ -11125,6 +11173,8 @@ static void idle_recover(uint8_t **shares, uint8_t **shares_input, uint8_t *sss_
     capturing_xor_word = false;
     bip84_qr_return_to_menu = false;
     bip84_qr_return_to_info = false;
+    vault_pick = false;                     // A vault pick list left by the jump (audit A6)
+    vault_close();
     main_pointer = cMAIN_LOAD;              // Back to the main menu, not to OPSEC
     black_screen();
     draw_title("AUTO UNLOAD", ST7735_LIGHTGREY);
@@ -11567,6 +11617,17 @@ int SSS_N = 9;
         idle_recover(shares, shares_input, SSS_result, LEN);
         memzero(word, sizeof(word));
         memzero(result, sizeof(result));
+        // Locals changed after setjmp() are indeterminate after longjmp() (C11
+        // 7.13.2.1): every one gets its start value again (audit A7)
+        repeat_t = repeat_wait = 0;
+        SSS_N = 9;
+        sel_K_N = 0;
+        SDblock_pointer = 0;
+        selinput_pointer = 0;
+        wipe_total_sectors = wipe_mb_total = 0;
+        lt_idx = 0;
+        found = NULL;
+        found_bool = false;
         transition_to_main();
         pulsed_bt = NONE;
         repeat_bt = NONE;
@@ -11806,10 +11867,18 @@ int SSS_N = 9;
                 break;
             case OPSEC_MENU:
                 switch (pulsed_bt) {
-                    case OK_BT:
-                        main_pointer = opsec_menu_ids[opsec_pointer];
+                    case OK_BT: {
+                        uint8_t id = opsec_menu_ids[opsec_pointer];
+                        int kind = format_kind(id);
+                        if (kind >= 0 && (warned_format & (1u << kind)) == 0) {
+                            print_format_warning((uint8_t)kind);
+                            estado = WARNING_FORMAT;
+                            break;
+                        }
+                        main_pointer = id;
                         estado = MAIN_RUN;
                         break;
+                    }
                     case BACK_BT:
                         main_pointer = cMAIN_OPSEC;
                         transition_to_main();
@@ -14294,6 +14363,18 @@ int SSS_N = 9;
                     kef_output_leave();
                 }
                 break;
+            case WARNING_FORMAT:
+                if (pulsed_bt == OK_BT) {
+                    uint8_t id = opsec_menu_ids[opsec_pointer];
+                    warned_format |= (uint8_t)(1u << format_kind(id));
+                    main_pointer = id;
+                    estado = MAIN_RUN;
+                } else if (pulsed_bt == BACK_BT) {
+                    black_screen();
+                    print_generic_menu(menu_opsec, cOPSEC_n_opt, opsec_pointer);
+                    estado = OPSEC_MENU;
+                }
+                break;
             case WARNING_SD:
                 if (pulsed_bt == OK_BT) {
                     warned_sd = true;
@@ -14698,7 +14779,7 @@ int SSS_N = 9;
                                         redraw_show_seed_with_offset();
                                     }
                                 } else {
-                                    text_at(10, 40, "NO SEED OR BAD CHECKSUM", ST7735_RED);
+                                    text_at(10, 40, qr_refusal ? qr_refusal : "NO SEED OR BAD CHECKSUM", ST7735_RED);
                                 }
                             } else {
                                 text_at(10, 40, "NO QR DETECTED", ST7735_RED);

@@ -5,6 +5,8 @@
 //   - get_valid_next_letters() and search_unique_prefix() give, for every prefix
 //     of every word and for prefixes of no word, what a search of the plain list
 //     gives
+//   - the Compact SeedQR checks of validate_and_load_qr() (audit A5): line end
+//     bytes only after the 16 / 32, and printable text refused
 // Build and run from this folder (one line for gcc):
 //   python extract_words.py
 //   gcc -std=c99 -O1 -Wall -Wextra -I../../src -I../../src/SSS -o test_wordlists test_wordlists.c
@@ -127,6 +129,33 @@ int main(void) {
         }
     }
     check_prefix("zzzz");
+
+    // Compact SeedQR checks of validate_and_load_qr() (audit A5)
+    {
+        uint8_t b[40];
+        for (int i = 0; i < 40; i++) b[i] = (uint8_t)(0x80 + i);   // Binary entropy
+        CHECK(compact_seedqr_len(b, 15) == 0);
+        CHECK(compact_seedqr_len(b, 16) == 16);
+        CHECK(compact_seedqr_len(b, 32) == 32);
+        CHECK(compact_seedqr_len(b, 17) == 0);         // A 17th byte that is not a line end
+        CHECK(compact_seedqr_len(b, 37) == 0);
+        b[16] = '\r'; b[17] = '\n'; b[18] = 0; b[19] = '\r';
+        CHECK(compact_seedqr_len(b, 17) == 16);
+        CHECK(compact_seedqr_len(b, 20) == 16);
+        b[15] = '\r';                                   // Entropy may end in a CR: still 16
+        CHECK(compact_seedqr_len(b, 17) == 16);
+        b[32] = '\n'; b[33] = 'x';
+        CHECK(compact_seedqr_len(b, 33) == 32);
+        CHECK(compact_seedqr_len(b, 34) == 0);
+        CHECK(!compact_is_text(b, 16));
+        const uint8_t *t = (const uint8_t *)"https://seedmate.net/x\r";
+        CHECK(compact_seedqr_len(t, 17) == 0);          // 17 bytes of text: not a seed
+        CHECK(compact_seedqr_len(t, 16) == 16 && compact_is_text(t, 16));   // 16 of text: refused as text
+        uint8_t m[16];
+        memcpy(m, "abcdefghijklmno", 15);
+        m[15] = 0x7F;                                   // One byte outside printable ASCII
+        CHECK(!compact_is_text(m, 16));
+    }
 
     if (failures == 0) {
         printf("test_wordlists: %ld prefixes, list matches the official BIP39 file (SHA-256 %s)\n", checks, hex);

@@ -785,7 +785,8 @@ bool desc_unpack(const uint8_t *in, uint32_t len, desc_wallet_t *out) {
             k->child = (uint32_t)p[6] << 24 | (uint32_t)p[7] << 16 | (uint32_t)p[8] << 8 | p[9];
             p += 10;
         }
-        if (k->public_key[0] != 0x02 && k->public_key[0] != 0x03) {
+        // An origin longer than the array, or a key that is not compressed (audit I1)
+        if (k->origin_len > DESC_ORIGIN_MAX || (k->public_key[0] != 0x02 && k->public_key[0] != 0x03)) {
             memset(out, 0, sizeof(*out));
             return false;
         }

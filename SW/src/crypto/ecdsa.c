@@ -21,6 +21,7 @@
  * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
  * OTHER DEALINGS IN THE SOFTWARE.
  */
+#include <assert.h>
 #include <stdint.h>
 #include <string.h>
 #include "bignum.h"
@@ -110,7 +111,7 @@ void curve_to_jacobian(const curve_point *p, jacobian_curve_point *jp, const big
   jp->x = p->x;
   jp->y = p->y;
   bn_zero(&jp->z);
-  jp->z.val[0] = 1; // Simplificación: Z=1 constante, sin generadores aleatorios pesados
+  jp->z.val[0] = 1;  // Seedmate: z = 1, upstream draws a random z (blinding, audit C1)
 }
 
 void jacobian_to_curve(const jacobian_curve_point *jp, curve_point *p, const bignum256 *prime) {
@@ -130,6 +131,7 @@ void point_jacobian_add(const curve_point *p1, jacobian_curve_point *p2, const e
   int is_doubling = 0;
   const bignum256 *prime = &curve->prime;
   int a = curve->a;
+  assert(-3 <= a && a <= 0);
   xz = p2->z;
   bn_multiply(&xz, &xz, prime);
   yz = p2->z;
@@ -176,6 +178,7 @@ void point_jacobian_add(const curve_point *p1, jacobian_curve_point *p2, const e
 void point_jacobian_double(jacobian_curve_point *p, const ecdsa_curve *curve) {
   bignum256 az4 = {0}, m = {0}, msq = {0}, ysq = {0}, xysq = {0};
   const bignum256 *prime = &curve->prime;
+  assert(-3 <= curve->a && curve->a <= 0);
   m = p->x;
   bn_multiply(&m, &m, prime);
   bn_mult_k(&m, 3, prime);
@@ -227,6 +230,7 @@ int point_multiply(const ecdsa_curve *curve, const bignum256 *k, const curve_poi
   }
   is_non_zero |= k->val[j];
   a.val[j] = tmp + 0xffffff + k->val[j] - (curve->order.val[j] & is_even);
+  assert((a.val[0] & 1) != 0);
 
   if (!is_non_zero) { point_set_infinity(res); return 1; }
 
@@ -265,7 +269,7 @@ int point_multiply(const ecdsa_curve *curve, const bignum256 *k, const curve_poi
     bits ^= nsign;
     bits &= 15;
     bn_cnegate((sign ^ nsign) & 1, &jres.z, prime);
-    point_jacobian_add(&pmult[bits >> 1], &jres, curve);
+    point_jacobian_add(&pmult[bits >> 1], &jres, curve);  // Seedmate: direct index, upstream reads all 8 with point_select() (audit C2)
     sign = nsign;
   }
   bn_cnegate(sign & 1, &jres.z, prime);

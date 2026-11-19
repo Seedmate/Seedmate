@@ -72,8 +72,11 @@ static ur_double_t rng_next_double(void) {
     return (ur_double_t)prng_next() / UR_FLOAT_CONST(18446744073709551616.0);
 }
 
+// A PRNG output within 2^10 of 2^64 rounds to 1.0 in a 53 bit mantissa, which
+// would give high + 1: an index past the tables (audit A4). Never above high.
 static uint32_t rng_next_int(uint32_t low, uint32_t high) {
-    return (uint32_t)((ur_double_t)low + rng_next_double() * (ur_double_t)(high - low + 1));
+    uint32_t v = (uint32_t)((ur_double_t)low + rng_next_double() * (ur_double_t)(high - low + 1));
+    return (v > high) ? high : v;
 }
 
 void get_fountain_parts(uint32_t seq, uint32_t total, uint32_t msg_len, uint32_t checksum, uint32_t *out_degree, uint32_t *out_fragments) {
@@ -90,6 +93,7 @@ void get_fountain_parts(uint32_t seq, uint32_t total, uint32_t msg_len, uint32_t
     uint32_t c = rng_next_int(0, total - 1);
     ur_double_t d = rng_next_double();
     uint32_t degree = (d < alias_probs[c]) ? (c + 1) : ((uint32_t)alias_table[c] + 1);
+    if (degree > total) degree = total;     // Never more parts than there are (audit A4)
     *out_degree = degree;
 
     // 2. Shuffle / choose fragments using shift-left removal

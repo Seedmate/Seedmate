@@ -919,7 +919,7 @@ included, being told what differs from the library they know.
 ## 12. Work list from the passes of 2026-11-16
 
 Everything found in sections 7 to 11, in the order suggested for fixing it.
-Done so far: items 1 (R1), 3 (B3), 13 (B1) and 14 (B2), and 2 (R2), 2026-11-17. "Open" means the user has not decided whether to do
+Done: every item except 10 (not to be done, decided) and 11 (I2, open); the last ones, 7, 8 and 9, on 2026-11-19, and the third side of 9 (`THIRD_PARTY_NOTICES.md`, outside SW) waits for the user. "Open" means the user has not decided whether to do
 it. Each fix needs the build, the memory delta, the host tests and an entry
 in `docs/validation/firmware_validation.html` where a device test applies.
 
@@ -930,12 +930,12 @@ in `docs/validation/firmware_validation.html` where a device test applies.
 | 1 | R1 | **Done on 2026-11-17**: `amount_verified` (an amount read and not from WITNESS_UTXO) sets `amounts_unverified` and refuses legacy; `OWN-legacy_prev_tx_bad_vout` now "LEGACY NEEDS PREV TX" in the legacy mode, its gap removed. Was: use `in.amount_from_witness` instead of `in.prev_tx == NULL` for `amounts_unverified` and for "LEGACY NEEDS PREV TX" | `psbt_plan_signing()` in `main.c` | `OWN-legacy_prev_tx_bad_vout` is refused in the legacy mode and marked unverified in the others; remove its line from `test/psbt/malicious_gaps.txt`, run `test_malicious.exe --update` and review the diff |
 | 2 | R2 | **Done on 2026-11-17**: measured on a board (vault path 5,968 B, SIGN 5,032 B of 8,264). Guard (+148 B): `stack_check()` in `app_tasks()` and `led_busy()` stops with "STACK OVERFLOW" when the lowest stack word lost `STACK_FILL`; device test SEC-04. Was: measure the stack: STACK PEAK after VAULT > NEW ENTRY > MULTISIG DESCRIPTOR > FROM QR with a BBQr Z code, and after SIGN > FROM QR with a BBQr Z PSBT. Add the guard: `app_tasks()` stops with "STACK OVERFLOW" when the word at `stack_floor()` is not `STACK_FILL` | `main.c` (`app_tasks()`, `stack_paint()`); device | Figures written in `pending.md`; the guard shown to fire in a debug build |
 | 3 | B3 | **Done on 2026-11-17** (+124 B): "FLASH LOCK OK" / "FLASH NOT LOCKED" under the stack peak, device tests BOOT-16 and SET-06. Was: show in SETTINGS > MCU SERIAL NUMBER whether NVMPWP and NVMBWP hold the values the bootloader sets with both unlock bits clear: "FLASH LOCK OK" green / "FLASH NOT LOCKED" red | `main.c` or `settings.c`; values in `bootloader/src/main.c` `JumpToApp()` | Seen on a board started through the bootloader (and "NOT LOCKED" when run from the debugger) |
-| 4 | R3 | When `single_purpose_refresh()` is cancelled in `config_run()`, put the mode back as well (or clamp `bip84_script` to the mode's range) | `config_run()` in `main.c` | Multisig can never be left with LEGACY or TAPROOT |
+| 4 | R3 | **Done on 2026-11-17** with the testnet change, which rewrote that part of `config_run()`: a cancelled derivation keeps the mode too (device test WAL-14). Was: When `single_purpose_refresh()` is cancelled in `config_run()`, put the mode back as well (or clamp `bip84_script` to the mode's range) | `config_run()` in `main.c` | Multisig can never be left with LEGACY or TAPROOT |
 | 5 | R4 | **Done on 2026-11-18** (+80 B; the restart after several refusals not done, the user's choice). Was: BBQr: set encoding, type, count and part length only after the first part decoded. UR: decode a single part code only while no fountain part was received, or `fountain_init()` when it fails | `bbqr_add_part()` in `bbqr.c`; `scan_ur_message()` in `main.c` | New cases in `test/bbqr/`: a damaged first code followed by a good series completes |
 | 6 | R5 | **Done on 2026-11-18** (+96 B). Was: SD file list: skip a file whose directory position is 99 or more instead of ending the list, and say "MORE FILES NOT SHOWN" | `sd_pick_file()` in `main.c` | Case in `test/sdfiles/` or a device test with over 99 files |
-| 7 | I1 | `desc_unpack()` refuses `origin_len > DESC_ORIGIN_MAX` | `descriptor.c` | Case in `test/psbt/test_descriptor.c` |
-| 8 | C3 | Put back the three `assert()` of upstream in `ecdsa.c` (they vanish with NDEBUG) | `crypto/ecdsa.c` | Build unchanged in size |
-| 9 | 11.5 | Say what is modified: a short `crypto/README.md` of our own (what is kept, what is edited and why), the same in `THIRD_PARTY_NOTICES.md` (ask first: outside SW) and in `CLAUDE.md`; translate the Spanish comment in `ecdsa.c` | docs | - |
+| 7 | I1 | **Done on 2026-11-19** (+16 B): a key whose origin is longer than `DESC_ORIGIN_MAX` is refused like a key that is not compressed; cases in `test_descriptor.c`. Was: `desc_unpack()` refuses `origin_len > DESC_ORIGIN_MAX` | `descriptor.c` | Case in `test/psbt/test_descriptor.c` |
+| 8 | C3 | **Done on 2026-11-19**: the three `assert()` are back (`#include <assert.h>`), the firmware is built with NDEBUG so its size did not change; the host benches run with them. Was: Put back the three `assert()` of upstream in `ecdsa.c` (they vanish with NDEBUG) | `crypto/ecdsa.c` | Build unchanged in size |
+| 9 | 11.5 | **Done on 2026-11-19** for SW: `crypto/README.md` is now our own table of what differs from upstream, the Spanish comment of `curve_to_jacobian()` is in English and marked "Seedmate" (audit C1), the direct table index of `point_multiply()` marked too (C2), `CLAUDE.md` points to the README; `THIRD_PARTY_NOTICES.md` (outside SW) not touched yet, it needs the user's yes. Was: Say what is modified: a short `crypto/README.md` of our own (what is kept, what is edited and why), the same in `THIRD_PARTY_NOTICES.md` (ask first: outside SW) and in `CLAUDE.md`; translate the Spanish comment in `ecdsa.c` | docs | - |
 | 10 | S1, C1, C2 | **Not to be done**, decided by the user on 2026-11-16: the device keeps no secrets, the key is in RAM only while a seed is loaded and it signs. For the record, it would be: restore the blinding of `curve_to_jacobian()` and `point_select()` in `point_multiply()`. There is no random source: z can come from a hash of the scalar and a counter, or from a pool mixed with key press times. Costs flash (`point_select()` and one more hash per multiplication) and time per signature; measure both | `crypto/ecdsa.c`, `psbt_sign.c` | Host tests unchanged (the results do not depend on z); signing time on the board noted |
 | 11 | I2 | **Open** (the user has not decided; it is of the same family as item 10). Schnorr with auxiliary randomness from the key press pool instead of zeros | `psbt_taproot_sign()` | The byte-identical comparison with the Python signer would have to pass the same aux |
 | 12 | S3 | **Done on 2026-11-18** (+248 B). Was: another label for an output to our own key of the other mode (single sig key while in multisig, and the reverse) | `psbt_check_owner()`, `psbt_output_kind()` | - |
@@ -959,7 +959,7 @@ bootloader is full, 15 to 17 wait for space.
 | # | Id | What to do | Where | Done when |
 |---|---|---|---|---|
 | 19 | T1 | **Done on 2026-11-17** (host tests in `test_lms.js`; tried in a browser, not yet on the signing computer). The page reads `SIGNATURES.md` and previous `UPDATE.SIG` files (index = first 4 bytes), refuses an index already used for another file hash and offers the next free one. Add the rule: record the index before the signature leaves the page, test signatures included | `lms_sign.html`, `SIGNATURES.md` | Cases in `test/lms/test_lms.js` for the parsing and the refusal |
-| 20 | T2 | Open: `navigator.onLine` only says that a network adapter is up (cable, virtual or Bluetooth adapters), not that there is internet, so the signing computer shows "online" with Wi-Fi off; blocking on it would block always. The procedure part is done (`SIGNATURES.md`). Was: SIGN disabled while online unless a second tick; the signing procedure written in `SIGNATURES.md` (offline computer, private window, no extensions, close the browser after) | same | - |
+| 20 | T2 | **Decided on 2026-11-18 by the user: left as it is.** Was: Open: `navigator.onLine` only says that a network adapter is up (cable, virtual or Bluetooth adapters), not that there is internet, so the signing computer shows "online" with Wi-Fi off; blocking on it would block always. The procedure part is done (`SIGNATURES.md`). Was: SIGN disabled while online unless a second tick; the signing procedure written in `SIGNATURES.md` (offline computer, private window, no extensions, close the browser after) | same | - |
 | 21 | T3 | **Done on 2026-11-17**: the hash is in `SIGNATURES.md`, `test_lms.js` fails when it is stale, `signatures/.gitattributes` keeps git from changing the line endings. Publish the SHA-256 of `lms_sign.html` with each release and in `SIGNATURES.md`; check it before typing the words | docs, release procedure | - |
 
 ### Device tests that these passes ask for
@@ -1055,7 +1055,7 @@ Nothing was run on a board and no firmware or bootloader code was changed;
 the only files changed are this document, `pending.md`, `CLAUDE.md`, the
 validation catalogue and the hostile PSBT tests (ten new vectors).
 
-Still not reviewed by anyone, in the order suggested:
+Still not reviewed by anyone, in the order suggested (items 1 to 3 were covered by the pass of 2026-11-19, section 15):
 
 1. **The state machine of `main()`**, about 3,000 lines. The first audit
    sampled it and section 7 only skimmed its changes. What to look for: on
@@ -1073,9 +1073,9 @@ Still not reviewed by anyone, in the order suggested:
    revision): it must read records by the bitmap.
 5. **The other HTML tools** (`ur_psbt_animator.html`, the validation page):
    test tools, low stakes.
-6. **`tinf/tinflate.c`** beyond its bounds checks, and that it is
-   byte-identical to the 1.2.1 tag (the comparison of section 11 was done
-   for `crypto/` only).
+6. **`tinf/tinflate.c`** beyond its bounds checks (that it is byte-identical
+   to the 1.2.1 tag was checked on 2026-11-19: `tinflate.c`, `tinf.h` and
+   `LICENSE` have the SHA-256 of the files of the tag).
 7. **The linker scripts** of the app and the bootloader, and the display
    driver shared by both.
 
@@ -1091,3 +1091,41 @@ Method notes that save time:
   see what the firmware does with a PSBT idea before writing a vector.
 - The bootloader host tests build with the commands in the first lines of
   each `bootloader/test/*.c`; `boot_lms.c` must be on the command line.
+
+## 15. Fourth pass: state machine, entropy and libraries (2026-11-19)
+
+Code reading by Opus 5.5 over the parts section 14 lists as never reviewed:
+the `main()` state machine and its exits (wipes, mode flags, AUTO UNLOAD),
+the entropy arithmetic, the Shamir code, `screens.c`, and the libraries that
+take data from outside (UR fountain decoder, sampler, Bytewords, the QR
+reader, the SD slots, the text editor). Nothing was changed in the firmware;
+no device test was run. Ids A1-A9.
+
+**Status: A1 to A8 fixed the same day at the user's request** (+320 B flash, +8 B RAM), as suggested in the table: the beams wiped after use and in `session_wipe()` (A1); `stack_wipe()` in `transition_to_main()` (A2); the xpub strings, fingerprint and seed tags wiped in `secrets_wipe()` (A3); `rng_next_int()` never above `high` and the degree never above `total` in `sampler.c` (A4); `compact_seedqr_len()` and `compact_is_text()` in `validate_and_load_qr()`, the reader label sharing the first, "TEXT, NOT COMPACT SEEDQR" on screen (A5, host cases in `test/words/test_wordlists.c`); `vault_pick` and `vault_close()` in `idle_recover()` (A6); the locals of `main()` set again after the jump (A7); a static assert on the version line (A8). A9 needs nothing. Host benches pass (psbt with the hostile suite, ur_anim, bbqr, words, entropy); device tests QR-09 (new), SET-04 rev 2 and SEC-01 rev 2.
+
+### Findings
+
+| Id | Severity | Finding | Fix suggested |
+|---|---|---|---|
+| A1 | Medium | **MNEMONIC TO CARDS leaves the seed in RAM.** `calculate_card_encoding()` keeps its beam search in the statics `current_beams[]` and `next_beams[]` (8 + 8 `BeamState`, 3 KB). Each state holds a card sequence (`seq[]`), and the best ones are complete encodings of the seed, from which it can be rebuilt. Only `card_sequence[]` is copied out and wiped by `session_wipe()`; the beams are never wiped, so the seed stays in RAM after UNLOAD SEED and AUTO UNLOAD until power off or the next MNEMONIC TO CARDS. Against the claim that WIPE clears every copy. | `memzero()` both arrays at the end of `calculate_card_encoding()` (after the copy) and in `session_wipe()`; also the candidate `cand` on the stack (see A2). Device test: OPSEC > MNEMONIC TO CARDS, then UNLOAD. |
+| A2 | Low | **Secrets left on the stack when a flow returns to the main menu.** `stack_wipe()` runs only on UNLOAD SEED, AUTO UNLOAD and UPDATE FIRMWARE; the 23 other calls of `transition_to_main()` (BACK out of Shamir, XOR, BIP85, cards, obfuscation, END_MODE after an error...) wipe the globals but not the dead frames. Examples of what stays: the bitsliced secret and coefficients of a Shamir split (`eval_poly_block()`: `X`, `Y`, `T`, `Ck` are not wiped), the 96 digit SeedQR text of `seed_qr_make()` and the module arrays of every QR drawn (`screens.c`, VLAs), the hashes of the triple mnemonic search, `BeamState cand`. Same family as L1 of the first audit. | Call `stack_wipe()` from `transition_to_main()` (it paints only below its own frame, so it is safe from any depth); about 8 KB written, under 1 ms. |
+| A3 | Low | **Wallet data outlives the unload.** `secrets_wipe()` clears the key nodes but not `bip84_cached_xpub` / `bip84_cached_zpub` (the account xpub: every address and the balance of the wallet), `bip84_master_fingerprint`, `bip84_seed_tag` and `ms_wallet_seed_tag` (8 bytes of SHA-256 over entropy, size and passphrase: a check for a guessed seed, and a sign that the same seed was loaded again). | Wipe the four in `secrets_wipe()`. |
+| A4 | Low | **UR sampler: a crafted frame can stop the device.** `rng_next_double()` divides a 64 bit PRNG output by 2^64 in a `long double`, which on XC32 has 53 bits of mantissa: outputs over 2^64 - 2^10 round to exactly 1.0, so `rng_next_int(0, total - 1)` returns `total`. Then `alias_probs[total]` / `alias_table[total]` are read (entries of an earlier scan with more parts, or zero), the degree can exceed `total`, `remaining` wraps in the shuffle and `indexes[]` is read far out of range: a bus error, the device hangs. The PRNG is seeded with SHA-256 of seq, total, length and checksum, so finding such a frame costs about 2^54 hashes; the effect is a crash, no write was found. | In `get_fountain_parts()`: clamp `c` to `total - 1` and the degree to `total`, and make `rng_next_int()` never return more than `high`. The animator page uses the same formula in JavaScript (test tool, no impact). |
+| A5 | Low | **Compact SeedQR taken by length alone.** `validate_and_load_qr()` treats any code of 16-20 or 32-36 bytes as a Compact SeedQR and loads its first 16 / 32 bytes, without looking at the extra bytes it assumes to be scanner suffixes. A short text, URL or any binary code of those lengths silently becomes a valid-looking random seed (a Compact SeedQR has no checksum of its own), for LOAD and for every XOR, Shamir, BIP85 or cards input. | Accept 17-20 / 33-36 bytes only when the extra bytes are CR, LF or NUL; otherwise go on to the text parse and say it is not a seed. |
+| A6 | Low | **AUTO UNLOAD inside a vault pick list skips its teardown.** In PASSPHRASE > FROM VAULT and IMPORT DESCRIPTOR > FROM VAULT (`vault_pick_type()`), the jump leaves `vault_pick` true and `vault_close()` uncalled (the list and `buffer` are wiped by `session_wipe()`). The next VAULT shows the list without NEW ENTRY and the grid says VIEW. Functional, nothing secret. | Clear `vault_pick` and call `vault_close()` in `idle_recover()`. |
+| A7 | Info | **`setjmp` and the locals of `main()`.** Locals of `main()` changed after `setjmp(idle_jump)` and not `volatile` may come back from the jump with their value at the `setjmp` (C11 7.13.2.1), e.g. `SDblock_pointer`, `selinput_pointer`, `SSS_N`. Both possible values are in range and every flow sets them again, so nothing wrong was found. | Keep it in mind; make one `volatile` or static if it ever matters. |
+| A8 | Info | **`screens.c` version line.** `print_settings_screen()` builds "FW " + `cVersion` in `char text[16]`: fine for "v2.0b1", an overflow for a version string of more than 12 characters. The other fixed buffers of `screens.c` were checked against their longest input (titles, counters, slot names, settings lines, the 96 digit SeedQR text in `text[98]`). | Size it from `sizeof(cVersion)` or add a static assert. |
+| A9 | Info | **Shamir coefficients.** They are SHA-256 of the key press pool (`TMR1` at the peripheral clock, 16 bits per press XORed into 32 bytes) with the index. A split from SD or QR first asks 16 timer presses (by the reasoning of L4 about 8 good bits each, so about 128 bits); from the keyboard the presses of typing the words give more. Enough against an attacker holding k - 1 shares (2^128 guesses). | None; written down here. |
+
+### Checked and found sound
+
+- **Entropy arithmetic.** Coins give 1 bit each. Raw dice: four faces enter 2 bits (00, 01, 10, 11) and two enter 1 bit (0, 1), so every bit is uniform and the bits credited are the bits entered; deleting a roll removes its 1 or 2 bits (`dice_two_bits`). Cards (put back and shuffled each time): 32 cards give 5 bits, 16 give 4, 4 give 2, each band uniform. Triple mnemonic: the search only increments the second half, so the 24 word seed loses about 8 of its 256 bits. STOPWATCH: hashed, 8 bits credited per press (L4).
+- **Shamir.** `SSS/shamir.c` is trezor's bitsliced, constant time GF(256) code; interpolation refuses repeated share indices; the split evaluates every share from the same coefficients; a 12 word share is the first 16 bytes, the others never leave the device.
+- **UR decoding.** Every frame passes its Bytewords CRC-32 before the fountain, the joined message its message CRC-32 before use; part and fragment sizes are checked before any copy; mixed frames keep their XOR within one part; Bytewords decoding rejects anything outside the table.
+- **QR reader and editor.** The scanner ring buffer drops bytes when full and flags it; `reader_insert_chars()` refuses CR and LF where they are not allowed, so the count checked against the room is the count copied; the editor inserts and deletes within `max_len` / `max_title_len`, the QR and dice inserts within the room computed.
+- **SD slots.** The size byte of an XOR slot must be 12 or 24 words; a KEF slot's length is checked against the sector before the copy.
+- **State machine.** END_MODE always goes through `transition_to_main()`; `idle_recover()` resets the mode flags the flows set (except `vault_pick`, A6); `capturing_xor_word` is released on both exits of the word entry; the stack guard and AUTO UNLOAD are polled in every wait for a key; the scanner interrupt holds the jump.
+
+### Still not reviewed
+
+Of section 14: the HTML recovery page of the vault, the HTML tools, `tinf/tinflate.c` beyond its bounds checks (its identity with the 1.2.1 tag is now checked), the linker scripts and the display driver. In `main()`, this pass followed the exits and flags but did not walk every one of its states.

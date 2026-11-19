@@ -2,7 +2,7 @@
 
 Seedmate includes third-party source code, data and generated code in the firmware (`SW/`) and the bootloader (`bootloader/`). This file lists every third-party component that is built into either image, with its origin and license. Code not listed here was written for this project (MIT, see the headers of `SW/src/main.c` and the other project files).
 
-Only the files named below are compiled. `SW/src/crypto/` may contain more files from the upstream project; they are not part of any build.
+Only the files named below are compiled. `SW/src/crypto/` was trimmed on 2026-11-15 to the files listed in section 1; `fault_handler_noop.c` there is built by the host tests only. `SW/src/crypto/README.md` lists, file by file, how the trezor-crypto files differ from upstream.
 
 ---
 
@@ -12,7 +12,7 @@ Only the files named below are compiled. `SW/src/crypto/` may contain more files
 - **Upstream:** https://github.com/trezor/trezor-firmware/tree/main/crypto
 - **Files built:** `bignum.c/.h`, `bip32.c/.h`, `ecdsa.c/.h`, `secp256k1.c/.h`, `options.h`, `memzero.h`, `script.h`, `ripemd160.c/.h`, `segwit_addr.c/.h`, `consteq.c/.h`, `fault_handler.h`, and the AES files in `aes/` (section 1a)
 - **Used for:** 256-bit big number arithmetic, secp256k1 curve operations, BIP32 key derivation, RIPEMD-160 (key fingerprints, addresses), bech32/bech32m addresses, constant-time comparison of the AES-GCM tag (`consteq`)
-- **Local changes:** `ecdsa.c` is trimmed to the public-key operations; `bip32.c` is trimmed and uses the project's HMAC-SHA512 (`SW/src/kdf.c`). The ECDSA signing in `SW/src/psbt_sign.c` follows the steps of trezor-crypto's `ecdsa_sign_digest()` on top of these files. `tc_fault_handler()` (declared in `fault_handler.h`) is provided by `SW/src/main.c`, which stops the device; the upstream no-op `fault_handler_noop.c` is not built.
+- **Local changes** (compared with upstream function by function on 2026-11-16, `SW/docs/security-audit.md` section 11; the list is in `SW/src/crypto/README.md`): `ecdsa.c` is trimmed to the public-key operations, and two protections against power and EM analysis were removed: `curve_to_jacobian()` uses z = 1 instead of a random z, and `point_multiply()` indexes its table directly instead of through `point_select()` (both marked "Seedmate" in the source); upstream's `assert()` lines are kept. `bip32.c` is trimmed and uses the project's HMAC-SHA512 (`SW/src/kdf.c`). `options.h`, `secp256k1.c/.h`, `ecdsa.h` and `bip32.h` are trimmed to secp256k1; `bignum.c`, `consteq.c`, `ripemd160.c` and `segwit_addr.c` are unchanged. The ECDSA signing in `SW/src/psbt_sign.c` follows the steps of trezor-crypto's `ecdsa_sign_digest()` on top of these files. `tc_fault_handler()` (declared in `fault_handler.h`) is provided by `SW/src/main.c`, which stops the device; the upstream no-op `fault_handler_noop.c` is not built.
 - **License:** MIT (`SW/src/crypto/LICENSE`)
 - **Copyright:** (c) 2013-2016 Tomas Dzetkulic, (c) 2013-2016 Pavol Rusnak, (c) 2015-2016 Jochen Hoenicke, (c) 2016 Alex Beregszaszi, and the trezor-crypto contributors
 
@@ -56,7 +56,7 @@ SOFTWARE.
 - **Upstream:** https://github.com/BrianGladman/AES (copied from trezor-crypto's `crypto/aes/`)
 - **Files built:** `aescrypt.c`, `aeskey.c`, `aestab.c`, `aesgcm.c`, `gf128mul.c`, `aes.h`, `aesopt.h`, `aestab.h`, `aesgcm.h`, `gf128mul.h`, `gf_mul_lo.h`, `mode_hdr.h`, `brg_endian.h`
 - **Used for:** AES-256-GCM encryption of the vault records on the SD card (`SW/src/vault.c`)
-- **Local changes:** `aes.h` enables only the 256-bit key schedule (no tables in any option); `gcm_init_and_key()` in `aesgcm.c` calls `aes_encrypt_key256()` when variable key sizes are disabled; `aestab.c` undefines the project's `v2` macro before its own `v2()`. Each change is marked "Seedmate" in the source.
+- **Local changes:** `aes.h` enables only the 256-bit key schedule (no tables in any option); `gcm_init_and_key()` in `aesgcm.c` calls `aes_encrypt_key256()` when variable key sizes are disabled; `aesgcm.c` authenticates the header and the data with one GHASH function instead of two identical copies; `aestab.c` undefines the project's `v2` macro before its own `v2()`. Each change is marked "Seedmate" in the source.
 - **License:** Brian Gladman's BSD-style license (in each file header)
 - **Copyright:** (c) 1998-2014, Brian Gladman, Worcester, UK. All rights reserved.
 
@@ -82,6 +82,7 @@ and fitness for purpose.
 - **Directory:** `SW/src/SSS/` (`shamir.c/.h`, `memzero.c/.h`)
 - **Upstream:** https://github.com/trezor/trezor-firmware/tree/main/crypto (based on https://github.com/dsprenkels/sss)
 - **Used for:** Shamir split/merge arithmetic over GF(256); secure wiping of secrets (`memzero`)
+- **Local changes:** the GF(256) helpers of `shamir.c` (`bitslice()`, `gf256_mul()`...) are no longer `static`, so the split in `SW/src/main.c` can use them, and `shamir_interpolate()` takes `uint8_t **` instead of `const uint8_t **`; the arithmetic is upstream's (compared on 2026-11-19)
 - **License:** MIT
 - **Copyright:** (c) 2017 Daan Sprenkels <hello@dsprenkels.com>, (c) 2019 SatoshiLabs
 
@@ -112,6 +113,7 @@ DEALINGS IN THE SOFTWARE.
 - **Directory:** `SW/src/QRCode-master/`
 - **Upstream:** https://github.com/ricmoo/QRCode (major parts derived from Project Nayuki's QR Code generator)
 - **Used for:** QR code generation (SeedQR, addresses, xpub / crypto-account, animated PSBT export)
+- **Local changes:** `<stdbool.h>` instead of its own `bool` type, and the Xcode `#pragma mark` lines removed (compared on 2026-11-19)
 - **License:** MIT
 - **Copyright:** (c) 2017 Richard Moore, (c) 2017 Project Nayuki
 
@@ -162,7 +164,7 @@ THE SOFTWARE.
 - **Files:** `bootloader/src/pff.c`, `pff.h`, `pffconf.h`, `diskio.h`
 - **Upstream:** http://elm-chan.org/fsw/ff/00index_p.html (R0.03a)
 - **Used for:** reading `UPDATE.HEX` in the bootloader (the firmware uses FatFs, section 6a)
-- **Local changes:** `pffconf.h` configuration (FAT16, directory functions enabled)
+- **Local changes:** `pffconf.h` configuration (FAT16, directory functions enabled); `pf_mount()` refuses a cluster size that is not a power of two (marked "Seedmate", audit P1); the linker script of the bootloader places `pf_read()` and `check_fs()` in free boot flash (no source change)
 - **License:** BSD-style 1-clause license
 - **Copyright:** (C) 2019, ChaN, all right reserved.
 
@@ -212,7 +214,7 @@ by use of this software.
 - **Directory:** `SW/src/tinf/` (`tinflate.c`, `tinf.h`, `LICENSE`)
 - **Upstream:** https://github.com/jibsen/tinf (v1.2.1)
 - **Used for:** inflating the raw deflate data of BBQr codes with the Z encoding (`SW/src/bbqr.c`, which compiles `tinflate.c` inside it)
-- **Local changes:** none; the files are byte-identical to the v1.2.1 tag
+- **Local changes:** none; the files are byte-identical to the v1.2.1 tag (SHA-256 compared again on 2026-11-19)
 - **License:** zlib license (`SW/src/tinf/LICENSE`)
 - **Copyright:** (c) 2003-2019 Joergen Ibsen
 
@@ -273,14 +275,16 @@ These parts were written for this project from public specifications; they are l
 - Output descriptor checksum (BIP380): `main.c`, `descriptor.c`
 - Krux KEF encrypted mnemonic format (base43, PBKDF2-HMAC-SHA256, AES-GCM; `SW/docs/kef.md`): `kef.c`
 - Nostr keys (NIP-06 derivation, NIP-19 npub / nsec): `main.c`, `nostr.c`
-- LMS hash-based signatures (RFC 8554) for the firmware update check: `bootloader` (`boot_lms.c`) and `SW/signatures/lms_sign.html`
+- LMS hash-based signatures (RFC 8554) for the firmware update check: `bootloader` (`boot_lms.c`) and `SW/signatures/lms_sign.html`; SHA-256 of the update file in the bootloader: `boot_sha.c`
 - GM861S barcode reader serial protocol (GM861S User Manual V1.2.4): `main.c`
 
 ---
 
 ## 10. Test data (not part of the firmware)
 
-- `SW/test/animated_QR_scan/captures_pure.txt` - animated QR frames captured from Sparrow Wallet (https://sparrowwallet.com), used to check that the UR encoder reproduces them byte for byte.
-- The host tests use published test vectors: BIP84 ("abandon ... about"), BIP143, BIP39 (Trezor vectors), RFC 4231, BIP85 (master key of the BIP85 specification).
+- `SW/test/psbt/sparrow_frames.txt` - animated QR frames captured from Sparrow Wallet (https://sparrowwallet.com), used to check that the UR encoder reproduces them byte for byte.
+- `SW/test/psbt/malicious/` - hostile PSBT test set: the `psbt_faker` corpus by Coinkite (https://github.com/Coldcard/psbt_faker, MIT, Copyright (c) 2020 Coinkite Inc.) as vendored and extended in ShieldSigner (https://github.com/3rdIteration/seedsigner, MIT, Copyright (c) 2021 SeedSigner), the invalid PSBT vectors of BIP174, and our own `OWN-*` files; details in `SW/test/psbt/malicious/README.md`.
+- The host tests use published test vectors: BIP84 ("abandon ... about"), BIP143, BIP39 (Trezor vectors), RFC 4231, BIP85 (master key of the BIP85 specification), BIP340 and BIP341 (`bip-0340/test-vectors.csv`, `bip-0341/wallet-test-vectors.json`, read by `SW/test/psbt/gen_taproot.py` from the bitcoin/bips repository), the SIGHASH_ALL cases of Bitcoin Core's `sighash.json` (MIT), RFC 8554 test case 2, NIP-06, and the KEF vectors of Krux v26.09.0 (https://github.com/selfcustody/krux, MIT).
+- `SW/tools/ur_psbt_animator.html` (a test page, not firmware) contains a JavaScript port of the QRCode library of section 3 (MIT).
 - `SW/test/vault/gen_vault.py` uses the Python `cryptography` package (Apache 2.0 / BSD) as an independent AES-GCM reference to generate `vault_vectors.h`; it is a test tool only and is not distributed with the firmware. `SW/test/vault/test_vault.c` links the upstream `fault_handler_noop.c` (trezor-crypto, MIT) for the host build only.
 - `SW/test/bbqr/gen_bbqr.py` is an independent BBQr encoder written from the specification (Python `zlib` for the deflate data); `SW/test/bbqr/anim_frames.js` uses Node's `zlib`. Test tools only.

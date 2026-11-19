@@ -121,6 +121,10 @@ int draw_seed_qr_view(const unsigned char *data, size_t size, bool compact, int 
 int draw_text_qr_view(const char *text, int tile);
 void print_text_seed_warning(void);
 void print_sd_warning(const char *ok_label);
+#define FORMAT_SHAMIR 0             // print_format_warning() kinds
+#define FORMAT_OBFUS  1
+#define FORMAT_CARDS  2
+void print_format_warning(uint8_t kind);
 void print_blocked(const char *l1, const char *l2, const char *l3);
 void print_slot_in_use(int slot);
 void print_sd_init_warning(uint32_t seeds);
@@ -133,6 +137,7 @@ void draw_title_pair(const char *a, uint16_t color_a, const char *b, uint16_t co
 extern const char* const help_main[];
 extern const char* const help_create[];
 void draw_help(const char *text, unsigned int color);
+void grid_back_list(void);
 void draw_bip84_wrapped_text(const char *text, int x, int y, int line_length, int line_count);
 void main_screen(int sel);
 void draw_card_bit_counter(void);
