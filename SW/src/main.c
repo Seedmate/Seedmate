@@ -872,7 +872,6 @@ typedef enum
     SEL_KN,
     SEL_K,
     SEL_INPUT,
-    QR_TUTORIAL,
     RESOURCE_MENU,
     RESOURCE_QR_VIEW,
     WORD_LIST_ERROR,
@@ -11981,9 +11980,7 @@ int SSS_N = 9;
                     case OK_BT:
                         black_screen();
                         white_screen();
-                        if (resource_pointer == cRESOURCE_tutorial) {
-                            draw_url_qr("youtu.be/8vy5LIxT1ls");
-                        } else if (resource_pointer == cRESOURCE_backup) {
+                        if (resource_pointer == cRESOURCE_backup) {
                             draw_url_qr("seedmate.github.io/Seedmate_HTML_backup/");
                         } else if (resource_pointer == cRESOURCE_dice_test) {
                             draw_url_qr("seedmate.github.io/Dice_tester/");
@@ -13650,22 +13647,6 @@ int SSS_N = 9;
                         redraw_show_seed_with_offset();
                         break;
                     case BACK_BT:
-                    case UP_BT:
-                    case DOWN_BT:
-                    case LEFT_BT:
-                    case RIGHT_BT:
-                        break;
-                    default:
-                        break;
-                }
-                break;
-            case QR_TUTORIAL:
-                switch (pulsed_bt) {
-                    case OK_BT:
-                        break;
-                    case BACK_BT:
-                        transition_to_main();
-                        break;
                     case UP_BT:
                     case DOWN_BT:
                     case LEFT_BT:

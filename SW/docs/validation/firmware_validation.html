@@ -383,9 +383,9 @@ const TESTS = [
   { id: 'TOOL-04', sec: 'TOOL', rev: 1, title: 'REVIEW PSBT without a seed',
     steps: ['TOOLS > REVIEW PSBT > FROM SD, open test/psbt/abandon multisig.psbt.'],
     expect: ['The flow says "NO SEED / UNCHECKED"; inputs and outputs in yellow; keys "FP xxxxxxxx NOT CHECKED"; no SIGN in the grid; BACK returns to TOOLS.'] },
-  { id: 'TOOL-05', sec: 'TOOL', rev: 1, title: 'Resources QR codes',
+  { id: 'TOOL-05', sec: 'TOOL', rev: 2, title: 'Resources QR codes',
     steps: ['Open each entry of RESOURCES.'],
-    expect: ['Each QR opens the right page on a phone.'] },
+    expect: ['Five entries: BACKUP TOOL, DICE TESTER, PRINT WORDLIST, BINARY WORDLIST, SECURITY (no TUTORIAL). Each QR opens the right page on a phone.'] },
 
   // ---------------------------------------------------------------- SD
   { id: 'SD-01', sec: 'SD', rev: 1, title: 'INITIALIZE CARD',
@@ -668,6 +668,9 @@ const TESTS = [
   { id: 'COMP-03', sec: 'COMP', rev: 1, title: 'Electrum',
     steps: ['Import the account of a test seed into Electrum: the XPUB QR as text, as UR, and the EXPORT DESCRIPTOR file.', 'Compare receive and change addresses 0 to 2 with ADDRESSES on the device.', 'Make a PSBT in the wallet and bring it to the device by each way the wallet offers (file, UR QR, BBQr); sign; take it back by QR and by SD. Multisig: export the cosigner key from the XPUB page and sign as one cosigner.'],
     expect: ['The addresses are equal.', 'The review on the device shows the amounts, addresses and fee of the wallet.', 'The wallet accepts the signed PSBT as fully signed and ready to broadcast.', 'Write in the note what the wallet does not read (formats, script types).'] },
+  { id: 'COMP-04', sec: 'COMP', rev: 1, title: 'Seedmate backup tool (HTML page)',
+    steps: ['Open the backup tool page (Seedmate_HTML_backup, index.html) on an offline computer. Seed for every step: ozone drill grab fiber curtain grace pudding thank cruise elder eight picnic.', 'OBFUSCATION on the device with CIRCULAR SHIFT left 5, NOT OPERATOR, WORDS ADD/SUB add 1000, 1 WORD XOR with satoshi and BYTE SWAP; the same on the page, then Undo each on the page with the same method and value.', 'MNEMONIC TO CARDS on the device and Cards on the page, both ways.', 'CREATE > DICE > STRING HASH on the device, 12 words, 54 rolls typing 1 2 3 4 5 6 nine times, once in 1-6 and once in 0-5 mode; the same in Dice hash on the page.', 'SHAMIR split 3 of 5 on the device; merge shares 2, 4 and 5 on the page. Split 2 of 3 on the page; merge shares 1 and 3 on the device.', 'XOR of the seed with abandon x11 about on the device and on the page.'],
+    expect: ['Shift left 5: speed frown power regular sheriff push polar web never trouble teach plunge. NOT: gesture rug one prevent six once fan cage slender reward ribbon food. Add 1000: breeze say time sport rebel tiny clay fresh random session sentence planet. 1 word XOR satoshi: capable work surface turn matter sure banner gaze mesh wealth wet brick. Byte swap: mass visa first play protect couple desert grief year essence cruel dash. Each Undo gives the seed back.', 'Cards: DECKS NEEDED 1, 28 cards: 7D AH 5C 6C 2H 9H 8D 9D AD 7C QD TD JC 4H KH 3S 7S 6H 5D 4S QH 9C 8S 6D TH 3D JH QS; the page turns them back into the seed.', 'Dice hash 1-6: universe intact render tank net oval paddle thought trick movie chimney bullet; 0-5: open believe minor wise manual canvas rib north prepare gadget episode tackle.', 'Both merges give the seed.', 'The XOR is the seed itself (abandon x11 about is all zeros), on both.', 'The page header says OFFLINE when the computer has no network; the page makes no request at all (browser developer tools, Network tab).'] },
 
   // ---------------------------------------------------------------- HOST
   { id: 'HOST-01', sec: 'HOST', rev: 1, title: 'Host test benches',
@@ -679,6 +682,9 @@ const TESTS = [
   { id: 'HOST-03', sec: 'HOST', rev: 2, title: 'Signature of the release',
     steps: ['Add the row of UPDATE.HEX to SIGNATURES.md (the next index, date, version, language, SHA-256) and commit it.', 'On the offline signing computer: certutil -hashfile lms_sign.html SHA256 equals the hash in SIGNATURES.md.', 'Copy signatures/ to the signing computer; in its lms_sign.html press Open the signatures folder and choose it, drop UPDATE.HEX, sign with the index of the row, then Save into signatures/. Bring the folder back.', 'Try the index of an older row too, and sign with words of another seed.', 'python test/lms/verify_lms.py with the public key of SIGNATURES.md, UPDATE.HEX and UPDATE.SIG.'],
     expect: ['The page proposes the next free index, says the index is recorded for this file and fills in its date and version; it says VERIFIED; signatures/ gets the folder of the row with UPDATE.HEX and UPDATE.SIG; back in the repository git status shows only that folder, and test_lms.js passes.', 'An older index is refused ("ALREADY SIGNED ANOTHER FILE"), and other words give "THESE WORDS ARE NOT THE KEY OF SIGNATURES.md".', 'verify_lms.py prints "VERIFIED" with the same index; the index appears once in SIGNATURES.md.'] },
+  { id: 'HOST-04', sec: 'HOST', rev: 1, title: 'Backup tool page against the firmware',
+    steps: ['Clone Seedmate_HTML_backup into the folder HTMLbackup beside the Seedmate folder, or give the path of its index.html; run SW/test/backup/build_test.bat (Python, gcc, Node).'],
+    expect: ['"0 failed": the page gives the same obfuscations, card order, poker card and dice entropy, dice hash and Shamir shares as the firmware code, every subset of k shares merges, and the BIP39 and SHA-256 references match.', '"user vectors current": the test vectors of the Build your own tab (in the page and in build-your-own/) come from the firmware code, and check_spec.py, written only from the specification, passes all of them ("0 failed"); write the numbers of checks and the commit of the page in the note.'] },
 ];
 
 // ===========================================================================

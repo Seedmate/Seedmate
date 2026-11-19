@@ -58,7 +58,7 @@ const char* const menu_qr[]       = {"STANDARD", "COMPACT"};
 const char* const menu_xor[]      = {"A XOR B = C", "A XOR B XOR C = D", "A XOR B XOR C XOR D = E"};
 const char* const menu_mix[]      = {"2 INPUTS", "3 INPUTS", "4 INPUTS"};    // The XOR menu, from CREATE
 const char* const menu_sss[]      = {"SPLIT", "MERGE"};
-const char* const menu_resource[] = {"TUTORIAL", "BACKUP TOOL", "DICE TESTER", "PRINT WORDLIST", "BINARY WORDLIST", "SECURITY"};
+const char* const menu_resource[] = {"BACKUP TOOL", "DICE TESTER", "PRINT WORDLIST", "BINARY WORDLIST", "SECURITY"};
 const char* const menu_obfus[]    = {"CIRCULAR SHIFT", "NOT OPERATOR", "WORDS ADD/SUB","1 WORD XOR","BYTE SWAP","HOW TO"};
 const char* const menu_erase[]    = {"ERASE SECTOR", "INITIALIZE CARD", "WIPE ALL CARD"};
 const char* const menu_bip84[] = {"SIGN", "ADD PASSPHRASE", "DERIVE", "VAULT", "XPUB/ZPUB", "ADDRESSES", "CONFIG", "UNLOAD SEED"};

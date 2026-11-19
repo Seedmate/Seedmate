@@ -57,7 +57,7 @@
 #define cSELINPUT_n_opt 3
 #define cDICE_MODE_n_opt 2
 #define cHASH_MODE_n_opt 2
-#define cRESOURCE_n_opt 6
+#define cRESOURCE_n_opt 5
 #define cSETTINGS_n_opt 8
 #define cSETTINGS_SEEDQR 0
 #define cSETTINGS_SDWRITE 1
@@ -88,12 +88,11 @@
 #define cMAIN_TOOLS 11              // Group: QR reader, QR from text, dice password
 // cMAIN_* are function ids, used by the flows (main_pointer); the menus map
 // their positions to them (main_menu_ids[], opsec_menu_ids[] in main.c)
-#define cRESOURCE_tutorial 0
-#define cRESOURCE_backup 1
-#define cRESOURCE_dice_test 2
-#define cRESOURCE_wordlist 3
-#define cRESOURCE_BINlist 4
-#define cRESOURCE_security 5
+#define cRESOURCE_backup 0          // The video TUTORIAL (old version) was removed on 2026-11-19
+#define cRESOURCE_dice_test 1
+#define cRESOURCE_wordlist 2
+#define cRESOURCE_BINlist 3
+#define cRESOURCE_security 4
 #define cBIP84_ADDRESSES 1        // Opens the RECEIVE / CHANGE address menu (multisig: also IMPORT DESCRIPTOR)
 #define cBIP84_XPUB 4
 #define cBIP84_PASSPHRASE 5
