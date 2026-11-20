@@ -4021,10 +4021,10 @@ static int load_and_verify_sd_slot(int absolute_slot) {
         }
         // The size byte comes from the card too: anything but 12 or 24 words
         // would be used as a length
-        if (checksum_SD == buffer[cSD_CHECKSUM_ADDR] && buffer[cSD_SIZE_ADDR] <= cSIZE_24) {
-            size_pointer = buffer[cSD_SIZE_ADDR];
-            return 0; // Success
-        }
+        bool ok = checksum_SD == buffer[cSD_CHECKSUM_ADDR] && buffer[cSD_SIZE_ADDR] <= cSIZE_24;
+        if (ok) size_pointer = buffer[cSD_SIZE_ADDR];
+        memzero(buffer, sizeof(buffer));    // The slot read: only data_array_256b keeps the seed (audit IND-H11)
+        if (ok) return 0; // Success
         memzero(data_array_256b, sizeof(data_array_256b));
         return 2; // Checksum Error
     }
@@ -4273,36 +4273,35 @@ static void session_wipe(uint8_t **shares, uint8_t **shares_input, uint8_t *sss_
 static void stack_wipe(void);
 static void stack_paint(void);
 
-static void secrets_wipe(void) {
-    if (wipe_shares != NULL) session_wipe(wipe_shares, wipe_shares_input, wipe_sss_result, 32);
-    memzero(word_ring, sizeof(word_ring));
+// The multisig keys and wallet of the seed and passphrase on screen: wiped when
+// the passphrase changes, since they belong to the old one (audit IND-H11)
+static void ms_keys_wipe(void) {
+    memzero(&ms_wallet, sizeof(ms_wallet));
+    ms_wallet_loaded = false;
+    ms_account_cached = false;
+    memzero(&ms_coin_node, sizeof(ms_coin_node));
+    memzero(&ms_account_node, sizeof(ms_account_node));
+    memzero(&ms_receive_node_cache, sizeof(ms_receive_node_cache));
+    memzero(&ms_change_node_cache, sizeof(ms_change_node_cache));
+    memzero(ms_wallet_seed_tag, sizeof(ms_wallet_seed_tag));
+}
+
+// Every key of the wallet loaded and what names it, but not the session
+// settings (mode, script, network, account): wiped on the way to the main menu
+// and when a BIP85 child replaces its parent on screen, since the parent cannot
+// be gone back to (audit IND-H11)
+static void wallet_keys_wipe(void) {
     memzero(&wallet_root, sizeof(wallet_root));
     memzero(wallet_root_tag, sizeof(wallet_root_tag));
     wallet_root_ok = false;
-    warned_seedqr = false;
-    warned_sd = false;
-    warned_nsec = false;
-    memzero(transcript_tag, sizeof(transcript_tag));
-    memzero(bip84_passphrase, sizeof(bip84_passphrase)); // The seed is unloaded
-    memzero(&ms_wallet, sizeof(ms_wallet));
-    ms_wallet_loaded = false;
-    // Invalidate the cache when returning to the main menu to prevent stale sessions
+    ms_keys_wipe();
     bip84_account_cached = false;
-    ms_account_cached = false;
-    bip84_multisig_mode = false;
-    bip84_script = SCRIPT_NATIVE;
-    bip84_testnet = false;
-    bip84_account_index = 0;
     memzero(&bip84_coin_node, sizeof(bip84_coin_node));
     memzero(&bip84_account_node, sizeof(bip84_account_node));
     memzero(&bip84_receive_node_cache, sizeof(bip84_receive_node_cache));
     memzero(&bip84_change_node_cache, sizeof(bip84_change_node_cache));
     memzero(shown_addr, sizeof(shown_addr));
     shown_addr_valid = false;
-    memzero(&ms_coin_node, sizeof(ms_coin_node));
-    memzero(&ms_account_node, sizeof(ms_account_node));
-    memzero(&ms_receive_node_cache, sizeof(ms_receive_node_cache));
-    memzero(&ms_change_node_cache, sizeof(ms_change_node_cache));
     memzero(vault_key, sizeof(vault_key));
     // Public, but they name the wallet: every address and its balance, and a
     // check for a guessed seed (audit A3)
@@ -4310,7 +4309,22 @@ static void secrets_wipe(void) {
     memzero(bip84_cached_zpub, sizeof(bip84_cached_zpub));
     bip84_master_fingerprint = 0;
     memzero(bip84_seed_tag, sizeof(bip84_seed_tag));
-    memzero(ms_wallet_seed_tag, sizeof(ms_wallet_seed_tag));
+}
+
+static void secrets_wipe(void) {
+    if (wipe_shares != NULL) session_wipe(wipe_shares, wipe_shares_input, wipe_sss_result, 32);
+    memzero(word_ring, sizeof(word_ring));
+    warned_seedqr = false;
+    warned_sd = false;
+    warned_nsec = false;
+    memzero(transcript_tag, sizeof(transcript_tag));
+    memzero(bip84_passphrase, sizeof(bip84_passphrase)); // The seed is unloaded
+    wallet_keys_wipe();
+    // The session settings go back to their defaults with the seed
+    bip84_multisig_mode = false;
+    bip84_script = SCRIPT_NATIVE;
+    bip84_testnet = false;
+    bip84_account_index = 0;
 }
 
 void transition_to_main(void) {
@@ -4950,18 +4964,17 @@ static void strcat_num(char *s, uint32_t val) {
 }
 
 
-// Helper to read CBOR integer and advance cursor
-static uint32_t read_cbor_int(const uint8_t *buf, uint32_t *idx) {
+// Unsigned CBOR integer (major type 0, up to 32 bits) at *idx, within len bytes;
+// false for another type or past the end (audit IND-H6: it read past the frame)
+static bool read_cbor_uint(const uint8_t *buf, uint32_t len, uint32_t *idx, uint32_t *out) {
+    if (*idx >= len || (buf[*idx] >> 5) != 0) return false;
     uint8_t v = buf[(*idx)++] & 0x1F;
-    if (v < 24) return v;
-    if (v == 24) return buf[(*idx)++];
-    if (v == 25) { uint32_t val = (buf[*idx]<<8) | buf[*idx+1]; *idx += 2; return val; }
-    if (v == 26) {
-        uint32_t val = (buf[*idx]<<24) | (buf[*idx+1]<<16) | (buf[*idx+2]<<8) | buf[*idx+3];
-        *idx += 4;
-        return val;
-    }
-    return 0;
+    uint32_t n = (v < 24) ? 0 : (v == 24) ? 1 : (v == 25) ? 2 : (v == 26) ? 4 : 5;
+    if (n > 4 || len - *idx < n) return false;
+    uint32_t val = (v < 24) ? v : 0;
+    for (uint32_t i = 0; i < n; i++) val = (val << 8) | buf[(*idx)++];
+    *out = val;
+    return true;
 }
 
 
@@ -6788,6 +6801,16 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
             plan->burns = true;
         }
     }
+    // Any other input needs its previous tx (audit IND-H7): a segwit v0 signature
+    // commits to the amount of its own input only, so a coordinator could lie
+    // about the amounts across two signings and raise the fee (CVE-2020-14199),
+    // and a legacy one commits to none; with the amount of another party's input
+    // unknown, the fee shown would be a guess. After the outputs, so a wrong
+    // change key is named first
+    if (plan->amounts_unverified) {
+        plan->refuse = "PREVIOUS TX MISSING";
+        return;
+    }
     plan->high_fee = plan->fee * PSBT_HIGH_FEE_OF_INPUTS >= plan->send + plan->change + plan->fee ||
                      (plan->send > 0 && plan->fee * PSBT_HIGH_FEE_OF_SENT > plan->send);
     psbt_checked.high_fee = plan->high_fee;
@@ -6906,26 +6929,27 @@ static bool psbt_confirm_signing(const psbt_t *psbt, const psbt_sign_plan_t *pla
     text_at(5, y, line, ST7735_GREEN);
     y += 9;
 
-    // Warnings first, always shown
-    if (plan->amounts_unverified) {
-        text_at(5, y, "AMOUNTS NOT VERIFIED", ST7735_RED);
+    // Warnings first, always shown: all of them above the grid, or one line here
+    // and the list on a page of its own, the last one before SIGN (audit IND-H17:
+    // with a long address and several warnings the last ones went under the grid)
+    const char *warn[4];
+    int nw = 0;
+    if (plan->change_unverified) warn[nw++] = "CHANGE NOT VERIFIED";
+    if (plan->high_change_index) warn[nw++] = "HIGH CHANGE INDEX";
+    if (plan->burns) warn[nw++] = "BURNS BTC";
+    if (plan->other_mode_out) warn[nw++] = psbt_other_mode_text();
+    bool warn_page = nw > 0 && y + 9 * (nw - 1) > CONFIRM_LAST_Y;
+    if (warn_page) {
+        line[0] = '\0';
+        strcat_num(line, (uint32_t)nw);
+        strcat(line, " WARNINGS: NEXT PAGE");
+        text_at(5, y, line, ST7735_YELLOW);
         y += 9;
-    }
-    if (plan->change_unverified) {
-        text_at(5, y, "CHANGE NOT VERIFIED", ST7735_YELLOW);
-        y += 9;
-    }
-    if (plan->high_change_index) {
-        text_at(5, y, "HIGH CHANGE INDEX", ST7735_YELLOW);
-        y += 9;
-    }
-    if (plan->burns) {                          // Short: it also fits left of the grid
-        text_at(5, y, "BURNS BTC", ST7735_YELLOW);
-        y += 9;
-    }
-    if (plan->other_mode_out) {
-        text_at(5, y, psbt_other_mode_text(), ST7735_YELLOW);
-        y += 9;
+    } else {
+        for (int i = 0; i < nw; i++) {
+            text_at(5, y, warn[i], ST7735_YELLOW);
+            y += 9;
+        }
     }
     // Then what helps, while there is room
     if (plan->change_unverified && y <= CONFIRM_LAST_Y) {
@@ -6950,9 +6974,18 @@ static bool psbt_confirm_signing(const psbt_t *psbt, const psbt_sign_plan_t *pla
         strcat(line, " CHECKED");
         text_at(5, y, line, ST7735_CYAN);
     }
-    grid_confirm("SIGN");
+    grid_confirm(warn_page ? "NEXT" : "SIGN");
 
     int key;
+    do {
+        key = psbt_wait_key();
+    } while (key != OK_BT && key != BACK_BT);
+    if (key != OK_BT || !warn_page) return key == OK_BT;
+
+    black_screen();
+    draw_net_title("WARNINGS", bip84_testnet);
+    for (int i = 0; i < nw; i++) text_at(5, 22 + 10 * i, warn[i], ST7735_YELLOW);
+    grid_confirm("SIGN");
     do {
         key = psbt_wait_key();
     } while (key != OK_BT && key != BACK_BT);
@@ -7216,25 +7249,6 @@ static void export_descriptor(void) {
     }
 }
 
-// An input without its previous transaction: its amount comes from the PSBT
-// only, and a coordinator could lie about it across two signings to raise the
-// fee (audit L9). Said in red before the confirmation; NEXT goes on.
-static bool psbt_prev_tx_warning(void) {
-    black_screen();
-    draw_title("PREVIOUS TX MISSING", ST7735_RED);
-    text_at(5, 22, "CHECK INPUT AMOUNTS", ST7735_RED);
-    text_at(5, 32, "MANUALLY", ST7735_RED);
-    text_at(5, 50, "THE PSBT HAS NO PREVIOUS", ST7735_WHITE);
-    text_at(5, 60, "TRANSACTIONS: THE AMOUNTS", ST7735_WHITE);
-    text_at(5, 70, "ARE NOT VERIFIED", ST7735_WHITE);
-    grid_confirm("NEXT");
-    int key;
-    do {
-        key = psbt_wait_key();
-    } while (key != OK_BT && key != BACK_BT);
-    return key == OK_BT;
-}
-
 // Shows a PSBT, then offers to sign it with the loaded seed and returns the
 // signed PSBT as an animated QR or a file. buf has room for 'capacity' bytes.
 static void psbt_review_and_sign(uint8_t *buf, uint32_t len, uint32_t capacity) {
@@ -7265,7 +7279,6 @@ static void psbt_review_and_sign(uint8_t *buf, uint32_t len, uint32_t capacity) 
         return;
     }
     if (!psbt_viewer(&psbt)) return;                        // BACK: nothing signed
-    if (plan.amounts_unverified && !psbt_prev_tx_warning()) return;
     if (!psbt_confirm_signing(&psbt, &plan)) return;
 
     const char *why;
@@ -7726,19 +7739,23 @@ static bool scan_ur_message(const char *target, const char *title, uint8_t **msg
 
                         if (!decode_error && decoded_len > 0) {
                             if (decoded_bytes[0] == 0x85) { 
-                                uint32_t cursor = 1;
-                                uint32_t cbor_seq = read_cbor_int(decoded_bytes, &cursor);
-                                uint32_t cbor_total = read_cbor_int(decoded_bytes, &cursor);
-                                uint32_t cbor_msg_len = read_cbor_int(decoded_bytes, &cursor);
-                                uint32_t cbor_checksum = read_cbor_int(decoded_bytes, &cursor);
-
-                                uint8_t str_type = decoded_bytes[cursor++];
+                                uint32_t cursor = 1, cbor_seq = 0, cbor_total = 0, cbor_msg_len = 0, cbor_checksum = 0;
+                                // The four numbers, then the fragment's length, all inside the
+                                // frame; part 0 or an empty message is not a UR part (audit IND-H6)
+                                bool head_ok = read_cbor_uint(decoded_bytes, decoded_len, &cursor, &cbor_seq) &&
+                                               read_cbor_uint(decoded_bytes, decoded_len, &cursor, &cbor_total) &&
+                                               read_cbor_uint(decoded_bytes, decoded_len, &cursor, &cbor_msg_len) &&
+                                               read_cbor_uint(decoded_bytes, decoded_len, &cursor, &cbor_checksum) &&
+                                               cbor_seq >= 1 && cbor_msg_len > 0 && cursor < decoded_len;
                                 uint32_t frag_len = 0;
-                                if ((str_type & 0xE0) == 0x40) { 
-                                    uint8_t v = str_type & 0x1F;
+                                if (head_ok && (decoded_bytes[cursor] & 0xE0) == 0x40) {
+                                    uint8_t v = decoded_bytes[cursor++] & 0x1F;
                                     if (v < 24) frag_len = v;
-                                    else if (v == 24) frag_len = decoded_bytes[cursor++];
-                                    else if (v == 25) { frag_len = ((uint32_t)decoded_bytes[cursor]<<8) | decoded_bytes[cursor+1]; cursor += 2; }
+                                    else if (v == 24 && cursor < decoded_len) frag_len = decoded_bytes[cursor++];
+                                    else if (v == 25 && cursor + 1 < decoded_len) {
+                                        frag_len = ((uint32_t)decoded_bytes[cursor] << 8) | decoded_bytes[cursor + 1];
+                                        cursor += 2;
+                                    }
                                 }
 
                                 // Fragments over the decoder's part size (Sparrow medium)
@@ -13698,6 +13715,8 @@ int SSS_N = 9;
                 }
                 break;
             case PRECOMPUTE_BIP84:
+                // A new passphrase: the multisig keys of the old one go (audit IND-H11)
+                if (bip84_qr_return_to_menu) ms_keys_wipe();
                 // Perform the heavy calculation (shows progress bar)
                 precompute_bip84_account();
                 
@@ -14284,8 +14303,7 @@ int SSS_N = 9;
                     memzero(derive_child, sizeof(derive_child));
                     size_pointer = bip85_size;
                     memzero(bip84_passphrase, sizeof(bip84_passphrase));    // The child has none
-                    bip84_account_cached = false;
-                    ms_account_cached = false;
+                    wallet_keys_wipe();             // The parent's keys: it cannot be gone back to
                     derive_from_wallet = false;
                     main_pointer = cMAIN_BIP85;
                     redraw_show_seed_with_offset();

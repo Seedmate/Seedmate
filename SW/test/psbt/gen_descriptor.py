@@ -136,13 +136,23 @@ EXTERNAL = bytes.fromhex('0014751e76e8199196d454941c45d1b3a323f1433bd6')
 p2wsh = lambda ws: b'\x00\x20' + sha256(ws)
 ws_in = multisig_script(2, [co.child(0, 0)[1] for co in cosigners], True)
 
+def funding(spk, amount, tag):
+    """A previous transaction paying amount to spk at output 0, and its txid:
+    the device signs segwit v0 inputs only with it (audit IND-H7)"""
+    prev = (struct.pack('<I', 2) + b'\x01' + sha256(tag) + struct.pack('<I', 0) + b'\x00' +
+            struct.pack('<I', 0xffffffff) + b'\x01' +
+            struct.pack('<Q', amount) + varint(len(spk)) + spk + struct.pack('<I', 0))
+    return prev, dsha(prev)
+
 def ms_psbt(change_cosigners):
     ws_change = multisig_script(2, [co.child(CHANGE, INDEX)[1] for co in change_cosigners], True)
-    tx = (struct.pack('<I', 2) + b'\x01' + sha256(b'ms wallet') + struct.pack('<I', 0) + b'\x00' +
+    prev, txid = funding(p2wsh(ws_in), 100000, b'ms wallet')
+    tx = (struct.pack('<I', 2) + b'\x01' + txid + struct.pack('<I', 0) + b'\x00' +
           struct.pack('<I', 0xfffffffd) + b'\x02' +
           struct.pack('<Q', 50000) + varint(len(EXTERNAL)) + EXTERNAL +
           struct.pack('<Q', 49000) + varint(34) + p2wsh(ws_change) + struct.pack('<I', 0))
-    inp = kv(b'\x01', struct.pack('<Q', 100000) + varint(34) + p2wsh(ws_in)) + kv(b'\x05', ws_in)
+    inp = kv(b'\x00', prev)
+    inp += kv(b'\x01', struct.pack('<Q', 100000) + varint(34) + p2wsh(ws_in)) + kv(b'\x05', ws_in)
     for co in cosigners:
         inp += kv(b'\x06' + co.child(0, 0)[1], keypath(co.fp, *MS, 0, 0))
     out = kv(b'\x01', ws_change)
@@ -210,11 +220,12 @@ def other_mode_psbt(ms_input):
                                                     keypath(co.fp, *MS, CHANGE, INDEX)) for co in cosigners)
     sent = amount_in // 2
     change = amount_in - sent - 1000
-    tx = (struct.pack('<I', 2) + b'\x01' + sha256(b'other mode') + struct.pack('<I', 0) + b'\x00' +
+    prev, txid = funding(spk_in, amount_in, b'other mode')
+    tx = (struct.pack('<I', 2) + b'\x01' + txid + struct.pack('<I', 0) + b'\x00' +
           struct.pack('<I', 0xfffffffd) + b'\x02' +
           struct.pack('<Q', sent) + varint(len(EXTERNAL)) + EXTERNAL +
           struct.pack('<Q', change) + varint(len(spk_ch)) + spk_ch + struct.pack('<I', 0))
-    inp = kv(b'\x01', struct.pack('<Q', amount_in) + varint(len(spk_in)) + spk_in) + inp
+    inp = kv(b'\x00', prev) + kv(b'\x01', struct.pack('<Q', amount_in) + varint(len(spk_in)) + spk_in) + inp
     return b'psbt\xff' + kv(b'\x00', tx) + b'\x00' + inp + b'\x00' + b'\x00' + out + b'\x00'
 
 open('MSTOSS.PSB', 'wb').write(other_mode_psbt(True))
@@ -228,6 +239,12 @@ big_line = next(l for l in desc_text.split('\n') if l.startswith('wsh(') and '<0
 assert big_line.count('[73c5da0a/48h/0h/0h/2h]') == 1
 big_line = big_line.replace('[73c5da0a/48h/0h/0h/2h]', '[73c5da0a/48h/0h/2147483647h/2h]').split('#')[0]
 open('MSACCBIG.TXT', 'w', newline='\n').write(big_line + '\n')
+# A threshold of 10 digits: it wrapped around 2^32 and was read as 2 (audit
+# IND-H6); refused now, nothing loaded
+thr_line = big_line.replace('[73c5da0a/48h/0h/2147483647h/2h]', '[73c5da0a/48h/0h/0h/2h]').replace(
+    'sortedmulti(2,', 'sortedmulti(4294967298,')
+assert 'sortedmulti(4294967298,' in thr_line
+open('MSTHRBIG.TXT', 'w', newline='\n').write(thr_line + '\n')
 
 # --- UR crypto-output CBOR -----------------------------------------------------------
 class Tag:

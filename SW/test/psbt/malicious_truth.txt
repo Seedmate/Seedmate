@@ -141,3 +141,5 @@ OWN-single_change_to_ms	parses	1		own	single sig change to the 2 of 3 wallet 1/3
 OWN-account_5	parses	1		own	our key at account 5: SWITCH TO ACCOUNT 5 while CONFIG has another account
 OWN-account_huge	parses	1		own	our key at account 2147483647: ACCOUNT OVER 255 (the account number overflowed the reason text, audit IND-H5)
 OWN-fingerprint_only_path	parses	1		own	change derivation of our fingerprint with no path (legal BIP174): nothing read past it, the change is not recognised (audit IND-H5)
+OWN-segwit_no_prev_tx	parses	1		own	P2WPKH input with WITNESS_UTXO only: refused, PREVIOUS TX MISSING (CVE-2020-14199, audit IND-H7)
+OWN-three_warnings	parses	1		own	wallet input paying an address, a burn, our single sig key and unverified change with a high fee: CHANGE NOT VERIFIED, BURNS BTC, TO YOUR SINGLE SIG and HIGH FEE in multisig without descriptor, all above the grid (audit IND-H17)

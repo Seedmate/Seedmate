@@ -583,7 +583,10 @@ function refresh() {
     } else if (recordHasIndex(record, index, fileHash)) {
       setMsg($("index-msg"), "INDEX " + index + " IS RECORDED FOR THIS FILE", "ok");
     } else {
-      setMsg($("index-msg"), "INDEX " + index + " IS NOT IN SIGNATURES.md: ADD ITS ROW BEFORE PUBLISHING", "warn");
+      // The row reserves the index before it is used (SIGNATURES.md, step 2), so a
+      // signature lost before it is recorded cannot leave its index free for another file
+      setMsg($("index-msg"), "INDEX " + index + " IS NOT IN SIGNATURES.md: ADD ITS ROW FOR THIS FILE AND COMMIT IT FIRST", "err");
+      blocked = true;
     }
   } else {
     setMsg($("index-msg"), "");
@@ -906,6 +909,10 @@ $("sign-btn").addEventListener("click", () => {
   const problem = indexProblem(q, message, record, oldSigs, record.pub);
   if (problem) {
     setMsg($("sign-msg"), "REFUSED: " + problem, "err");
+    return;
+  }
+  if (!recordHasIndex(record, q, message)) {
+    setMsg($("sign-msg"), "REFUSED: INDEX " + q + " IS NOT IN SIGNATURES.md FOR THIS FILE: ADD ITS ROW FIRST", "err");
     return;
   }
   setMsg($("sign-msg"), "");

@@ -53,8 +53,9 @@ static bool read_uint(cursor_t *c, uint32_t *v) {
     uint32_t n = 0;
     const char *start = c->p;
     while (c->p < c->end && *c->p >= '0' && *c->p <= '9') {
-        n = n * 10u + (uint32_t)(*c->p - '0');
-        if (n >= HARDENED) return false;
+        uint32_t d = (uint32_t)(*c->p - '0');
+        if (n > (HARDENED - 1u - d) / 10u) return false;   // 2^31 or more, before it wraps (audit IND-H6)
+        n = n * 10u + d;
         c->p++;
     }
     *v = n;
@@ -392,8 +393,12 @@ static bool cbor_skip(cbor_t *c) {
             if ((uint32_t)(c->end - c->p) < arg) return false;
             c->p += arg;
         } else if (major == CBOR_ARRAY || major == CBOR_MAP || major == CBOR_TAG) {
+            uint32_t rem = (uint32_t)(c->end - c->p);
+            // Each item takes a byte at least; a map counts twice, checked before
+            // the product wraps (audit IND-H6)
+            if (major == CBOR_MAP && arg > rem / 2u) return false;
             uint32_t more = (major == CBOR_MAP) ? 2 * arg : (major == CBOR_ARRAY) ? arg : 1;
-            if (more > (uint32_t)(c->end - c->p)) return false;     // Cannot fit: corrupt
+            if (more > rem || pending > rem - more) return false;   // Cannot fit: corrupt
             pending += more;
         }
     }

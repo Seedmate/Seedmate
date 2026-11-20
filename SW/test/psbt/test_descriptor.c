@@ -372,8 +372,40 @@ static void test_export(void) {
     printf("export: %u test wallets written back identical\n", (unsigned)(sizeof(cases) / sizeof(cases[0])));
 }
 
+// A number of 10 digits in a descriptor used to wrap around 2^32 and be taken
+// as a small one (audit IND-H6): a threshold of 4294967298 read as 2, a path
+// element of 4294967344 as 48. Both are refused now; the line has no checksum,
+// which would not match.
+static void replace_once(char *s, const char *from, const char *to) {
+    char *p = strstr(s, from), rest[1100];
+    if (!p) return;
+    strcpy(rest, p + strlen(from));
+    strcpy(p, to);
+    strcat(p, rest);
+}
+
+static void test_number_overflow(void) {
+    const char *line = strstr(desc_text, "wsh(");
+    char base[1100], t[1100];
+    size_t n = 0;
+    while (line && line[n] && line[n] != '\n' && line[n] != '#' && n < sizeof(base) - 1) { base[n] = line[n]; n++; }
+    base[n] = '\0';
+    desc_wallet_t w;
+    CHECK(desc_parse(base, (uint32_t)strlen(base), &w) == DESC_OK, "the line without its checksum parses");
+    strcpy(t, base);
+    replace_once(t, "sortedmulti(2,", "sortedmulti(4294967298,");
+    CHECK(desc_parse(t, (uint32_t)strlen(t), &w) != DESC_OK, "threshold of 10 digits refused, not wrapped to 2");
+    strcpy(t, base);
+    replace_once(t, "/48h/", "/4294967344h/");
+    CHECK(desc_parse(t, (uint32_t)strlen(t), &w) != DESC_OK, "path element of 10 digits refused, not wrapped to 48");
+    strcpy(t, base);
+    replace_once(t, "/48h/", "/2147483647h/");
+    CHECK(desc_parse(t, (uint32_t)strlen(t), &w) == DESC_OK, "2^31 - 1 is still a path element");
+}
+
 int main(void) {
     check_repeated_key_array();
+    test_number_overflow();
     test_nested_multisig();
     test_single_sig_checksums();
     desc_wallet_t w;

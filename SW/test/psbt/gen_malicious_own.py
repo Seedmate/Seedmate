@@ -27,16 +27,26 @@ def key(chain, index, account=ACCOUNT):
 def p2wpkh(pub):
     return b'\x00\x14' + hash160(pub)
 
-def psbt(amount_in, outs, change=None, change_index=0, account=ACCOUNT, change_account=None):
-    """outs: list of (script, amount); change: amount of an output of ours"""
+def funding(spk, amount, tag):
+    """A previous transaction paying amount to spk at output 0, and its txid:
+    the device signs segwit v0 and legacy inputs only with it (audit IND-H7)"""
+    prev = (struct.pack('<I', 2) + b'\x01' + sha256(tag) + struct.pack('<I', 0) + b'\x00' +
+            struct.pack('<I', 0xffffffff) + b'\x01' +
+            struct.pack('<Q', amount) + varint(len(spk)) + spk + struct.pack('<I', 0))
+    return prev, sha256(sha256(prev))
+
+def psbt(amount_in, outs, change=None, change_index=0, account=ACCOUNT, change_account=None, with_prev=True):
+    """outs: list of (script, amount); change: amount of an output of ours;
+    with_prev=False leaves out the previous tx (WITNESS_UTXO only)"""
     change_account = change_account or account
     pub_in, pub_ch = key(0, 0, account), key(1, change_index, change_account)
     all_outs = list(outs) + ([(p2wpkh(pub_ch), change)] if change is not None else [])
-    tx = (struct.pack('<I', 2) + b'\x01' + sha256(b'own vector') + struct.pack('<I', 0) + b'\x00' +
+    spk = p2wpkh(pub_in)
+    prev, txid = funding(spk, amount_in, b'own vector')
+    tx = (struct.pack('<I', 2) + b'\x01' + txid + struct.pack('<I', 0) + b'\x00' +
           struct.pack('<I', 0xfffffffd) + varint(len(all_outs)) +
           b''.join(struct.pack('<Q', a) + varint(len(s)) + s for s, a in all_outs) + struct.pack('<I', 0))
-    spk = p2wpkh(pub_in)
-    inp = kv(b'\x01', struct.pack('<Q', amount_in) + varint(len(spk)) + spk)
+    inp = (kv(b'\x00', prev) if with_prev else b'') + kv(b'\x01', struct.pack('<Q', amount_in) + varint(len(spk)) + spk)
     inp += kv(b'\x06' + pub_in, keypath(FP, *account, 0, 0))
     maps = b''
     for i in range(len(outs)):
@@ -175,7 +185,9 @@ def other_mode(ms_input):
     if ms_input:
         ws = ms_ws(0, 0)
         spk_in = p2wsh(ws)
-        inp = kv(b'\x01', struct.pack('<Q', 100000) + varint(len(spk_in)) + spk_in) + kv(b'\x05', ws)
+        prev, txid = funding(spk_in, 100000, b'own other mode')
+        inp = kv(b'\x00', prev)
+        inp += kv(b'\x01', struct.pack('<Q', 100000) + varint(len(spk_in)) + spk_in) + kv(b'\x05', ws)
         inp += ms_derivations(0, 0, b'\x06')
         pub_ch = key(1, 0)
         spk_ch = p2wpkh(pub_ch)
@@ -184,20 +196,44 @@ def other_mode(ms_input):
     else:
         pub_in = key(0, 0)
         spk_in = p2wpkh(pub_in)
-        inp = kv(b'\x01', struct.pack('<Q', 200000) + varint(len(spk_in)) + spk_in)
+        prev, txid = funding(spk_in, 200000, b'own other mode')
+        inp = kv(b'\x00', prev)
+        inp += kv(b'\x01', struct.pack('<Q', 200000) + varint(len(spk_in)) + spk_in)
         inp += kv(b'\x06' + pub_in, keypath(FP, *ACCOUNT, 0, 0))
         ws = ms_ws(1, 3)
         spk_ch = p2wsh(ws)
         out = kv(b'\x01', ws) + ms_derivations(1, 3, b'\x02')
         sent, change = 100000, 99000
     outs = [(EXTERNAL, sent), (spk_ch, change)]
-    tx = (struct.pack('<I', 2) + b'\x01' + sha256(b'own other mode') + struct.pack('<I', 0) + b'\x00' +
+    tx = (struct.pack('<I', 2) + b'\x01' + txid + struct.pack('<I', 0) + b'\x00' +
           struct.pack('<I', 0xfffffffd) + varint(len(outs)) +
           b''.join(struct.pack('<Q', a) + varint(len(s)) + s for s, a in outs) + struct.pack('<I', 0))
     return b'psbt\xff' + kv(b'\x00', tx) + b'\x00' + inp + b'\x00' + b'\x00' + out + b'\x00'
 
 # Our key in the wallet is the one this seed derives
 assert ms_pub(MS_XPUBS[0][1], 0, 0) == ser_pub(point_mul(derive(seed, MS + [0, 0])))
+
+def three_warnings():
+    """A wallet input (receive 0, with its previous tx) paying an address, an
+    OP_RETURN with an amount, our single sig key and the wallet's change 1/3,
+    with a high fee: in multisig without the descriptor the confirmation shows
+    CHANGE NOT VERIFIED, BURNS BTC and TO YOUR SINGLE SIG, the most warnings a
+    PSBT can give at once, and all of them above the button grid (audit IND-H17)"""
+    ws = ms_ws(0, 0)
+    spk_in = p2wsh(ws)
+    prev, txid = funding(spk_in, 1000000, b'own three warnings')
+    inp = kv(b'\x00', prev) + kv(b'\x01', struct.pack('<Q', 1000000) + varint(len(spk_in)) + spk_in)
+    inp += kv(b'\x05', ws) + ms_derivations(0, 0, b'\x06')
+    pub_single = key(1, 0)
+    ws_ch = ms_ws(1, 3)
+    outs = [(EXTERNAL, 100000), (OP_RETURN, 10000), (p2wpkh(pub_single), 100000), (p2wsh(ws_ch), 500000)]
+    tx = (struct.pack('<I', 2) + b'\x01' + txid + struct.pack('<I', 0) + b'\x00' +
+          struct.pack('<I', 0xfffffffd) + varint(len(outs)) +
+          b''.join(struct.pack('<Q', a) + varint(len(s)) + s for s, a in outs) + struct.pack('<I', 0))
+    maps = b'\x00' + b'\x00'
+    maps += kv(b'\x02' + pub_single, keypath(FP, *ACCOUNT, 1, 0)) + b'\x00'
+    maps += kv(b'\x01', ws_ch) + ms_derivations(1, 3, b'\x02') + b'\x00'
+    return b'psbt\xff' + kv(b'\x00', tx) + b'\x00' + inp + b'\x00' + maps
 
 def fingerprint_only():
     """The P2WPKH spend of psbt() with change whose derivation is our fingerprint alone"""
@@ -254,6 +290,11 @@ VECTORS = {
     # A change derivation of our fingerprint without a path, legal in BIP174:
     # nothing may be read past it (audit IND-H5)
     'OWN-fingerprint_only_path': fingerprint_only(),
+    # A segwit v0 input without its previous tx: its amount could be a lie
+    # across two signings (CVE-2020-14199), refused (audit IND-H7)
+    'OWN-segwit_no_prev_tx': psbt(200000, [(EXTERNAL, 100000)], change=99000, with_prev=False),
+    # The most warnings at once, all above the grid (audit IND-H17)
+    'OWN-three_warnings': three_warnings(),
 }
 
 for name, data in VECTORS.items():

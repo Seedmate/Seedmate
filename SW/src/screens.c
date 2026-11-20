@@ -25,6 +25,7 @@
 #include "app_state.h"
 #include "screens.h"
 #include "SPI.h"                            // delay_ms()
+#include "memzero.h"
 
 // ============================================================================
 // BITMAP GRAPHICS REPLACEMENT
@@ -1494,6 +1495,7 @@ void print_SD_preview(){
             break;
         }
     }
+    memzero(buffer, sizeof(buffer));        // The last slot read: a seed behind one XOR byte (audit IND-H11)
 }
 
 void sel_sd_block_screen_generic(int sel) {

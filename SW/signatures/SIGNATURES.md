@@ -36,8 +36,8 @@ which needs a PICkit.
   the next key (a bootloader update).
 
 The signing page checks the index itself: it reads this file and the
-`UPDATE.SIG` of every subfolder when it is given this folder. It refuses an index whose row here has another hash
-(or none), and one with an earlier signature that does not verify for the file
+`UPDATE.SIG` of every subfolder when it is given this folder. It refuses an index whose row here has another hash,
+an index with no row here for this file (the row comes first, step 2), and one with an earlier signature that does not verify for the file
 being signed; it proposes the next free index; and before signing it checks
 that the words give the public key written above.
 
@@ -107,7 +107,7 @@ certutil -hashfile lms_sign.html SHA256
 SHA-256 of lms_sign.html, as committed:
 
 ```
-4C92424A920760CB73805FFF4ECE9A2B86294EFCF24DDC23CE7C23FE81A79CF1
+3D863AD085306EFA50A3A298C71D75AC439498A3A94A5D5E3F6F24FD32C814AE
 ```
 
 The hash changes with every change to the page: it is updated here in the same
