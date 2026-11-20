@@ -427,6 +427,7 @@ static uint32_t ms_account_parent_fingerprint = 0;
 // Account index of m/84'/0'/account' and m/48'/0'/account'/2'. The coin
 // level nodes stay cached so changing the account skips the PBKDF2.
 #define BIP84_ACCOUNT_MAX 255   // Keeps the crypto-account QR in one version 8 code (9 on testnet)
+#define ACCOUNT_OVER_TEXT "ACCOUNT OVER 255"     // A PSBT or descriptor key past BIP84_ACCOUNT_MAX
 static uint32_t bip84_account_index = 0;
 static HDNode bip84_coin_node;          // m/84'/0', or m/49'/0' for nested (1' on testnet)
 static uint32_t bip84_coin_purpose;     // 84 or 49: the purpose bip84_coin_node is for
@@ -1101,7 +1102,7 @@ bool validate_and_load_qr(uint8_t *buffer, int length) {
             if (char_idx < 15) {
                 char c = buffer[i];
                 // FIX: Convert uppercase letters to lowercase to match the UI dictionary
-                if (c >= 'A' && c <= 'Z') c = c - ('a' - 'A'); 
+                if (c >= 'A' && c <= 'Z') c = (char)(c + ('a' - 'A'));     // Was a subtraction: 'A' became '!' (audit IND-L1)
                 tmp_word[char_idx++] = c;
             } else {
                 return false; // Word is suspiciously long
@@ -4124,7 +4125,7 @@ bool sss_split_kofm(const uint8_t *secret,
                     size_t m,
                     uint8_t *shares[])
 {
-    if (k == 0) return false;
+    if (k == 0 || k > m) return false;     // k > m could never be merged (audit IND-H8)
     size_t degree = (k > 0) ? (k - 1) : 0;
 
     if (degree > POLY_DEGREE_MAX) return false;
@@ -4138,6 +4139,22 @@ bool sss_split_kofm(const uint8_t *secret,
 
     return sss_split_polyN(secret, coeffs, degree, len,
                                 x_vals, m, shares);
+}
+
+
+// One UP / DOWN on the Shamir split size: K (2..cK_MAX) or N (3..cN_MAX), and
+// never K over N: raising K raises N with it, lowering N lowers K (audit IND-H8:
+// K over N gave shares that could never be merged)
+static void sss_kn_step(int *k, int *n, bool on_n, bool up) {
+    if (!on_n) {
+        if (up && *k < cK_MAX) (*k)++;
+        else if (!up && *k > 2) (*k)--;
+        if (*n < *k) *n = *k;
+    } else {
+        if (up && *n < cN_MAX) (*n)++;
+        else if (!up && *n > 3) (*n)--;
+        if (*k > *n) *k = *n;
+    }
 }
 
 
@@ -5636,7 +5653,7 @@ static uint16_t flow_input_color(psbt_owner_t owner) {
 
 static void psbt_view_flow(const psbt_t *psbt) {
     flow_block_t ins[FLOW_BLOCKS], outs[FLOW_BLOCKS];
-    char label[FLOW_BLOCKS][10];
+    char label[FLOW_BLOCKS][18];           // "+4294967295 MORE" at most (audit IND-H5)
     char amount[FLOW_BLOCKS][20];
     uint8_t top[FLOW_BLOCKS], bot[FLOW_BLOCKS];
     char text[16];
@@ -6405,8 +6422,14 @@ static bool descriptor_check(const desc_wallet_t *w, const char *ok_label) {
         if (k != NULL && k->origin_len == 4 && k->origin[0] == (48 | 0x80000000u) &&
             k->origin[1] == (coin_type() | 0x80000000u) && k->origin[3] == (ms_script_index() | 0x80000000u) &&
             (k->origin[2] & 0x7FFFFFFFu) != bip84_account_index) {
-            strcpy(text, "SWITCH TO ACCOUNT ");
-            strcat_num(text, k->origin[2] & 0x7FFFFFFFu);
+            // The account comes from the descriptor: up to 10 digits (audit IND-H5)
+            uint32_t account = k->origin[2] & 0x7FFFFFFFu;
+            if (account > BIP84_ACCOUNT_MAX) {
+                strcpy(text, ACCOUNT_OVER_TEXT);
+            } else {
+                strcpy(text, "SWITCH TO ACCOUNT ");
+                strcat_num(text, account);
+            }
         } else {
             // Our fingerprint with another key: usually another passphrase
             strcpy(text, (k != NULL) ? "MY KEY DOES NOT MATCH" : "MY KEY IS NOT IN IT");
@@ -6521,8 +6544,9 @@ typedef struct {
 // Coin type 'coin' (0' mainnet, 1' testnet/signet) in a BIP44-style path:
 // m/44', 49', 84', 86' or 48' then the coin type
 static bool psbt_keypath_has_coin(const psbt_keypath_t *kp, uint32_t coin) {
+    if (kp->path_len < 2) return false;     // No element read past the path (audit IND-H5)
     uint32_t purpose = psbt_path_element(kp, 0);
-    return kp->path_len >= 2 && psbt_path_element(kp, 1) == (coin | PSBT_HARDENED) &&
+    return psbt_path_element(kp, 1) == (coin | PSBT_HARDENED) &&
            (purpose == (44 | PSBT_HARDENED) || purpose == (49 | PSBT_HARDENED) || purpose == (84 | PSBT_HARDENED) ||
             purpose == (86 | PSBT_HARDENED) || purpose == (48 | PSBT_HARDENED));
 }
@@ -6712,11 +6736,17 @@ static void psbt_plan_signing(const psbt_t *psbt, psbt_sign_plan_t *plan) {
         } else if (plan->other_script > 0) {
             plan->refuse = plan->switch_text;
         } else if (plan->other_account > 0) {
-            char num[12];
-            strcpy(plan->refuse_text, "SWITCH TO ACCOUNT ");
-            fast_itoa(plan->other_account_index, num);
-            strcat(plan->refuse_text, num);
-            plan->refuse = plan->refuse_text;
+            // The account comes from the PSBT: up to 10 digits, more than the text
+            // holds and more than CONFIG offers (audit IND-H5)
+            if (plan->other_account_index > BIP84_ACCOUNT_MAX) {
+                plan->refuse = ACCOUNT_OVER_TEXT;
+            } else {
+                char num[12];
+                strcpy(plan->refuse_text, "SWITCH TO ACCOUNT ");
+                fast_itoa(plan->other_account_index, num);
+                strcat(plan->refuse_text, num);
+                plan->refuse = plan->refuse_text;
+            }
         } else {
             plan->refuse = other_type ? "TYPE NOT SUPPORTED" : "NOTHING TO SIGN";
         }
@@ -8305,6 +8335,17 @@ static uint8_t kef_steps_from(uint16_t flags) {
     return (steps >= 1 && steps <= cKEF_STEPS_MAX) ? steps : 1;
 }
 
+// The flags with another AUTO UNLOAD option, or other KEF ITERATIONS steps; the
+// rest kept. 16 bits: the KEF field is the high byte (audit IND-H2: a cast to 8
+// bits here reset KEF ITERATIONS to 10,000 when AUTO UNLOAD was changed)
+static uint16_t flags_with_idle(uint16_t flags, uint8_t option) {
+    return (uint16_t)((flags & ~SETTING_IDLE_MASK) | idle_field(option));
+}
+
+static uint16_t flags_with_kef(uint16_t flags, uint8_t steps) {
+    return (uint16_t)((flags & ~SETTING_KEF_MASK) | SETTING_KEF_FIELD(steps));
+}
+
 static uint16_t settings_flags_now(void) {
     return (uint16_t)(SETTING_KEF_FIELD(kef_steps) |
                       idle_field(idle_option) | SETTING_LEGACY_DECOY | (decoy_enabled ? 0u : SETTING_DECOY_OFF) |
@@ -8347,7 +8388,7 @@ static void idle_setting_run(void) {
             sel = (sel + ((key == UP_BT) ? cIDLE_n_opt - 1 : 1)) % cIDLE_n_opt;
             print_titled_menu("AUTO UNLOAD", menu_idle, cIDLE_n_opt, sel);
         } else if (key == OK_BT && sel != idle_option) {
-            setting_pending = (uint8_t)((settings_flags_now() & ~SETTING_IDLE_MASK) | idle_field((uint8_t)sel));
+            setting_pending = flags_with_idle(settings_flags_now(), (uint8_t)sel);
             black_screen();
             print_setting_confirm(cSETTINGS_IDLE, sel != 0, sel);
             estado = CONFIRM_SETTING;
@@ -8404,7 +8445,7 @@ static void kef_setting_run(void) {
         } else if (key == DOWN_BT && steps > 1) {
             steps--;
         } else if (key == OK_BT && steps != kef_steps) {
-            setting_pending = (uint16_t)((settings_flags_now() & ~SETTING_KEF_MASK) | SETTING_KEF_FIELD(steps));
+            setting_pending = flags_with_kef(settings_flags_now(), (uint8_t)steps);
             black_screen();
             print_setting_confirm(cSETTINGS_KEF, true, steps);
             estado = CONFIRM_SETTING;
@@ -11175,6 +11216,11 @@ static void idle_recover(uint8_t **shares, uint8_t **shares_input, uint8_t *sss_
     vault_pick = false;                     // A vault pick list left by the jump (audit A6)
     vault_close();
     main_pointer = cMAIN_LOAD;              // Back to the main menu, not to OPSEC
+    secrets_wipe();                         // The keys too, before the screen says so (audit IND-H1)
+}
+
+// What AUTO UNLOAD did, shown only once everything is wiped
+static void idle_notice(void) {
     black_screen();
     draw_title("AUTO UNLOAD", ST7735_LIGHTGREY);
     text_at(5, 30, "NO KEY PRESSED FOR", ST7735_WHITE);
@@ -11616,6 +11662,7 @@ int SSS_N = 9;
         idle_recover(shares, shares_input, SSS_result, LEN);
         memzero(word, sizeof(word));
         memzero(result, sizeof(result));
+        idle_notice();                          // Says "SEED AND KEYS WIPED" only now (audit IND-H1)
         // Locals changed after setjmp() are indeterminate after longjmp() (C11
         // 7.13.2.1): every one gets its start value again (audit A7)
         repeat_t = repeat_wait = 0;
@@ -13068,6 +13115,7 @@ int SSS_N = 9;
                 switch (pulsed_bt) {
                     case OK_BT:
                         black_screen();
+                        selected_share_id = 1;          // Not the share of a previous split (audit IND-H8)
                         if (sss_pointer==cSPLIT){
                             print_selkn_screen(SSS_K, SSS_N, sel_K_N);
                             estado = SEL_KN;
@@ -13110,15 +13158,8 @@ int SSS_N = 9;
                         estado = SEL_SSS;
                         break;
                     case UP_BT:
-                        if (sel_K_N==0){
-                            if (SSS_K<cK_MAX)SSS_K++;
-                        } else { if (SSS_N<cN_MAX)SSS_N++;}
-                        print_selkn_screen(SSS_K, SSS_N, sel_K_N);
-                        break;
                     case DOWN_BT:
-                        if (sel_K_N==0){
-                            if (SSS_K>2)SSS_K--;
-                        } else { if (SSS_N>3)SSS_N--;}
+                        sss_kn_step(&SSS_K, &SSS_N, sel_K_N == 1, pulsed_bt == UP_BT);
                         print_selkn_screen(SSS_K, SSS_N, sel_K_N);
                         break;
                     case LEFT_BT:

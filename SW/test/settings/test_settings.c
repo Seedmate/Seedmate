@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <string.h>
 #include "settings.c"
+#include "app_defs.h"
+#include "flags_extract.inc"     // The flag helpers of main.c (extract_flags.py)
 
 static uint8_t page[SETTINGS_SLOTS][8];
 static uint8_t written[SETTINGS_SLOTS];
@@ -105,6 +107,30 @@ int main(void) {
         CHECK(settings_save(f) && settings_load() == f && SETTING_KEF_STEPS(settings_load()) == 30);
         CHECK(settings_save((uint16_t)(f | 0x08)) && SETTING_KEF_STEPS(settings_load()) == 30);   // Kept with other changes
         CHECK(settings_save((uint16_t)(f | 0x08)) && writes == 2);                                  // Same value: no write
+    }
+
+    // Changing AUTO UNLOAD keeps KEF ITERATIONS and every other flag, and the
+    // other way round (audit IND-H2: AUTO UNLOAD used to reset KEF to 10,000)
+    for (unsigned steps = 1; steps <= cKEF_STEPS_MAX; steps++) {
+        for (uint8_t opt = 0; opt < cIDLE_n_opt; opt++) {
+            for (unsigned low = 0; low < 0x20; low++) {      // The flag bits below the AUTO UNLOAD field
+                uint16_t f = (uint16_t)(SETTING_KEF_FIELD(steps) | idle_field(opt) | low);
+                for (uint8_t o2 = 0; o2 < cIDLE_n_opt; o2++) {
+                    uint16_t g = flags_with_idle(f, o2);
+                    CHECK(kef_steps_from(g) == steps && idle_from_flags((uint8_t)g) == o2 && (g & 0x1F) == low);
+                }
+                for (unsigned s2 = 1; s2 <= cKEF_STEPS_MAX; s2 += 7) {
+                    uint16_t g = flags_with_kef(f, (uint8_t)s2);
+                    CHECK(kef_steps_from(g) == s2 && idle_from_flags((uint8_t)g) == opt && (g & 0x1F) == low);
+                }
+            }
+        }
+    }
+    {   // The whole path: saved, read back
+        fresh_page();
+        CHECK(settings_save(flags_with_kef(SETTINGS_DEFAULT, 20)));
+        CHECK(settings_save(flags_with_idle(settings_load(), 4)));
+        CHECK(kef_steps_from(settings_load()) == 20 && idle_from_flags((uint8_t)settings_load()) == 4);
     }
 
     if (failures == 0) printf("test_settings: all tests passed\n");

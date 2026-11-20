@@ -260,9 +260,42 @@ static void gen_shamir(void) {
     }
 }
 
+// SHAMIR split size (audit IND-H8): every UP / DOWN sequence keeps 2 <= K <= N,
+// K <= cK_MAX, 3 <= N <= cN_MAX, both limits reachable; and a split with K over N
+// is refused by sss_split_kofm()
+static void check_kn(void) {
+    int k = 2, n = 9, bad = 0, max_k = 0, min_n = 9;
+    uint32_t r = 12345;                     // Its own sequence: the seeds stay as published
+    for (int step = 0; step < 200000; step++) {
+        r = r * 1103515245u + 12345u;
+        sss_kn_step(&k, &n, ((r >> 16) & 1) != 0, ((r >> 17) & 1) != 0);
+        if (k < 2 || k > cK_MAX || n < 3 || n > cN_MAX || k > n) bad++;
+        if (k > max_k) max_k = k;
+        if (n < min_n) min_n = n;
+    }
+    // From K 2, N 3: K up raises N with it; N down to 3 brings K down
+    k = 2; n = 3;
+    sss_kn_step(&k, &n, false, true);
+    if (k != 3 || n != 3) bad++;
+    k = 6; n = 9;
+    for (int i = 0; i < 9; i++) sss_kn_step(&k, &n, true, false);
+    if (k != 3 || n != 3) bad++;
+    uint8_t s[16] = {0}, b[9][32], *shares[9];
+    const uint8_t *coeffs[5] = {s, s, s, s, s};
+    for (int i = 0; i < 9; i++) shares[i] = b[i];
+    if (sss_split_kofm(s, coeffs, 4, 16, 3, shares)) bad++;
+    if (!sss_split_kofm(s, coeffs, 3, 16, 3, shares)) bad++;
+    if (bad || max_k != cK_MAX || min_n != 3) {
+        fprintf(stderr, "Shamir K / N limits broken (%d)\n", bad);
+        exit(1);
+    }
+    printf("Shamir K / N limits hold\n");
+}
+
 int main(int argc, char **argv) {
     out = fopen(argc > 1 ? argv[1] : "backup_vectors.json", "w");
     if (!out) return 1;
+    check_kn();
     make_seeds();
     fputs("{", out);
     section("obfuscation", true); gen_obfuscation();

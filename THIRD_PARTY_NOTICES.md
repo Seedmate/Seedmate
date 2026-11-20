@@ -113,7 +113,7 @@ DEALINGS IN THE SOFTWARE.
 - **Directory:** `SW/src/QRCode-master/`
 - **Upstream:** https://github.com/ricmoo/QRCode (major parts derived from Project Nayuki's QR Code generator)
 - **Used for:** QR code generation (SeedQR, addresses, xpub / crypto-account, animated PSBT export)
-- **Local changes:** `<stdbool.h>` instead of its own `bool` type, and the Xcode `#pragma mark` lines removed (compared on 2026-11-19)
+- **Local changes:** `<stdbool.h>` instead of its own `bool` type, and the Xcode `#pragma mark` lines removed (compared on 2026-11-19); since 2026-11-20 `qrcode_initBytes()` refuses a version or ECC level out of range and data that does not fit the version (`dataBits()`, marked "Seedmate"), which overflowed its stack buffers before (independent audit IND-H5)
 - **License:** MIT
 - **Copyright:** (c) 2017 Richard Moore, (c) 2017 Project Nayuki
 

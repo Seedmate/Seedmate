@@ -18,8 +18,11 @@ REGIONS = [
      '// Shows what leaves the wallet and asks for OK'),
 ]
 
+# Single lines: the defines of main.c the regions use
+LINES = ['#define BIP84_ACCOUNT_MAX', '#define ACCOUNT_OVER_TEXT']
+
 text = open(SRC, encoding='utf-8').read().replace('\r\n', '\n')
-parts = []
+parts = [next(l for l in text.split('\n') if l.startswith(p)) + '\n' for p in LINES]
 for start, end in REGIONS:
     a = text.index(start)
     b = text.index(end, a)

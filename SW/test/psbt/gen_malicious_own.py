@@ -199,6 +199,14 @@ def other_mode(ms_input):
 # Our key in the wallet is the one this seed derives
 assert ms_pub(MS_XPUBS[0][1], 0, 0) == ser_pub(point_mul(derive(seed, MS + [0, 0])))
 
+def fingerprint_only():
+    """The P2WPKH spend of psbt() with change whose derivation is our fingerprint alone"""
+    data = psbt(200000, [(EXTERNAL, 100000)], change=99000)
+    pub_ch = key(1, 0)
+    full = kv(b'' + pub_ch, keypath(FP, *ACCOUNT, 1, 0))
+    assert data.count(full) == 1
+    return data.replace(full, kv(b'' + pub_ch, FP))
+
 ROOT = sha256(b'a script tree')
 
 VECTORS = {
@@ -239,6 +247,13 @@ VECTORS = {
     # sig key, and single sig change to the multisig wallet (audit S3)
     'OWN-ms_change_to_single': other_mode(True),
     'OWN-single_change_to_ms': other_mode(False),
+    # Our key at another account: the device names it, up to the 255 CONFIG
+    # offers; one of 10 digits overflowed the text of the reason (audit IND-H5)
+    'OWN-account_5': psbt(200000, [(EXTERNAL, 100000)], change=99000, account=[84 | H, 0 | H, 5 | H]),
+    'OWN-account_huge': psbt(200000, [(EXTERNAL, 100000)], change=99000, account=[84 | H, 0 | H, 0x7FFFFFFF | H]),
+    # A change derivation of our fingerprint without a path, legal in BIP174:
+    # nothing may be read past it (audit IND-H5)
+    'OWN-fingerprint_only_path': fingerprint_only(),
 }
 
 for name, data in VECTORS.items():

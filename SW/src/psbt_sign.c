@@ -321,12 +321,19 @@ static bool ecdsa_sign_rfc6979(const ecdsa_curve *curve, const uint8_t priv_key[
 // ECDSA verification with the same steps as trezor-crypto's
 // ecdsa_verify_digest(): R' = (z/s) * G + (r/s) * Q, valid if R'.x mod n == r.
 // r, s and z are already reduced mod n.
+// A compressed public key only: after a 0x04 prefix ecdsa_read_pubkey() reads
+// 65 bytes, past these 33 byte buffers (audit IND-H5)
+static int read_pub33(const ecdsa_curve *curve, const uint8_t pub[33], curve_point *p) {
+    if (pub[0] != 0x02 && pub[0] != 0x03) return 0;
+    return ecdsa_read_pubkey(curve, pub, p);
+}
+
 static bool ecdsa_verify(const ecdsa_curve *curve, const uint8_t pub_key[33],
                          const bignum256 *r, const bignum256 *s, const bignum256 *z) {
     curve_point pub, res;
     bignum256 u1 = *z, u2 = *s;
 
-    if (!ecdsa_read_pubkey(curve, pub_key, &pub)) return false;
+    if (!read_pub33(curve, pub_key, &pub)) return false;
     if (bn_is_zero(r) || bn_is_zero(s) || !bn_is_less(r, &curve->order) || !bn_is_less(s, &curve->order)) return false;
 
     bn_inverse(&u2, &curve->order);         // u2 = s^-1
@@ -499,7 +506,7 @@ static bool taproot_output_point(const uint8_t pub33[33], bignum256 *t, curve_po
     curve_point p;
     SHA256_CTX ctx;
 
-    if (!ecdsa_read_pubkey(curve, pub33, &p)) return false;
+    if (!read_pub33(curve, pub33, &p)) return false;
     if (p.y.val[0] & 1) point_negate_y(curve, &p);
     tagged_init(&ctx, "TapTweak");
     sha256_update(&ctx, &pub33[1], 32);
@@ -657,7 +664,7 @@ bool psbt_public_ckd(const uint8_t chain_code[32], const uint8_t public_key[33],
     curve_point parent, child;
 
     if (index & 0x80000000u) return false;
-    if (!ecdsa_read_pubkey(curve, public_key, &parent)) return false;
+    if (!read_pub33(curve, public_key, &parent)) return false;
 
     // I = HMAC-SHA512(chain code, key || index); child = I_L * G + parent
     memcpy(data, public_key, 33);

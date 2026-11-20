@@ -138,3 +138,6 @@ OWN-testnet_p2wpkh	parses	1		own	coin type 1' at m/84h/1h/0h with change: signed
 OWN-testnet_change_mainnet	reject_parser	-1	CROSS_NETWORK	own	input at m/84h/1h/0h, change at m/84h/0h/0h: refused in every mode, mainnet and testnet
 OWN-ms_change_to_single	parses	1		own	multisig change to our single sig key m/84h/0h/0h/1/0: signed in multisig as a send to TO YOUR SINGLE SIG, not change (audit S3)
 OWN-single_change_to_ms	parses	1		own	single sig change to the 2 of 3 wallet 1/3: with the descriptor a send TO YOUR MULTISIG, not change (audit S3)
+OWN-account_5	parses	1		own	our key at account 5: SWITCH TO ACCOUNT 5 while CONFIG has another account
+OWN-account_huge	parses	1		own	our key at account 2147483647: ACCOUNT OVER 255 (the account number overflowed the reason text, audit IND-H5)
+OWN-fingerprint_only_path	parses	1		own	change derivation of our fingerprint with no path (legal BIP174): nothing read past it, the change is not recognised (audit IND-H5)

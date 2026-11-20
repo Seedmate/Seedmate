@@ -1388,6 +1388,36 @@ OWN-single_change_to_ms	taproot	REFUSE SWITCH TO NATIVE SEGWIT
 OWN-single_change_to_ms	legacy	REFUSE SWITCH TO NATIVE SEGWIT
 OWN-single_change_to_ms	testnet	REFUSE SWITCH TO MAINNET
 OWN-single_change_to_ms	single+desc	SIGN 1/1 ours=0 send=199000 change=0 fee=1000 AMOUNTS_UNVERIFIED OTHER_MODE_OUT
+OWN-account_5	single	REFUSE SWITCH TO ACCOUNT 5
+OWN-account_5	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-account_5	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-account_5	nested	REFUSE SWITCH TO NATIVE SEGWIT
+OWN-account_5	nmulti	REFUSE SWITCH TO SINGLE SIG
+OWN-account_5	nmulti+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-account_5	taproot	REFUSE SWITCH TO NATIVE SEGWIT
+OWN-account_5	legacy	REFUSE SWITCH TO NATIVE SEGWIT
+OWN-account_5	testnet	REFUSE SWITCH TO MAINNET
+OWN-account_5	single+desc	REFUSE SWITCH TO ACCOUNT 5
+OWN-account_huge	single	REFUSE ACCOUNT OVER 255
+OWN-account_huge	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-account_huge	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-account_huge	nested	REFUSE SWITCH TO NATIVE SEGWIT
+OWN-account_huge	nmulti	REFUSE SWITCH TO SINGLE SIG
+OWN-account_huge	nmulti+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-account_huge	taproot	REFUSE SWITCH TO NATIVE SEGWIT
+OWN-account_huge	legacy	REFUSE SWITCH TO NATIVE SEGWIT
+OWN-account_huge	testnet	REFUSE SWITCH TO MAINNET
+OWN-account_huge	single+desc	REFUSE ACCOUNT OVER 255
+OWN-fingerprint_only_path	single	SIGN 1/1 ours=0 send=199000 change=0 fee=1000 AMOUNTS_UNVERIFIED
+OWN-fingerprint_only_path	multi	REFUSE SWITCH TO SINGLE SIG
+OWN-fingerprint_only_path	multi+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-fingerprint_only_path	nested	REFUSE SWITCH TO NATIVE SEGWIT
+OWN-fingerprint_only_path	nmulti	REFUSE SWITCH TO SINGLE SIG
+OWN-fingerprint_only_path	nmulti+desc	REFUSE SWITCH TO SINGLE SIG
+OWN-fingerprint_only_path	taproot	REFUSE SWITCH TO NATIVE SEGWIT
+OWN-fingerprint_only_path	legacy	REFUSE SWITCH TO NATIVE SEGWIT
+OWN-fingerprint_only_path	testnet	REFUSE SWITCH TO MAINNET
+OWN-fingerprint_only_path	single+desc	SIGN 1/1 ours=0 send=199000 change=0 fee=1000 AMOUNTS_UNVERIFIED
 BIP174 Network transaction, not PSBT format	parser	NOT A PSBT
 BIP174 PSBT missing outputs	parser	TRUNCATED
 BIP174 PSBT where one input has a filled scriptSig in the unsigned tx	parser	BAD FORMAT

@@ -230,6 +230,21 @@ static void test_sign_ms_nested(void) {
 }
 
 // Low R grinding: same signatures as the reference, including retried ones
+// A public key from a descriptor or a PSBT with the uncompressed prefix 0x04 in
+// a 33 byte field is refused, not read for 65 bytes (audit IND-H5); a real
+// compressed key still derives
+static void test_pubkey_prefix(void) {
+    uint8_t chain[32] = {1}, key[33], child_chain[32], child[33];
+    // The generator point G, compressed
+    static const char g[] = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+    for (int i = 0; i < 33; i++) sscanf(&g[i * 2], "%2hhx", &key[i]);
+    CHECK(psbt_public_ckd(chain, key, 0, child_chain, child));
+    key[0] = 0x04;
+    CHECK(!psbt_public_ckd(chain, key, 0, child_chain, child));
+    key[0] = 0x00;
+    CHECK(!psbt_public_ckd(chain, key, 0, child_chain, child));
+}
+
 static void test_low_r_grinding(void) {
     uint8_t sig[PSBT_SIG_MAX_LEN];
     uint32_t sig_len = 0;
@@ -389,6 +404,7 @@ int main(void) {
     test_sign_multisig();
     test_sign_nested();
     test_sign_ms_nested();
+    test_pubkey_prefix();
     test_low_r_grinding();
     test_bip340_vectors();
     test_bip341_vectors();

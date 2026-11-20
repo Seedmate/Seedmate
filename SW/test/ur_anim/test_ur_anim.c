@@ -139,6 +139,32 @@ int main(void) {
         }
     }
     fclose(f);
+
+    // Data that does not fit the version is refused before anything is written
+    // (audit IND-H5: it overflowed the stack buffers), at the exact limit of
+    // each mode; and a version out of range is refused
+    {
+        static uint8_t modules[4096];
+        QRCode q;
+        char t[64];
+        memset(t, '7', sizeof(t));
+        t[48] = 0;
+        if (qrcode_initText(&q, modules, 2, ECC_QUARTILE, t) != 0) FAIL("48 digits in v2-Q (the SeedQR) refused");
+        t[48] = '7'; t[49] = 0;
+        if (qrcode_initText(&q, modules, 2, ECC_QUARTILE, t) >= 0) FAIL("49 digits in v2-Q accepted");
+        memset(t, 'A', sizeof(t));
+        t[25] = 0;
+        if (qrcode_initText(&q, modules, 1, ECC_LOW, t) != 0) FAIL("25 alphanumerics in v1-L refused");
+        t[25] = 'A'; t[26] = 0;
+        if (qrcode_initText(&q, modules, 1, ECC_LOW, t) >= 0) FAIL("26 alphanumerics in v1-L accepted");
+        memset(t, 'a', sizeof(t));
+        t[17] = 0;
+        if (qrcode_initText(&q, modules, 1, ECC_LOW, t) != 0) FAIL("17 bytes in v1-L refused");
+        t[17] = 'a'; t[18] = 0;
+        if (qrcode_initText(&q, modules, 1, ECC_LOW, t) >= 0) FAIL("18 bytes in v1-L accepted");
+        if (qrcode_initText(&q, modules, 0, ECC_LOW, "a") >= 0) FAIL("version 0 accepted");
+        if (qrcode_initText(&q, modules, 41, ECC_LOW, "a") >= 0) FAIL("version 41 accepted");
+    }
     printf("%d cases, %d frames, %d pure parts equal to ur_encode.c, %d single parts, %d QR codes equal to qrcode.c\n",
            cases, frames, pure_checked, singles, qr_checked);
     if (failures) printf("%d FAILURES\n", failures);

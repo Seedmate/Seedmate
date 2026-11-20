@@ -23,6 +23,11 @@
 
 const char *get_word(int index);
 int find_word_index(const char *word);
+// State of main.c that validate_and_load_qr() uses
+#define cSIZE_12 0
+#define cSIZE_24 1
+BYTE data_array_256b[36];
+int size_pointer;
 #include "words_extract.inc"
 
 static const char official_sha256[] = "2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda";
@@ -155,6 +160,32 @@ int main(void) {
         memcpy(m, "abcdefghijklmno", 15);
         m[15] = 0x7F;                                   // One byte outside printable ASCII
         CHECK(!compact_is_text(m, 16));
+    }
+
+    // A SeedQR of words, in lower, upper and mixed case (audit IND-L1: upper case
+    // letters became '!' and the code was refused), and wrong ones refused
+    {
+        static const char *const seeds[][2] = {
+            {"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about", "00000000000000000000000000000000"},
+            {"ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABOUT", "00000000000000000000000000000000"},
+            {"Legal Winner Thank Year Wave Sausage Worth Useful Legal Winner Thank Yellow\r\n", "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f"},
+            {"ZOO ZOO ZOO ZOO ZOO ZOO ZOO ZOO ZOO ZOO ZOO ZOO ZOO ZOO ZOO ZOO ZOO ZOO ZOO ZOO ZOO ZOO ZOO VOTE",
+             "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},
+        };
+        for (unsigned s = 0; s < sizeof(seeds) / sizeof(seeds[0]); s++) {
+            uint8_t qr[200];
+            size_t n = strlen(seeds[s][0]);
+            memcpy(qr, seeds[s][0], n + 1);
+            CHECK(validate_and_load_qr(qr, (int)n));
+            char hexent[65];
+            int bytes = (size_pointer == cSIZE_12) ? 16 : 32;
+            for (int i = 0; i < bytes; i++) sprintf(&hexent[i * 2], "%02x", data_array_256b[i]);
+            CHECK(strcmp(hexent, seeds[s][1]) == 0);
+        }
+        uint8_t bad1[] = "ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON";
+        CHECK(!validate_and_load_qr(bad1, (int)strlen((char *)bad1)));      // Wrong checksum
+        uint8_t bad2[] = "ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON AB!UT";
+        CHECK(!validate_and_load_qr(bad2, (int)strlen((char *)bad2)));      // Not a word
     }
 
     if (failures == 0) {

@@ -767,8 +767,24 @@ uint16_t qrcode_getBufferSize(uint8_t version) {
     return bb_getGridSizeBytes(4 * version + 17);
 }
 
-// @TODO: Return error if data is too big.
+// Seedmate: the bits encodeDataCodewords() writes for this data, in the mode it
+// will choose, so that data too big for the version is refused before any is
+// written (the buffers on the stack are sized for the version: audit IND-H5)
+static uint32_t dataBits(const uint8_t *text, uint16_t length, uint8_t version) {
+    uint32_t n = length;
+    if (isNumeric((const char*)text, length)) {
+        return 4u + (uint32_t)getModeBits(version, MODE_NUMERIC) + 10u * (n / 3u) + ((n % 3u) ? (n % 3u) * 3u + 1u : 0u);
+    }
+    if (isAlphanumeric((const char*)text, length)) {
+        return 4u + (uint32_t)getModeBits(version, MODE_ALPHANUMERIC) + 11u * (n / 2u) + ((n % 2u) ? 6u : 0u);
+    }
+    return 4u + (uint32_t)getModeBits(version, MODE_BYTE) + 8u * n;
+}
+
+// Seedmate: returns -1 for a version or ECC level out of range, or data that
+// does not fit (it used to overflow the stack buffers, audit IND-H5)
 int8_t qrcode_initBytes(QRCode *qrcode, uint8_t *modules, uint8_t version, uint8_t ecc, uint8_t *data, uint16_t length) {
+    if (version < 1 || version > 40 || ecc > 3) { return -1; }
     uint8_t size = version * 4 + 17;
     qrcode->version = version;
     qrcode->size = size;
@@ -780,6 +796,7 @@ int8_t qrcode_initBytes(QRCode *qrcode, uint8_t *modules, uint8_t version, uint8
 #if LOCK_VERSION == 0
     uint16_t moduleCount = NUM_RAW_DATA_MODULES[version - 1];
     uint16_t dataCapacity = moduleCount / 8 - NUM_ERROR_CORRECTION_CODEWORDS[eccFormatBits][version - 1];
+    if (dataBits(data, length, version) > (uint32_t)dataCapacity * 8u) { return -1; }   // Seedmate
 #else
     version = LOCK_VERSION;
     uint16_t moduleCount = NUM_RAW_DATA_MODULES;

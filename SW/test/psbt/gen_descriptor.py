@@ -221,6 +221,13 @@ open('MSTOSS.PSB', 'wb').write(other_mode_psbt(True))
 open('SSTOMS.PSB', 'wb').write(other_mode_psbt(False))
 open('MSDESC.TXT', 'w', newline='\n').write(desc_text)
 open('MSCOLD.TXT', 'w', newline='\n').write(cold_text)
+# Our fingerprint at account 2147483647 (no checksum, which would not match):
+# refused with ACCOUNT OVER 255; the account number overflowed the reason text
+# before (audit IND-H5)
+big_line = next(l for l in desc_text.split('\n') if l.startswith('wsh(') and '<0;1>' in l)
+assert big_line.count('[73c5da0a/48h/0h/0h/2h]') == 1
+big_line = big_line.replace('[73c5da0a/48h/0h/0h/2h]', '[73c5da0a/48h/0h/2147483647h/2h]').split('#')[0]
+open('MSACCBIG.TXT', 'w', newline='\n').write(big_line + '\n')
 
 # --- UR crypto-output CBOR -----------------------------------------------------------
 class Tag:
