@@ -38,6 +38,10 @@ extern char dice_string_buf[char_hash_limit];
 // SD card sector scratch buffer
 extern uint8_t buffer[512];
 
+// Battery voltage (main.c)
+bool battery_is_low(void);
+void battery_text(char *line);
+
 // BIP85 child seed configuration
 extern int bip85_size;
 extern int bip85_index;

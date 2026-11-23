@@ -84,7 +84,7 @@ static const char* const help_backup[] = {"SAVE SEED INTO SD", "GENERATE A QR OF
     "DON'T LOSE THE PASSWORD", "QUIZ TO VALIDATE A BACKUP"};
 static const char* const help_settings[cSETTINGS_n_opt] = {"ALLOW SEED QR CODES", "ALLOW OBFUSCATED SD SEEDS",
     "A GAME AT POWER ON", "ENTROPY WITH BUTTON PUSHES", "WIPE ALL AFTER NO USE", "STRENGTH OF KEF BACKUPS",
-    "CHIP ID, STACK, FLASH LOCK", "INSTALL UPDATE.HEX FROM SD"};
+    "ID, STACK, LOCK, BATTERY", "INSTALL UPDATE.HEX FROM SD"};
 
 void draw_hex16(unsigned int x, unsigned int y, uint16_t numero, int N, unsigned int color, unsigned int bg, unsigned int size) {
     char hex_text[5]; // 4 hex digits plus null terminator
@@ -436,6 +436,7 @@ void main_screen(int sel) {
         text_at(1, 13 + i * 10, (char*)menu_main[main_menu_ids[i]], color);
     }
     draw_help(help_main[sel], ST7735_CYAN);
+    if (battery_is_low()) text_at(1, 106, "LOW BATT", ST7735_YELLOW);   // Cells to replace soon
     if(SD_ready)text_at(10, 118, "SD OK", ST7735_GREEN);
     grid_menu1();
 }
@@ -1864,6 +1865,10 @@ void print_mcu_serial_screen(void) {
                   (NVMBWP & (_NVMBWP_BWP0_MASK | _NVMBWP_BWP1_MASK | _NVMBWP_BWP2_MASK | _NVMBWP_BWPULOCK_MASK)) == BOOT_LOCK_BWP;
     if (locked) text_at(1, 42, "FLASH LOCK OK", ST7735_GREEN);
     else text_at(1, 42, "FLASH NOT LOCKED", ST7735_RED);
+
+    // VDD measured against the band gap: 3.3 V while the regulator holds
+    battery_text(line);
+    text_at(1, 54, line, battery_is_low() ? ST7735_YELLOW : ST7735_CYAN);
 
     grid_OK_back();                 // Either key returns to SETTINGS
 }

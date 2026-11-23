@@ -969,6 +969,97 @@ static void app_tasks(void) {
     if (idle_jump_set && !idle_hold && idle_expired()) longjmp(idle_jump, 1);
 }
 
+// ============================================================================
+// Battery voltage (HR-PWR-006, SR-REL-003)
+// ============================================================================
+// The cells reach the MCU only through the regulator: while they are good VDD
+// is 3.3 V, and once the regulator drops out VDD follows them down. The MCU
+// keeps running to about 2 V but an SD card needs 2.7 V, so under
+// BATTERY_STOP_MV nothing is written to the card. VDD is measured by
+// converting the internal band gap (about 1.2 V) with VDD as the reference.
+static uint32_t battery_mark;       // Core timer of the last measurement
+static uint16_t battery_last_mv;    // 0: not measured yet
+static bool battery_low_seen;       // Latched: low cells do not recover
+static bool battery_write_refused;  // sd_write_block() refused a write
+
+static void battery_init(void) {
+    ANCFGbits.VBGADC = 1;           // Band gap buffer for the ADC, left on
+    AD1CON1 = 0;
+    AD1CON1bits.MODE12 = 1;         // 12 bits, integer result
+    AD1CON1bits.SSRC = 7;           // The internal counter ends the sampling
+    AD1CON2 = 0;                    // VREFH = AVDD, VREFL = AVSS, one result
+    AD1CON3 = 0;
+    AD1CON3bits.ADCS = 8;           // TAD = 16 TPB, 667 ns at 24 MHz
+    AD1CON3bits.SAMC = 31;          // Long sampling: the band gap is weak
+    AD1CHS = 0x1C;                  // Positive input: band gap (VBG)
+}
+
+// VDD in mV, measured now (four conversions averaged)
+static uint16_t battery_measure(void) {
+    uint32_t sum = 0;
+    uint32_t t0 = _CP0_GET_COUNT();
+    while (!HLVDCONbits.BGVST && (uint32_t)(_CP0_GET_COUNT() - t0) < 12000u) { }  // Band gap stable, 1 ms at most
+    AD1CON1bits.ON = 1;
+    t0 = _CP0_GET_COUNT();
+    while ((uint32_t)(_CP0_GET_COUNT() - t0) < 240u) { }    // 20 us for the ADC to start
+    for (int i = 0; i < 4; i++) {
+        AD1CON1bits.DONE = 0;
+        AD1CON1bits.SAMP = 1;
+        t0 = _CP0_GET_COUNT();
+        while (!AD1CON1bits.DONE && (uint32_t)(_CP0_GET_COUNT() - t0) < 12000u) { }
+        sum += ADC1BUF0 & 0x0FFFu;
+    }
+    AD1CON1bits.ON = 0;             // Off between measurements
+    battery_mark = _CP0_GET_COUNT();
+    // VDD = VBG * 4095 / code; a code of 0 would be a dead ADC: report 0 V
+    battery_last_mv = (sum == 0) ? 0 : (uint16_t)((BATTERY_VBG_MV * 4095u * 4u) / sum);
+    if (battery_last_mv < BATTERY_LOW_MV) battery_low_seen = true;
+    return battery_last_mv;
+}
+
+// VDD in mV, measured again when the last value is over 100 ms old
+static uint16_t battery_mv(void) {
+    if (battery_last_mv == 0 || (uint32_t)(_CP0_GET_COUNT() - battery_mark) > 1200000u) return battery_measure();
+    return battery_last_mv;
+}
+
+// The cells are getting low: shown on the main menu
+bool battery_is_low(void) {
+    (void)battery_mv();
+    return battery_low_seen;
+}
+
+// Too low to write the SD card safely: the reason, before anything is written
+static bool battery_blocked(void) {
+    battery_write_refused = false;  // A new write starts
+    if (battery_measure() >= BATTERY_STOP_MV) return false;
+    print_blocked("BATTERY TOO LOW", "REPLACE THE CELLS", "NOTHING WAS WRITTEN");
+    return true;
+}
+
+// sd_write_block() refused a write since the last call (the card is fine)
+static bool battery_refused_write(void) {
+    bool r = battery_write_refused;
+    battery_write_refused = false;
+    return r;
+}
+
+// What a slot row says after a failed write (13 characters)
+static const char *sd_row_error(const char *other) {
+    return battery_refused_write() ? "LOW BATTERY  " : other;
+}
+
+// "BATTERY 3.28 V" (SETTINGS > MCU SERIAL NUMBER)
+void battery_text(char *line) {
+    uint16_t mv = battery_measure();
+    strcpy(line, "BATTERY ");
+    size_t n = 8 + u16_to_str(mv / 1000u, &line[8]);
+    line[n++] = '.';
+    line[n++] = (char)('0' + (mv / 100u) % 10u);
+    line[n++] = (char)('0' + (mv / 10u) % 10u);
+    strcpy(&line[n], " V");
+}
+
 // Button enum
 typedef enum
 {
@@ -3879,6 +3970,12 @@ uint8_t sd_get_r1(void) {
 
 bool sd_write_block(uint32_t sector, const uint8_t *buffer) {
     uint32_t arg = sd_is_sdhc ? sector : (sector * 512);
+
+    // No write with cells too low for the card: it could take half a sector
+    if (battery_mv() < BATTERY_STOP_MV) {
+        battery_write_refused = true;
+        return false;
+    }
 
     SD_CS = 0;
     sd_send_cmd(24, arg, 0xFF); // CMD24: WRITE_SINGLE_BLOCK
@@ -7132,6 +7229,10 @@ static void sd_save_file(const uint8_t *data, uint32_t len, const char *stem, co
     char text[28];
     char num[12];
 
+    if (battery_blocked()) {
+        psbt_wait_key();
+        return;
+    }
     black_screen();
     draw_title(title, ST7735_LIGHTGREY);
     text_at(5, 25, "READING SD CARD...", ST7735_CYAN);
@@ -7177,6 +7278,10 @@ static void sd_save_file(const uint8_t *data, uint32_t len, const char *stem, co
     progress_line(25, name);
     sd_save_t r = sd_files_save(name, data, len, psbt_save_progress);
     sd_files_unmount();
+    if (r != SD_SAVE_OK && battery_refused_write()) {
+        psbt_sd_message("BATTERY TOO LOW", "REPLACE THE CELLS");
+        return;
+    }
     if (r != SD_SAVE_OK) {
         psbt_sd_message((r == SD_SAVE_VERIFY_ERROR) ? "VERIFY FAILED" : "WRITE FAILED",
                         (r == SD_SAVE_FULL) ? "THE CARD IS FULL" :
@@ -9489,6 +9594,10 @@ static void vault_message(const char *title, uint16_t color, const char *l1, con
 
 // Why something failed, in plain words (rule 4)
 static void vault_error(vault_status_t r) {
+    if (r == VAULT_ERR_WRITE && battery_refused_write()) {
+        vault_message("BATTERY TOO LOW", ST7735_RED, "REPLACE THE CELLS", "AND TRY AGAIN");
+        return;
+    }
     switch (r) {
         case VAULT_ERR_READ:      vault_message("SD READ ERROR", ST7735_RED, "CHECK THE CARD AND", "OPEN THE VAULT AGAIN"); break;
         case VAULT_ERR_WRITE:     vault_message("SD WRITE ERROR", ST7735_RED, "THE CARD DID NOT TAKE", "THE WRITE, CHECK IT"); break;
@@ -11056,7 +11165,7 @@ static void sd_write_seed(uint32_t sector, int row) {
     if (sd_write_block(sector, buffer)) {
         text_at(70, 20 + 10*row, "WRITE SUCCESS", ST7735_GREEN);
     } else {
-        text_at(70, 20 + 10*row, "WRITE ERROR  ", ST7735_RED);
+        text_at(70, 20 + 10*row, sd_row_error("WRITE ERROR  "), ST7735_RED);
     }
     memzero(buffer, sizeof(buffer));
 }
@@ -11077,7 +11186,7 @@ static void sd_write_kef(uint32_t sector, int row) {
     ok = ok && sd_write_block(sector, buffer);
     ok = ok && sd_read_block(sector, buffer) && sd_sector_is_kef(buffer) &&
          memcmp(&buffer[SD_KEF_TEXT_AT], text, len) == 0;
-    text_at(70, 20 + 10*row, ok ? "WRITE SUCCESS" : "WRITE ERROR  ", ok ? ST7735_GREEN : ST7735_RED);
+    text_at(70, 20 + 10*row, ok ? "WRITE SUCCESS" : sd_row_error("WRITE ERROR  "), ok ? ST7735_GREEN : ST7735_RED);
     memzero(buffer, sizeof(buffer));
 }
 
@@ -11508,6 +11617,10 @@ static bool card_intro(void) {
 
 // The slot list of SEED BACKUP > SD, if the card is initialized
 static void open_sd_slots(int sd_block) {
+    if (battery_blocked()) {
+        estado = BACKUP_BLOCKED;
+        return;
+    }
     int marker = sd_marker_state();
     if (marker != 0) {
         print_blocked(marker == 1 ? "CARD NOT INITIALIZED" : "SD READ ERROR",
@@ -11526,6 +11639,7 @@ int main ( void ){
     stack_paint();                          // Stack measurement (stack_peak_bytes())
     /* Initialize all modules */
     SYS_Initialize ( NULL );
+    battery_init();                         // Band gap and ADC for the battery voltage
     {
         uint16_t saved = settings_load();   // Permanent settings; no record = factory defaults
         decoy_enabled = (saved & SETTING_DECOY_OFF) == 0;
@@ -12275,7 +12389,9 @@ int SSS_N = 9;
             case SEL_ERASE_MODE:
                 switch (pulsed_bt) {
                     case OK_BT:
-                        if (erase_pointer == cERASE_SECTOR) {
+                        if (battery_blocked()) {
+                            estado = END_MODE;
+                        } else if (erase_pointer == cERASE_SECTOR) {
                             transition_to_sd_block(SDblock_pointer);
                         } else {                            // INITIALIZE CARD or WIPE ALL CARD
                             black_screen();
@@ -12388,7 +12504,7 @@ int SSS_N = 9;
                     char where[20];
                     strcpy(where, "SECTOR ");
                     fast_itoa(bad_sector, &where[7]);
-                    print_blocked("INITIALIZE FAILED", "WRITE ERROR AT", where);
+                    print_blocked("INITIALIZE FAILED", battery_refused_write() ? "BATTERY TOO LOW AT" : "WRITE ERROR AT", where);
                 }
                 pulsed_bt = NONE;                       // Do not skip the result screen
                 estado = END_MODE;
@@ -12427,7 +12543,13 @@ int SSS_N = 9;
                 }
                 led_done();
                 memzero(buffer, sizeof(buffer));
-                if (write_error) {
+                if (write_error && battery_refused_write()) {
+                    strcpy(line, "BATTERY TOO LOW AT ");
+                    strcat_num(line, sector / 2048u);
+                    strcat(line, " MB");
+                    text_at(5, 60, line, ST7735_RED);
+                    if (sector <= cSD_MARKER_SECTOR) text_at(5, 70, "SEEDS MAY REMAIN", ST7735_YELLOW);
+                } else if (write_error) {
                     text_at(5, 60, "PHYSICAL WRITE ERROR", ST7735_RED);
                 } else if (sector < wipe_total_sectors) {
                     while (BT1 == 0) SYS_Tasks();   // STOP released before the result
@@ -12619,7 +12741,7 @@ int SSS_N = 9;
                             if (sd_write_block(SDblock_pointer+SD_page*cSDBLOCK_n_opt, buffer)) { // Write the block
                                 text_at(70, 20 + 10*SDblock_pointer, "ERASE SUCCESS", ST7735_GREEN);
                             } else {
-                                text_at(70, 20 + 10*SDblock_pointer, "ERASE ERROR ", ST7735_RED);
+                                text_at(70, 20 + 10*SDblock_pointer, sd_row_error("ERASE ERROR "), ST7735_RED);
                             }
                             break;
 

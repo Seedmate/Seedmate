@@ -11,6 +11,14 @@
 #define APP_DEFS_H
 
 #define cVersion "v2.0b1"
+
+// Battery voltage, as VDD in mV (HR-PWR-006, SR-REL-003): the regulator gives
+// 3.3 V while the cells last; under BATTERY_LOW_MV the main menu says LOW
+// BATT, under BATTERY_STOP_MV nothing is written to the SD card (which needs
+// 2.7 V; the margin covers the band gap tolerance)
+#define BATTERY_VBG_MV  1200u
+#define BATTERY_LOW_MV  3100u
+#define BATTERY_STOP_MV 2950u
 #define BOOT_TAG_ADDRESS 0x9D0027F0u    // Bootloader version tag ("BOOT 1.0"), see bootloader boot_ui.c
 // Flash write protection the bootloader sets and locks before it starts the app
 // (JumpToApp() in bootloader main.c): program flash below the settings page,

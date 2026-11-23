@@ -174,6 +174,7 @@
 const SECTIONS = [
   ['BOOT', 'Power-on, bootloader and firmware updates'],
   ['SET', 'Settings'],
+  ['PWR', 'Battery voltage'],
   ['NEW', 'Create a new seed'],
   ['LOAD', 'Load a seed'],
   ['BAK', 'Seed backup'],
@@ -269,9 +270,26 @@ const TESTS = [
   { id: 'SET-05', sec: 'SET', rev: 2, title: 'KEF ITERATIONS setting',
     steps: ['Open KEF ITERATIONS, move from 10000 to 300000.', 'Save 100000. Then change AUTO UNLOAD to 5 MINUTES and save it; power off and on; open KEF ITERATIONS again (audit IND-H2).'],
     expect: ['Steps of 10000, with the process time and the protection level: LOW in yellow under 50000, MEDIUM, STRONG from 150000.', 'KEF ITERATIONS still shows 100000 and AUTO UNLOAD 5 MINUTES: changing one setting keeps the other.'] },
-  { id: 'SET-06', sec: 'SET', rev: 2, title: 'MCU serial number, stack peak and flash lock',
+  { id: 'SET-06', sec: 'SET', rev: 3, title: 'MCU serial number, stack peak, flash lock and battery',
     steps: ['SETTINGS > MCU SERIAL NUMBER.'],
-    expect: ['The serial number and "STACK PEAK used/size B" are shown; yellow only above 7/8 of the stack.', 'Below it "FLASH LOCK OK" in green (BOOT-16).'] },
+    expect: ['The serial number and "STACK PEAK used/size B" are shown; yellow only above 7/8 of the stack.', 'Below it "FLASH LOCK OK" in green (BOOT-16).', 'Below it "BATTERY x.xx V" in cyan (PWR-01).', 'The help line of the entry in SETTINGS reads "ID, STACK, LOCK, BATTERY".'] },
+
+  // ---------------------------------------------------------------- PWR
+  // PWR-02..PWR-04 need an adjustable bench supply wired to the battery holder
+  // in place of the cells (start at 4.5 V, current limit 300 mA) and a
+  // multimeter on the 3.3 V rail.
+  { id: 'PWR-01', sec: 'PWR', rev: 1, title: 'Battery voltage measured',
+    steps: ['With new alkaline cells: SETTINGS > MCU SERIAL NUMBER; measure the 3.3 V rail with the multimeter.', 'Note both values in the result.'],
+    expect: ['"BATTERY x.xx V" in cyan, within 5 % of the multimeter (the band gap tolerance; the note calibrates BATTERY_VBG_MV if needed).', 'The main menu shows no "LOW BATT".'] },
+  { id: 'PWR-02', sec: 'PWR', rev: 1, title: 'LOW BATT on the main menu',
+    steps: ['Bench supply at 4.5 V, main menu.', 'Lower the supply in steps of 0.1 V; after each step open SETTINGS and go back to the main menu.', 'Note the supply and the rail when "LOW BATT" appears. Raise the supply to 4.5 V again.'],
+    expect: ['Yellow "LOW BATT" at the bottom left of the main menu, above "SD OK", once the rail is under about 3.10 V; the battery line of SET-06 is then yellow.', 'It stays after the supply is raised, until the device is powered off (low cells do not recover).', 'Nothing else changes: every function still works.'] },
+  { id: 'PWR-03', sec: 'PWR', rev: 1, title: 'SD writes refused with the cells too low',
+    steps: ['Rail at about 2.90 V (supply lowered until SET-06 shows under 2.95 V).', 'Load the abandon seed: SEED BACKUP > UNENCRYPTED SD (seed card).', 'SEED BACKUP > ENCRYPTED (KEF) > SAVE TO SD CARD.', 'SD CARD > ERASE SECTOR, INITIALIZE CARD and WIPE ALL CARD.', 'Sign "abandon single sig.psbt" from a file card, SAVE TO SD CARD.', 'Open the VAULT at 3.3 V, lower the supply, then NEW ENTRY > NOTE > SAVE.', 'Raise the supply to 3.6 V and check the cards on a slot list, the file list and the vault list.'],
+    expect: ['Every write is refused before anything is written: red "BATTERY TOO LOW", "REPLACE THE CELLS", "NOTHING WAS WRITTEN" (the vault: "REPLACE THE CELLS", "AND TRY AGAIN").', 'No slot, file or vault entry changed; the vault opens as before.', 'Reading still works: LOAD from SD and the file lists.'] },
+  { id: 'PWR-04', sec: 'PWR', rev: 1, title: 'Cells too low during a long write',
+    steps: ['On a spare card at 3.6 V: SD CARD > WIPE ALL CARD, confirm.', 'While it runs, lower the supply until the rail is under 2.95 V.'],
+    expect: ['The wipe stops with red "BATTERY TOO LOW AT n MB", and "SEEDS MAY REMAIN" in yellow if n is within the first 1 MB.', 'No "PHYSICAL WRITE ERROR".'] },
 
   // ---------------------------------------------------------------- NEW
   { id: 'NEW-01', sec: 'NEW', rev: 1, title: 'Coins: known result with all heads',

@@ -28,7 +28,7 @@ SETTINGS (optional);DECOY GAME;A GAME AT POWER ON;18;Optional menu (own screen, 
 SETTINGS (optional);STOPWATCH SEED;ENTROPY WITH BUTTON PUSHES;26;Optional menu (own screen, 8 rows)
 SETTINGS (optional);AUTO UNLOAD;WIPE ALL AFTER NO USE;21;Optional menu (own screen, 8 rows)
 SETTINGS (optional);KEF ITERATIONS;STRENGTH OF KEF BACKUPS;23;Optional menu (own screen, 8 rows)
-SETTINGS (optional);MCU SERIAL NUMBER;CHIP ID, STACK, FLASH LOCK;26;Optional menu (own screen, 8 rows)
+SETTINGS (optional);MCU SERIAL NUMBER;ID, STACK, LOCK, BATTERY;24;Optional menu (own screen, 8 rows)
 SETTINGS (optional);UPDATE FIRMWARE;INSTALL UPDATE.HEX FROM SD;26;Optional menu (own screen, 8 rows)
 SD CARD (optional);ERASE SECTOR;DELETE SLOT BY SLOT;19;Optional menu
 SD CARD (optional);INITIALIZE CARD;REQUIRED FOR VAULT & SEEDS;26;Optional menu
