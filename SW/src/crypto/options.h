@@ -45,8 +45,10 @@
 #endif
 
 // use fast inverse method
+// Seedmate: 0, the constant time inverse (Fermat), for the ECDSA nonce
+// (independent audit IND-H9: the fast one takes a time that depends on it)
 #ifndef USE_INVERSE_FAST
-#define USE_INVERSE_FAST 1
+#define USE_INVERSE_FAST 0
 #endif
 
 // support for printing bignum256 structures via printf

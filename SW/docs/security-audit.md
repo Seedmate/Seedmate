@@ -1129,3 +1129,18 @@ no device test was run. Ids A1-A9.
 ### Still not reviewed
 
 Of section 14: the HTML recovery page of the vault, the HTML tools, `tinf/tinflate.c` beyond its bounds checks (its identity with the 1.2.1 tag is now checked), the linker scripts and the display driver. In `main()`, this pass followed the exits and flags but did not walk every one of its states.
+
+## 16. Independent audit: side channels (IND-H9), decided 2026-11-23
+
+`docs/security-audit-independent.md` (2026-11-20, a separate review) found four side channels: the GHASH of the vault branches on its key H (`crypto/aes/gf128mul.c`); the elliptic curve multiplication has no projective blinding and reads its table by the secret window (`crypto/ecdsa.c`, removed on purpose, section 11.2, C1 / C2); the modular inverse of the ECDSA nonce takes a time that depends on it (`USE_INVERSE_FAST`); and BIP340 signs with 32 zero bytes of aux randomness.
+
+**Decision: closed, not fixed**, except the nonce inverse, made constant time on 2026-11-20 because it cost nothing (`USE_INVERSE_FAST` 0 in `crypto/options.h`, 700 B less flash). The reason:
+
+- **A loaded seed is on screen two key presses away.** With a seed loaded, anyone holding the device sees its words: from the wallet menu one press of BACK (labelled LIST) shows them, and the flows go back to the wallet menu with BACK. A side channel attack needs the device in the attacker's hands, measured while it works with the seed loaded; at that moment the words can simply be read on the display. No side channel attacker is stopped by these protections: there is always a shorter way.
+- **Off, there is nothing to attack.** The device keeps no secrets: the settings page holds preferences only, and every return to the main menu, UNLOAD SEED and AUTO UNLOAD wipe the seed, the keys and the passphrase from RAM.
+- **Inside the device, the display is easier than the chip.** An attacker who could hide a probe in the device to measure power while the owner uses it would rather tap the SPI bus of the display (`TFT.c`), where the words pass in clear, with a logic analyser and no statistics.
+- **For the nonce attacks (lattice) the conditions are missing anyway.** Every address has its own private key and signs once or a few times, where these attacks need hundreds or thousands of signatures with the same key, each timed to the microsecond; a signature is asked for with the keys and lasts hundreds of milliseconds, with HMAC nonce generation and low R grinding varying far more than the inverse.
+
+The missing hardware random generator is **not** part of the reason: the timing of the user's key presses, as in the Shamir coefficients, is a usable source.
+
+**Assumption this decision depends on: the device keeps no secrets.** If one day it stores one (a seed, a vault key, a PIN), IND-H9 is reopened as a whole. The plan for that case: randomness from the key press pool (`sss_entropy_pool`, hashed with the core timer and a counter per operation, never shown on screen nor reused, as audit IND-C3 asks), for the projective blinding of the curve, for `point_select()` back from upstream, and for the aux of BIP340 (safe even if weak, since the nonce still depends on the key and the message; the signing tests would then inject the aux).
