@@ -40,7 +40,7 @@ extern uint8_t buffer[512];
 
 // Battery voltage (main.c)
 bool battery_is_low(void);
-void battery_text(char *line);
+bool battery_text(char *line);
 
 // BIP85 child seed configuration
 extern int bip85_size;

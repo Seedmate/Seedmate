@@ -273,6 +273,9 @@ const TESTS = [
   { id: 'SET-06', sec: 'SET', rev: 3, title: 'MCU serial number, stack peak, flash lock and battery',
     steps: ['SETTINGS > MCU SERIAL NUMBER.'],
     expect: ['The serial number and "STACK PEAK used/size B" are shown; yellow only above 7/8 of the stack.', 'Below it "FLASH LOCK OK" in green (BOOT-16).', 'Below it "BATTERY x.xx V" in cyan (PWR-01).', 'The help line of the entry in SETTINGS reads "ID, STACK, LOCK, BATTERY".'] },
+  { id: 'SET-07', sec: 'SET', rev: 1, title: 'The SETTINGS list is circular',
+    steps: ['Open SETTINGS (cursor on the first entry), press UP.', 'Press DOWN.', 'Hold DOWN through the whole list.'],
+    expect: ['UP on the first entry moves the cursor to the last one (UPDATE FIRMWARE), with its help line.', 'DOWN on the last entry goes back to the first one.', 'Held, the cursor keeps going round the list.'] },
 
   // ---------------------------------------------------------------- PWR
   // PWR-02..PWR-04 need an adjustable bench supply wired to the battery holder
@@ -280,7 +283,7 @@ const TESTS = [
   // multimeter on the 3.3 V rail.
   { id: 'PWR-01', sec: 'PWR', rev: 1, title: 'Battery voltage measured',
     steps: ['With new alkaline cells: SETTINGS > MCU SERIAL NUMBER; measure the 3.3 V rail with the multimeter.', 'Note both values in the result.'],
-    expect: ['"BATTERY x.xx V" in cyan, within 5 % of the multimeter (the band gap tolerance; the note calibrates BATTERY_VBG_MV if needed).', 'The main menu shows no "LOW BATT".'] },
+    expect: ['"BATTERY x.xx V" in cyan, within 5 % of the multimeter (never 0.00 V; a failed measurement would say "BATTERY NOT MEASURED" in red and must not block SD writes) (the band gap tolerance; the note calibrates BATTERY_VBG_MV if needed).', 'The main menu shows no "LOW BATT".'] },
   { id: 'PWR-02', sec: 'PWR', rev: 1, title: 'LOW BATT on the main menu',
     steps: ['Bench supply at 4.5 V, main menu.', 'Lower the supply in steps of 0.1 V; after each step open SETTINGS and go back to the main menu.', 'Note the supply and the rail when "LOW BATT" appears. Raise the supply to 4.5 V again.'],
     expect: ['Yellow "LOW BATT" at the bottom left of the main menu, above "SD OK", once the rail is under about 3.10 V; the battery line of SET-06 is then yellow.', 'It stays after the supply is raised, until the device is powered off (low cells do not recover).', 'Nothing else changes: every function still works.'] },

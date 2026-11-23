@@ -983,7 +983,16 @@ static bool battery_low_seen;       // Latched: low cells do not recover
 static bool battery_write_refused;  // sd_write_block() refused a write
 
 static void battery_init(void) {
+    // The generated clock setup disables the ADC (PMD1 ADCMD): enable it.
+    // Its registers start at their reset values once it is enabled.
+    SYSKEY = 0x00000000;
+    SYSKEY = 0xAA996655;
+    SYSKEY = 0x556699AA;
+    PMD1CLR = _PMD1_ADCMD_MASK;
+    SYSKEY = 0x33333333;
     ANCFGbits.VBGADC = 1;           // Band gap buffer for the ADC, left on
+    uint32_t t0 = _CP0_GET_COUNT();
+    while ((uint32_t)(_CP0_GET_COUNT() - t0) < 12000u) { }  // 1 ms for the band gap to settle
     AD1CON1 = 0;
     AD1CON1bits.MODE12 = 1;         // 12 bits, integer result
     AD1CON1bits.SSRC = 7;           // The internal counter ends the sampling
@@ -994,11 +1003,11 @@ static void battery_init(void) {
     AD1CHS = 0x1C;                  // Positive input: band gap (VBG)
 }
 
-// VDD in mV, measured now (four conversions averaged)
+// VDD in mV, measured now (four conversions averaged); 0 if the ADC did not
+// answer, which never blocks anything (a failed measurement is not low cells)
 static uint16_t battery_measure(void) {
     uint32_t sum = 0;
-    uint32_t t0 = _CP0_GET_COUNT();
-    while (!HLVDCONbits.BGVST && (uint32_t)(_CP0_GET_COUNT() - t0) < 12000u) { }  // Band gap stable, 1 ms at most
+    uint32_t t0;
     AD1CON1bits.ON = 1;
     t0 = _CP0_GET_COUNT();
     while ((uint32_t)(_CP0_GET_COUNT() - t0) < 240u) { }    // 20 us for the ADC to start
@@ -1007,13 +1016,17 @@ static uint16_t battery_measure(void) {
         AD1CON1bits.SAMP = 1;
         t0 = _CP0_GET_COUNT();
         while (!AD1CON1bits.DONE && (uint32_t)(_CP0_GET_COUNT() - t0) < 12000u) { }
+        if (!AD1CON1bits.DONE) {    // No conversion: report "not measured"
+            sum = 0;
+            break;
+        }
         sum += ADC1BUF0 & 0x0FFFu;
     }
     AD1CON1bits.ON = 0;             // Off between measurements
     battery_mark = _CP0_GET_COUNT();
-    // VDD = VBG * 4095 / code; a code of 0 would be a dead ADC: report 0 V
+    // VDD = VBG * 4095 / code
     battery_last_mv = (sum == 0) ? 0 : (uint16_t)((BATTERY_VBG_MV * 4095u * 4u) / sum);
-    if (battery_last_mv < BATTERY_LOW_MV) battery_low_seen = true;
+    if (battery_last_mv != 0 && battery_last_mv < BATTERY_LOW_MV) battery_low_seen = true;
     return battery_last_mv;
 }
 
@@ -1021,6 +1034,11 @@ static uint16_t battery_measure(void) {
 static uint16_t battery_mv(void) {
     if (battery_last_mv == 0 || (uint32_t)(_CP0_GET_COUNT() - battery_mark) > 1200000u) return battery_measure();
     return battery_last_mv;
+}
+
+// Measured and under 'mv' (a failed measurement, 0, is never "under")
+static bool battery_under(uint16_t value, uint16_t mv) {
+    return value != 0 && value < mv;
 }
 
 // The cells are getting low: shown on the main menu
@@ -1032,7 +1050,7 @@ bool battery_is_low(void) {
 // Too low to write the SD card safely: the reason, before anything is written
 static bool battery_blocked(void) {
     battery_write_refused = false;  // A new write starts
-    if (battery_measure() >= BATTERY_STOP_MV) return false;
+    if (!battery_under(battery_measure(), BATTERY_STOP_MV)) return false;
     print_blocked("BATTERY TOO LOW", "REPLACE THE CELLS", "NOTHING WAS WRITTEN");
     return true;
 }
@@ -1049,15 +1067,20 @@ static const char *sd_row_error(const char *other) {
     return battery_refused_write() ? "LOW BATTERY  " : other;
 }
 
-// "BATTERY 3.28 V" (SETTINGS > MCU SERIAL NUMBER)
-void battery_text(char *line) {
+// "BATTERY 3.28 V" (SETTINGS > MCU SERIAL NUMBER); false if not measured
+bool battery_text(char *line) {
     uint16_t mv = battery_measure();
+    if (mv == 0) {
+        strcpy(line, "BATTERY NOT MEASURED");
+        return false;
+    }
     strcpy(line, "BATTERY ");
     size_t n = 8 + u16_to_str(mv / 1000u, &line[8]);
     line[n++] = '.';
     line[n++] = (char)('0' + (mv / 100u) % 10u);
     line[n++] = (char)('0' + (mv / 10u) % 10u);
     strcpy(&line[n], " V");
+    return true;
 }
 
 // Button enum
@@ -3972,7 +3995,7 @@ bool sd_write_block(uint32_t sector, const uint8_t *buffer) {
     uint32_t arg = sd_is_sdhc ? sector : (sector * 512);
 
     // No write with cells too low for the card: it could take half a sector
-    if (battery_mv() < BATTERY_STOP_MV) {
+    if (battery_under(battery_mv(), BATTERY_STOP_MV)) {
         battery_write_refused = true;
         return false;
     }
@@ -14368,12 +14391,12 @@ int SSS_N = 9;
                 case BACK_BT:
                     transition_to_main();
                     break;
-                case UP_BT:
-                    if (settings_pointer > 0) settings_pointer--;
+                case UP_BT:                     // Circular: the first goes to the last
+                    settings_pointer = (settings_pointer > 0) ? settings_pointer - 1 : cSETTINGS_n_opt - 1;
                     print_settings_screen(settings_pointer);
                     break;
-                case DOWN_BT:
-                    if (settings_pointer < (cSETTINGS_n_opt-1)) settings_pointer++;
+                case DOWN_BT:                   // and the last to the first
+                    settings_pointer = (settings_pointer < cSETTINGS_n_opt - 1) ? settings_pointer + 1 : 0;
                     print_settings_screen(settings_pointer);
                     break;
                 default:

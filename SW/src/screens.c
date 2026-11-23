@@ -1867,8 +1867,8 @@ void print_mcu_serial_screen(void) {
     else text_at(1, 42, "FLASH NOT LOCKED", ST7735_RED);
 
     // VDD measured against the band gap: 3.3 V while the regulator holds
-    battery_text(line);
-    text_at(1, 54, line, battery_is_low() ? ST7735_YELLOW : ST7735_CYAN);
+    bool measured = battery_text(line);
+    text_at(1, 54, line, !measured ? ST7735_RED : battery_is_low() ? ST7735_YELLOW : ST7735_CYAN);
 
     grid_OK_back();                 // Either key returns to SETTINGS
 }
