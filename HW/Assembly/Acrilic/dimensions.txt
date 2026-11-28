@@ -1,0 +1,20 @@
+Seedmate Lynx - laser-cut covers, clear acrylic 2 mm. Units: mm. Positions are cutout centres, in the case model coordinate system.
+
+Top cover (top_2mm.dxf): 63.41 x 64.85 mm, thickness 2.00 mm, 9 inner cutouts, total cut length 515 mm
+   cutout 5.50 x 5.50 mm at (57.48, 14.99)
+   cutout 5.50 x 5.50 mm at (48.21, 10.70)
+   cutout 5.50 x 5.50 mm at (40.22, 10.70)
+   cutout 5.50 x 5.50 mm at (57.48, 22.16)
+   cutout 5.50 x 5.50 mm at (48.21, 21.99)
+   cutout 5.50 x 5.50 mm at (40.22, 21.99)
+   cutout 5.50 x 5.50 mm at (32.24, 10.70)
+   cutout 5.50 x 5.50 mm at (32.24, 21.99)
+   cutout 36.30 x 29.15 mm at (36.40, 46.52)
+Bottom cover (bottom_2mm.dxf): 63.41 x 64.85 mm, thickness 2.00 mm, 7 inner cutouts, total cut length 368 mm
+   cutout 3.30 x 3.30 mm at (59.35, 5.39)
+   cutout 3.30 x 3.30 mm at (59.32, 32.19)
+   cutout 3.30 x 3.30 mm at (7.35, 5.39)
+   cutout 3.30 x 3.30 mm at (7.32, 32.19)
+   cutout 3.30 x 3.30 mm at (59.32, 60.69)
+   cutout 19.06 x 19.06 mm at (11.35, 46.49)
+   cutout 3.30 x 3.30 mm at (7.32, 60.69)

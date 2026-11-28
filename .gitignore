@@ -40,3 +40,12 @@
 !*.pdf
 !*.csv
 !*.step
+
+# 8. Corte laser de las tapas de metacrilato (DXF, medidas y vista)
+!HW/Assembly/Acrilic/*.dxf
+!HW/Assembly/Acrilic/dimensions.txt
+!HW/Assembly/Acrilic/preview.png
+
+# 9. Piezas antiguas o que no son de Lynx: NUNCA se suben al repo
+HW/Assembly/3D/old/
+HW/Assembly/3D/old/**
